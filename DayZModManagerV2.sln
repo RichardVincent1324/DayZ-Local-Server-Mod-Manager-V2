@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{7C21186F-3819-4528-BC31-D8C48E518117}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DayZModManager.Core", "src\DayZModManager.Core\DayZModManager.Core.csproj", "{CDFA479E-E649-44C7-9844-DB145464DA36}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4F888C39-5DCC-4003-B335-086F700D0E4E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DayZModManager.Core.Tests", "tests\DayZModManager.Core.Tests\DayZModManager.Core.Tests.csproj", "{74C48C28-58E8-4321-999D-37DA60821ABF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DayZModManager.App", "src\DayZModManager.App\DayZModManager.App.csproj", "{A117D9C4-C274-4879-A431-C1F7A038C621}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DayZModManager.App.Tests", "tests\DayZModManager.App.Tests\DayZModManager.App.Tests.csproj", "{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CDFA479E-E649-44C7-9844-DB145464DA36}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CDFA479E-E649-44C7-9844-DB145464DA36}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CDFA479E-E649-44C7-9844-DB145464DA36}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CDFA479E-E649-44C7-9844-DB145464DA36}.Release|Any CPU.Build.0 = Release|Any CPU
+		{74C48C28-58E8-4321-999D-37DA60821ABF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{74C48C28-58E8-4321-999D-37DA60821ABF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{74C48C28-58E8-4321-999D-37DA60821ABF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{74C48C28-58E8-4321-999D-37DA60821ABF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A117D9C4-C274-4879-A431-C1F7A038C621}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A117D9C4-C274-4879-A431-C1F7A038C621}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A117D9C4-C274-4879-A431-C1F7A038C621}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A117D9C4-C274-4879-A431-C1F7A038C621}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{CDFA479E-E649-44C7-9844-DB145464DA36} = {7C21186F-3819-4528-BC31-D8C48E518117}
+		{74C48C28-58E8-4321-999D-37DA60821ABF} = {4F888C39-5DCC-4003-B335-086F700D0E4E}
+		{A117D9C4-C274-4879-A431-C1F7A038C621} = {7C21186F-3819-4528-BC31-D8C48E518117}
+		{D3E5A2C1-9B8E-4F7A-8C6D-1A2B3C4D5E6F} = {4F888C39-5DCC-4003-B335-086F700D0E4E}
+	EndGlobalSection
+EndGlobal

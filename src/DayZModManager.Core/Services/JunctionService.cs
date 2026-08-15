@@ -1,0 +1,152 @@
+using DayZModManager.Core.Abstractions;
+
+namespace DayZModManager.Core.Services;
+
+/// <summary>Result of synchronizing server-side junctions with the loaded mod set.</summary>
+public sealed record JunctionSyncResult
+{
+    public int Created { get; init; }
+
+    public int Removed { get; init; }
+
+    public int Skipped { get; init; }
+
+    public int Failed { get; init; }
+
+    public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Synchronizes junctions in the server root with the desired loaded-mod set.
+/// Loaded mods get a junction; any existing junction that is not loaded is removed
+/// (which also cleans up orphans whose source mod was deleted).
+/// </summary>
+public interface IJunctionService
+{
+    JunctionSyncResult Sync(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods);
+
+    /// <summary>Returns mod junction names in the server root not present in <paramref name="validModNames"/>.</summary>
+    IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames);
+
+    /// <summary>Returns the loaded mods whose junction is missing or not a junction.</summary>
+    IReadOnlyList<string> Verify(string serverPath, IReadOnlyList<string> loadedMods);
+}
+
+public sealed class JunctionService : IJunctionService
+{
+    private readonly IFileSystem _fileSystem;
+    private readonly IJunctionOperations _junctions;
+
+    public JunctionService(IFileSystem fileSystem, IJunctionOperations junctions)
+    {
+        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+        _junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
+    }
+
+    public JunctionSyncResult Sync(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods)
+    {
+        var messages = new List<string>();
+        int created = 0, removed = 0, skipped = 0, failed = 0;
+        var loadedSet = new HashSet<string>(loadedMods, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string mod in loadedMods)
+        {
+            string link = Path.Combine(serverPath, mod);
+            string target = Path.Combine(workshopPath, mod);
+
+            if (_junctions.IsJunction(link))
+            {
+                skipped++;
+                continue;
+            }
+
+            if (_fileSystem.DirectoryExists(link))
+            {
+                failed++;
+                messages.Add($"Physical folder conflict: {mod} (cannot create junction)");
+                continue;
+            }
+
+            if (!_fileSystem.DirectoryExists(target))
+            {
+                failed++;
+                messages.Add($"Mod not found in workshop: {mod}");
+                continue;
+            }
+
+            if (_junctions.Create(link, target))
+            {
+                created++;
+                messages.Add($"Junction created: {mod}");
+            }
+            else
+            {
+                failed++;
+                messages.Add($"Failed to create junction: {mod}");
+            }
+        }
+
+        foreach (string mod in GetJunctionedMods(serverPath))
+        {
+            if (loadedSet.Contains(mod))
+            {
+                continue;
+            }
+
+            if (_junctions.Delete(Path.Combine(serverPath, mod)))
+            {
+                removed++;
+                messages.Add($"Junction removed: {mod}");
+            }
+            else
+            {
+                failed++;
+                messages.Add($"Failed to remove junction: {mod}");
+            }
+        }
+
+        return new JunctionSyncResult
+        {
+            Created = created,
+            Removed = removed,
+            Skipped = skipped,
+            Failed = failed,
+            Messages = messages,
+        };
+    }
+
+    public IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames)
+    {
+        return GetJunctionedMods(serverPath)
+            .Where(mod => !validModNames.Contains(mod))
+            .ToList();
+    }
+
+    public IReadOnlyList<string> Verify(string serverPath, IReadOnlyList<string> loadedMods)
+    {
+        var missing = new List<string>();
+        foreach (string mod in loadedMods)
+        {
+            if (!_junctions.IsJunction(Path.Combine(serverPath, mod)))
+            {
+                missing.Add(mod);
+            }
+        }
+
+        return missing;
+    }
+
+    private IReadOnlyList<string> GetJunctionedMods(string serverPath)
+    {
+        if (!_fileSystem.DirectoryExists(serverPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        return _fileSystem
+            .GetDirectories(serverPath)
+            .Where(name => name.StartsWith("@", StringComparison.Ordinal))
+            .Where(name => _junctions.IsJunction(Path.Combine(serverPath, name)))
+            .ToList();
+    }
+}

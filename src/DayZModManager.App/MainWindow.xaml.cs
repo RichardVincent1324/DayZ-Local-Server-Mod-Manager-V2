@@ -35,10 +35,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.AddedItems.Count > 0 && ReferenceEquals(e.AddedItems[0], MapTypesTab) &&
-            DataContext is MainViewModel viewModel)
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        // Leaving the Mod Manage tab persists any pending mod changes so the
+        // Map & Types and Settings pages never operate on unsaved mods.
+        if (e.RemovedItems.Count > 0 && ReferenceEquals(e.RemovedItems[0], ModsTab))
+        {
+            await viewModel.ApplyIfDirtyAsync();
+        }
+
+        if (e.AddedItems.Count > 0 && ReferenceEquals(e.AddedItems[0], MapTypesTab))
         {
             viewModel.OnMapTypesTabActivated();
         }

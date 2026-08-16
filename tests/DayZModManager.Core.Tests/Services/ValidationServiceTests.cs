@@ -94,4 +94,18 @@ public class ValidationServiceTests
 
         Assert.Contains(errors, e => e.Contains("@Ghost"));
     }
+
+    [Fact]
+    public void Validate_DoesNotReportPerModMissing_WhenWorkshopPathUnset()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+
+        var context = CreateContext(fs, new[] { "@CF", "@Ghost" });
+        context = context with { Settings = context.Settings with { WorkshopPath = "" } };
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(context);
+
+        Assert.Contains(errors, e => e.Contains("Workshop path is not set"));
+        Assert.DoesNotContain(errors, e => e.Contains("@Ghost") || e.Contains("@CF"));
+    }
 }

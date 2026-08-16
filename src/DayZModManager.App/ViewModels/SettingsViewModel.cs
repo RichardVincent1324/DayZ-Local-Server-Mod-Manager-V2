@@ -1,4 +1,4 @@
-using System.IO;
+using DayZModManager.Core;
 using DayZModManager.Core.Models;
 using DayZModManager.App.Services;
 
@@ -12,9 +12,11 @@ public sealed class SettingsViewModel : ViewModelBase
     private string _workshopPath = string.Empty;
     private string _serverPath = string.Empty;
     private string _batFileName = string.Empty;
+    private string _dataDirectory = string.Empty;
     private string _savedWorkshopPath = string.Empty;
     private string _savedServerPath = string.Empty;
     private string _savedBatFileName = string.Empty;
+    private string _savedDataDirectory = string.Empty;
     private int _schemaVersion = 1;
 
     public SettingsViewModel(IDialogService dialogs)
@@ -24,6 +26,7 @@ public sealed class SettingsViewModel : ViewModelBase
         BrowseWorkshopCommand = new RelayCommand(BrowseWorkshop);
         BrowseServerCommand = new RelayCommand(BrowseServer);
         BrowseBatchFileCommand = new RelayCommand(BrowseBatchFile);
+        BrowseDataDirectoryCommand = new RelayCommand(BrowseDataDirectory);
     }
 
     public string WorkshopPath
@@ -45,6 +48,7 @@ public sealed class SettingsViewModel : ViewModelBase
         {
             if (SetField(ref _serverPath, value.Trim()))
             {
+                OnPropertyChanged(nameof(EffectiveDataDirectory));
                 OnPropertyChanged(nameof(IsDirty));
             }
         }
@@ -62,17 +66,42 @@ public sealed class SettingsViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Optional override for the data directory. Empty means the location is
+    /// derived from <see cref="ServerPath"/> (or the legacy AppData directory).
+    /// </summary>
+    public string DataDirectory
+    {
+        get => _dataDirectory;
+        set
+        {
+            if (SetField(ref _dataDirectory, value.Trim()))
+            {
+                OnPropertyChanged(nameof(EffectiveDataDirectory));
+                OnPropertyChanged(nameof(IsDirty));
+            }
+        }
+    }
+
+    /// <summary>The effective data directory for the current override/server path.</summary>
+    public string EffectiveDataDirectory => AppPaths.Resolve(DataDirectory, ServerPath);
+
     public bool IsDirty =>
         WorkshopPath != _savedWorkshopPath
         || ServerPath != _savedServerPath
-        || BatFileName != _savedBatFileName;
+        || BatFileName != _savedBatFileName
+        || DataDirectory != _savedDataDirectory;
 
     public RelayCommand BrowseWorkshopCommand { get; }
     public RelayCommand BrowseServerCommand { get; }
     public RelayCommand BrowseBatchFileCommand { get; }
+    public RelayCommand BrowseDataDirectoryCommand { get; }
 
     /// <summary>Raised after a browsed path has been set and should be applied immediately.</summary>
     public event Action? ApplyRequested;
+
+    /// <summary>Raised after the user browses a new data directory; relocation happens immediately.</summary>
+    public event Action? DataDirectoryChanged;
 
     /// <summary>Loads settings into the editable fields.</summary>
     public void Load(Settings settings)
@@ -80,14 +109,18 @@ public sealed class SettingsViewModel : ViewModelBase
         _workshopPath = settings.WorkshopPath;
         _serverPath = settings.ServerPath;
         _batFileName = settings.BatFileName;
+        _dataDirectory = settings.DataDirectory;
         _savedWorkshopPath = settings.WorkshopPath;
         _savedServerPath = settings.ServerPath;
         _savedBatFileName = settings.BatFileName;
+        _savedDataDirectory = settings.DataDirectory;
         _schemaVersion = settings.SchemaVersion;
 
         OnPropertyChanged(nameof(WorkshopPath));
         OnPropertyChanged(nameof(ServerPath));
         OnPropertyChanged(nameof(BatFileName));
+        OnPropertyChanged(nameof(DataDirectory));
+        OnPropertyChanged(nameof(EffectiveDataDirectory));
         OnPropertyChanged(nameof(IsDirty));
     }
 
@@ -97,6 +130,7 @@ public sealed class SettingsViewModel : ViewModelBase
             WorkshopPath = WorkshopPath,
             ServerPath = ServerPath,
             BatFileName = BatFileName,
+            DataDirectory = DataDirectory,
             SchemaVersion = _schemaVersion,
         };
 
@@ -105,7 +139,15 @@ public sealed class SettingsViewModel : ViewModelBase
         _savedWorkshopPath = settings.WorkshopPath;
         _savedServerPath = settings.ServerPath;
         _savedBatFileName = settings.BatFileName;
+        _savedDataDirectory = settings.DataDirectory;
         _schemaVersion = settings.SchemaVersion;
+        OnPropertyChanged(nameof(IsDirty));
+    }
+
+    /// <summary>Marks the data directory as persisted after an immediate relocation.</summary>
+    public void NotifyDataDirectoryApplied()
+    {
+        _savedDataDirectory = DataDirectory;
         OnPropertyChanged(nameof(IsDirty));
     }
 
@@ -137,8 +179,18 @@ public sealed class SettingsViewModel : ViewModelBase
             string.IsNullOrEmpty(ServerPath) ? AppContext.BaseDirectory : ServerPath);
         if (file is not null)
         {
-            BatFileName = Path.GetFileName(file);
+            BatFileName = file;
             ApplyRequested?.Invoke();
+        }
+    }
+
+    private void BrowseDataDirectory()
+    {
+        string? folder = _dialogs.PickFolder("Select the data directory");
+        if (folder is not null)
+        {
+            DataDirectory = folder;
+            DataDirectoryChanged?.Invoke();
         }
     }
 }

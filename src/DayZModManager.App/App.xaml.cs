@@ -1,5 +1,4 @@
-﻿using System.IO;
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Threading;
 using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
@@ -22,8 +21,11 @@ public partial class App : Application
         {
             RegisterGlobalExceptionHandlers();
 
-            string dataDirectory = ResolveDataDirectory();
-            _services = BuildServiceProvider(dataDirectory);
+            var fileSystem = new PhysicalFileSystem();
+            var dataDirectoryProvider = new DataDirectoryProvider(fileSystem);
+            dataDirectoryProvider.Initialize();
+
+            _services = BuildServiceProvider(fileSystem, dataDirectoryProvider);
 
             var viewModel = _services.GetRequiredService<MainViewModel>();
             var window = new MainWindow { DataContext = viewModel };
@@ -48,11 +50,12 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    private static ServiceProvider BuildServiceProvider(string dataDirectory)
+    private static ServiceProvider BuildServiceProvider(IFileSystem fileSystem, IDataDirectoryProvider dataDirectoryProvider)
     {
         var services = new ServiceCollection();
 
-        services.AddSingleton<IFileSystem, PhysicalFileSystem>();
+        services.AddSingleton<IFileSystem>(fileSystem);
+        services.AddSingleton<IDataDirectoryProvider>(dataDirectoryProvider);
         services.AddSingleton<IJunctionOperations, JunctionOperations>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IModOrderStore, ModOrderStore>();
@@ -82,17 +85,9 @@ public partial class App : Application
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<IProcessLauncher>(),
-            dataDirectory));
+            dataDirectoryProvider));
 
         return services.BuildServiceProvider();
-    }
-
-    private static string ResolveDataDirectory()
-    {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return string.IsNullOrWhiteSpace(appData)
-            ? Path.Combine(AppContext.BaseDirectory, "data")
-            : Path.Combine(appData, "DayZModManager");
     }
 
     private static void RegisterGlobalExceptionHandlers()

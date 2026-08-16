@@ -21,11 +21,13 @@ public sealed record ApplyResult
     public IReadOnlyList<string> Logs { get; init; } = Array.Empty<string>();
 }
 
-/// <summary>
-/// Synchronizes the desired configuration with the actual server. Sequence:
-/// validate, save config, update batch file, synchronize junctions, verify.
-/// A batch-file failure aborts before any junction changes are made.
-/// </summary>
+    /// <summary>
+    /// Synchronizes the desired configuration with the actual server. Sequence:
+    /// validate, update batch file, synchronize junctions, save config, verify.
+    /// A batch-file failure aborts before any junction or configuration change is
+    /// made; a junction failure aborts before any configuration is persisted so a
+    /// failed Apply is never reloaded as the applied state on the next start.
+    /// </summary>
 public interface IApplyService
 {
     ApplyResult Apply(ApplyContext context);
@@ -77,21 +79,19 @@ public sealed class ApplyService : IApplyService
 
         logs.Add("Validation passed.");
 
-        // 2. Save configuration
-        _settings.Save(context.DataDirectory, context.Settings);
-        _modOrder.Save(context.DataDirectory, context.LoadedMods);
-        logs.Add($"Saved configuration: {context.LoadedMods.Count} mod(s) loaded.");
-
-        // 3. Update batch file (before touching junctions, so a failure here is safe)
+        // 2. Update the batch file first: a failure here aborts before any
+        //    configuration is persisted or any junction is touched.
         if (!_batchFile.WriteModList(context.Settings.BatFilePath, context.LoadedMods))
         {
-            logs.Add("ERROR: Failed to update the batch file. No junction changes were made.");
+            logs.Add("ERROR: Failed to update the batch file. No changes were made.");
             return new ApplyResult { Success = false, Logs = logs };
         }
 
         logs.Add("Batch file updated.");
 
-        // 4. Synchronize junctions
+        // 3. Synchronize junctions before persisting any configuration: a
+        //    junction failure must not leave settings/mod_order.json written,
+        //    otherwise a failed Apply would be reloaded on the next start.
         JunctionSyncResult junctionResult = _junctions.Sync(
             context.Settings.ServerPath,
             context.Settings.WorkshopPath,
@@ -104,6 +104,11 @@ public sealed class ApplyService : IApplyService
             logs.Add("ERROR: Junction synchronization reported failures.");
             return new ApplyResult { Success = false, Logs = logs };
         }
+
+        // 4. Save configuration
+        _settings.Save(context.DataDirectory, context.Settings);
+        _modOrder.Save(context.DataDirectory, context.LoadedMods);
+        logs.Add($"Saved configuration: {context.LoadedMods.Count} mod(s) loaded.");
 
         // 5. Verify
         IReadOnlyList<string> missing = _junctions.Verify(context.Settings.ServerPath, context.LoadedMods);

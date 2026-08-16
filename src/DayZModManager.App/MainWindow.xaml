@@ -95,13 +95,14 @@
                      ItemTemplate="{StaticResource LogEntryTemplate}"
                      Background="#FF1E1E1E"
                      BorderThickness="0"
+                     beh:ListBoxAutoScroll.AutoScroll="True"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      HorizontalContentAlignment="Stretch" />
         </Border>
 
         <!-- Tabs -->
         <TabControl SelectionChanged="Tabs_SelectionChanged">
-            <TabItem Header="Mod Manage" DataContext="{Binding Mods}">
+            <TabItem x:Name="ModsTab" Header="Mod Manage" DataContext="{Binding Mods}">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -183,7 +184,6 @@
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
                         <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
                         <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280" />
-                        <Button Content="Apply Map" Command="{Binding ApplyMapCommand}" IsEnabled="{Binding CanApplyMap}" Width="90" Margin="8,0,0,0" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
@@ -241,19 +241,24 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Workshop path:" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WorkshopPath}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
-                        <Button Grid.Row="0" Grid.Column="2" Content="Browse..." Command="{Binding BrowseWorkshopCommand}" Margin="0,0,0,8" />
+                        <Button Grid.Row="0" Grid.Column="2" Content="Browse" Command="{Binding BrowseWorkshopCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Server path:" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ServerPath}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
-                        <Button Grid.Row="1" Grid.Column="2" Content="Browse..." Command="{Binding BrowseServerCommand}" Margin="0,0,0,8" />
+                        <Button Grid.Row="1" Grid.Column="2" Content="Browse" Command="{Binding BrowseServerCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch file:" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding BatFileName}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
-                        <Button Grid.Row="2" Grid.Column="2" Content="Browse..." Command="{Binding BrowseBatchFileCommand}" Margin="0,0,0,8" />
+                        <Button Grid.Row="2" Grid.Column="2" Content="Choose" Command="{Binding BrowseBatchFileCommand}" Width="80" Margin="0,0,0,8" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Data directory:" VerticalAlignment="Center" Margin="0,0,8,8" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding EffectiveDataDirectory}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+                        <Button Grid.Row="3" Grid.Column="2" Content="Browse" Command="{Binding BrowseDataDirectoryCommand}" Width="80" Margin="0,0,0,8" />
                     </Grid>
                 </StackPanel>
             </TabItem>

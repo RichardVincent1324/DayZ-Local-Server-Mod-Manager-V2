@@ -42,7 +42,13 @@ public sealed class ValidationService : IValidationService
         ValidateWorkshop(settings.WorkshopPath, errors);
         ValidateServer(settings.ServerPath, errors);
         ValidateBatch(settings.BatFilePath, errors);
-        ValidateMods(settings.WorkshopPath, context.LoadedMods, errors);
+
+        // Only check individual mods when the workshop directory actually exists,
+        // otherwise every loaded mod is reported missing on top of the real error.
+        if (!string.IsNullOrWhiteSpace(settings.WorkshopPath) && _fileSystem.DirectoryExists(settings.WorkshopPath))
+        {
+            ValidateMods(settings.WorkshopPath, context.LoadedMods, errors);
+        }
 
         return errors;
     }

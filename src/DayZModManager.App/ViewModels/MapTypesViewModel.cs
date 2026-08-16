@@ -22,7 +22,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly IDialogService _dialogs;
     private readonly LogViewModel _log;
     private readonly TypesConfig _typesConfig;
-    private readonly string _dataDirectory;
+    private readonly IDataDirectoryProvider _dataDirectoryProvider;
 
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
@@ -33,6 +33,9 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private string? _selectedMap;
     private string? _selectedMod;
+    private bool _isRestoring;
+    private bool _isSwitching;
+    private string? _pendingMap;
 
     public MapTypesViewModel(
         IMapService mapService,
@@ -44,7 +47,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         IDialogService dialogs,
         LogViewModel log,
         TypesConfig typesConfig,
-        string dataDirectory)
+        IDataDirectoryProvider dataDirectoryProvider)
     {
         _mapService = mapService;
         _typesService = typesService;
@@ -55,9 +58,8 @@ public sealed class MapTypesViewModel : ViewModelBase
         _dialogs = dialogs;
         _log = log;
         _typesConfig = typesConfig;
-        _dataDirectory = dataDirectory;
+        _dataDirectoryProvider = dataDirectoryProvider;
 
-        ApplyMapCommand = new RelayCommand(ApplyMap);
         ConfigXmlCommand = new RelayCommand(ConfigureMod);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid);
@@ -73,14 +75,19 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     public ObservableCollection<TypesRowViewModel> SelectedTypesRows { get; } = new();
 
+    /// <summary>
+    /// The currently selected map. Selecting a different map applies it
+    /// immediately (server template, batch file, map_profiles and economy).
+    /// Programmatic restoration during refresh is flagged so it never re-applies.
+    /// </summary>
     public string? SelectedMap
     {
         get => _selectedMap;
         set
         {
-            if (SetField(ref _selectedMap, value))
+            if (SetField(ref _selectedMap, value) && !_isRestoring)
             {
-                OnPropertyChanged(nameof(CanApplyMap));
+                RequestMapSwitch(value);
             }
         }
     }
@@ -91,8 +98,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         set => SetField(ref _selectedMod, value);
     }
 
-    public bool CanApplyMap => SelectedMap is not null && SelectedMap != _typesConfig.CurrentMap;
-
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>
@@ -101,7 +106,6 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// </summary>
     public Func<Task<bool>>? EnsureApplied { get; set; }
 
-    public RelayCommand ApplyMapCommand { get; }
     public RelayCommand ConfigXmlCommand { get; }
     public RelayCommand RemoveSelectedCommand { get; }
     public RelayCommand CleanInvalidCommand { get; }
@@ -123,23 +127,34 @@ public sealed class MapTypesViewModel : ViewModelBase
         RebuildMapNames();
         RefreshModNames(loadedMods);
         RebuildRows();
-
-        ApplyDefaultMapIfNeeded();
     }
 
     /// <summary>
-    /// Applies the first discovered map when no map has been applied yet, so a
-    /// first-time user starts with a valid (already applied) default map.
+    /// Called at startup: retains the last-applied map (validating it is still
+    /// present on the server) and applies a default map for a first-time user so
+    /// the map_profiles folder is created. Does not rewrite server files for an
+    /// already-applied map.
     /// </summary>
-    public void ApplyDefaultMapIfNeeded()
+    public void ReconcileAppliedMap()
     {
-        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) || MapNames.Count == 0)
+        if (MapNames.Count == 0)
         {
             return;
         }
 
-        SelectedMap = MapNames[0];
-        ApplyMapCore(MapNames[0]);
+        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            if (!_discoveredMaps.Any(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)))
+            {
+                _log.Warning($"Previously applied map \"{_typesConfig.CurrentMap}\" was not found on this server. Select a valid map.");
+            }
+
+            return;
+        }
+
+        string defaultMap = MapNames[0];
+        SetRestoringSelection(defaultMap);
+        ApplyMapCore(defaultMap);
     }
 
     /// <summary>Rebuilds the map dropdown from discovered maps plus any maps already configured.</summary>
@@ -157,23 +172,31 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         foreach (string key in _typesConfig.Maps.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
-            if (!MapNames.Contains(key))
+            if (!ContainsIgnoreCase(MapNames, key))
             {
                 MapNames.Add(key);
             }
         }
 
-        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) && MapNames.Contains(_typesConfig.CurrentMap))
+        _isRestoring = true;
+        try
         {
-            SelectedMap = _typesConfig.CurrentMap;
+            if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) && ContainsIgnoreCase(MapNames, _typesConfig.CurrentMap))
+            {
+                SelectedMap = _typesConfig.CurrentMap;
+            }
+            else if (previousMap is not null && ContainsIgnoreCase(MapNames, previousMap))
+            {
+                SelectedMap = previousMap;
+            }
+            else
+            {
+                SelectedMap = MapNames.Count > 0 ? MapNames[0] : null;
+            }
         }
-        else if (previousMap is not null && MapNames.Contains(previousMap))
+        finally
         {
-            SelectedMap = previousMap;
-        }
-        else
-        {
-            SelectedMap = MapNames.Count > 0 ? MapNames[0] : null;
+            _isRestoring = false;
         }
     }
 
@@ -238,7 +261,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string? path = _discoveredMaps
-            .FirstOrDefault(m => string.Equals(m.Name, mapName, StringComparison.Ordinal))
+            .FirstOrDefault(m => string.Equals(m.Name, mapName, StringComparison.OrdinalIgnoreCase))
             ?.Path;
 
         if (path is null)
@@ -249,26 +272,89 @@ public sealed class MapTypesViewModel : ViewModelBase
         return path;
     }
 
-    private async void ApplyMap()
+    /// <summary>
+    /// Applies a map selected by the user. If a switch is already in flight the
+    /// request is queued so the latest selection always wins.
+    /// </summary>
+    private void RequestMapSwitch(string? mapName)
     {
-        string? missionPath = ResolveMapPathForName(SelectedMap);
-        if (missionPath is null || SelectedMap is null)
+        if (mapName is null)
         {
             return;
         }
 
-        if (!await EnsureAppliedBeforeAsync("map switch"))
+        if (_isSwitching)
+        {
+            _pendingMap = mapName;
+            return;
+        }
+
+        _ = SwitchMapAsync(mapName);
+    }
+
+    private async Task SwitchMapAsync(string mapName)
+    {
+        _isSwitching = true;
+        try
+        {
+            string? missionPath = ResolveMapPathForName(mapName);
+            if (missionPath is null)
+            {
+                // The selected map cannot be applied; keep the dropdown on the
+                // actually-applied map so selection never diverges from it.
+                SetRestoringSelection(_typesConfig.CurrentMap);
+                return;
+            }
+
+            if (!await EnsureAppliedBeforeAsync("map switch"))
+            {
+                SetRestoringSelection(_typesConfig.CurrentMap);
+                return;
+            }
+
+            ApplyMapCore(mapName);
+            SetRestoringSelection(mapName);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Map switch failed: {ex.Message}");
+        }
+        finally
+        {
+            _isSwitching = false;
+            string? next = _pendingMap;
+            _pendingMap = null;
+
+            if (next is not null && !string.Equals(next, _typesConfig.CurrentMap, StringComparison.Ordinal))
+            {
+                _ = SwitchMapAsync(next);
+            }
+        }
+    }
+
+    /// <summary>Sets the selected map without triggering another switch.</summary>
+    private void SetRestoringSelection(string? mapName)
+    {
+        if (string.Equals(_selectedMap, mapName, StringComparison.Ordinal))
         {
             return;
         }
 
-        ApplyMapCore(SelectedMap);
+        _isRestoring = true;
+        try
+        {
+            SelectedMap = mapName;
+        }
+        finally
+        {
+            _isRestoring = false;
+        }
     }
 
     private void ApplyMapCore(string mapName)
     {
         _typesConfig.CurrentMap = mapName;
-        _typesConfigStore.Save(_dataDirectory, _typesConfig);
+        _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
 
         string mapId = GetMapId(mapName);
 
@@ -291,7 +377,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             _log.Error($"Failed to create map_profiles directory: {ex.Message}");
         }
 
-        OnPropertyChanged(nameof(CanApplyMap));
         NotifyCommandStates();
         RebuildRows();
         SyncEconomyCore();
@@ -300,122 +385,142 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void ConfigureMod()
     {
-        string? modName = SelectedMod;
-        if (modName is null)
+        try
         {
-            _log.Warning("Select a mod to configure first.");
-            return;
-        }
+            string? modName = SelectedMod;
+            if (modName is null)
+            {
+                _log.Warning("Select a mod to configure first.");
+                return;
+            }
 
-        string? missionPath = ResolveAppliedMapPath();
-        if (missionPath is null)
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
+
+            IReadOnlyList<string> files = _typesService.DiscoverTypeFiles(_workshopPath, modName);
+            _log.Info($"Found {files.Count} candidate type file(s) in {modName}.");
+
+            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files);
+            if (selected is null || selected.Count == 0)
+            {
+                return;
+            }
+
+            if (!await EnsureAppliedBeforeAsync("types configuration"))
+            {
+                return;
+            }
+
+            TypesOperationResult result = _typesService.ConfigureMod(
+                _typesConfig, _typesConfig.CurrentMap, missionPath, _workshopPath, modName, selected, LoadedSet());
+
+            LogOperation(result, "Types configuration completed.");
+        }
+        catch (Exception ex)
         {
-            return;
+            _log.Error($"Types configuration failed: {ex.Message}");
         }
-
-        IReadOnlyList<string> files = _typesService.DiscoverTypeFiles(_workshopPath, modName);
-        _log.Info($"Found {files.Count} candidate type file(s) in {modName}.");
-
-        IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files);
-        if (selected is null || selected.Count == 0)
-        {
-            _log.Info("Configuration cancelled.");
-            return;
-        }
-
-        if (!await EnsureAppliedBeforeAsync("types configuration"))
-        {
-            return;
-        }
-
-        TypesOperationResult result = _typesService.ConfigureMod(
-            _typesConfig, _typesConfig.CurrentMap, missionPath, _workshopPath, modName, selected, LoadedSet());
-
-        LogOperation(result, "Types configuration completed.");
     }
 
     private async void RemoveSelected()
     {
-        List<TypesRowViewModel> rows = SelectedTypesRows.ToList();
-        if (rows.Count == 0)
+        try
         {
-            _log.Warning("Select rows in the table first.");
-            return;
-        }
-
-        string? missionPath = ResolveAppliedMapPath();
-        if (missionPath is null)
-        {
-            return;
-        }
-
-        if (!await EnsureAppliedBeforeAsync("removal"))
-        {
-            return;
-        }
-
-        bool success = true;
-        var messages = new List<string>();
-        foreach (IGrouping<string, TypesRowViewModel> group in rows.GroupBy(r => r.ModName, StringComparer.Ordinal))
-        {
-            var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
-            TypesOperationResult result = _typesService.RemoveFiles(
-                _typesConfig, _typesConfig.CurrentMap, missionPath, group.Key, leaves, LoadedSet());
-            messages.AddRange(result.Messages);
-            if (!result.Success)
+            List<TypesRowViewModel> rows = SelectedTypesRows.ToList();
+            if (rows.Count == 0)
             {
-                success = false;
+                _log.Warning("Select rows in the table first.");
+                return;
+            }
+
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
+
+            if (!await EnsureAppliedBeforeAsync("removal"))
+            {
+                return;
+            }
+
+            bool success = true;
+            var messages = new List<string>();
+            foreach (IGrouping<string, TypesRowViewModel> group in rows.GroupBy(r => r.ModName, StringComparer.Ordinal))
+            {
+                var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
+                TypesOperationResult result = _typesService.RemoveFiles(
+                    _typesConfig, _typesConfig.CurrentMap, missionPath, group.Key, leaves, LoadedSet());
+                messages.AddRange(result.Messages);
+                if (!result.Success)
+                {
+                    success = false;
+                }
+            }
+
+            foreach (string message in messages)
+            {
+                _log.Info(message);
+            }
+
+            if (success)
+            {
+                _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                _log.Success("Removed selected types files.");
+                RebuildRows();
+            }
+            else
+            {
+                _log.Error("Operation failed.");
             }
         }
-
-        foreach (string message in messages)
+        catch (Exception ex)
         {
-            _log.Info(message);
-        }
-
-        if (success)
-        {
-            _typesConfigStore.Save(_dataDirectory, _typesConfig);
-            _log.Success("Removed selected types files.");
-            RebuildRows();
-        }
-        else
-        {
-            _log.Error("Operation failed.");
+            _log.Error($"Removal failed: {ex.Message}");
         }
     }
 
     private async void CleanInvalid()
     {
-        string? missionPath = ResolveAppliedMapPath();
-        if (missionPath is null)
+        try
         {
-            return;
-        }
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
 
-        if (!await EnsureAppliedBeforeAsync("cleanup"))
-        {
-            return;
-        }
+            if (!await EnsureAppliedBeforeAsync("cleanup"))
+            {
+                return;
+            }
 
-        var workshop = new HashSet<string>(_allMods, StringComparer.Ordinal);
-        var active = new HashSet<string>(_loadedMods.Where(workshop.Contains), StringComparer.Ordinal);
-        TypesOperationResult result = _typesService.CleanInvalid(
-            _typesConfig, _typesConfig.CurrentMap, missionPath, active, LoadedSet());
+            var workshop = new HashSet<string>(_allMods, StringComparer.Ordinal);
+            var active = new HashSet<string>(_loadedMods.Where(workshop.Contains), StringComparer.Ordinal);
+            TypesOperationResult result = _typesService.CleanInvalid(
+                _typesConfig, _typesConfig.CurrentMap, missionPath, active, LoadedSet());
 
-        foreach (string message in result.Messages)
-        {
-            _log.Info(message);
-        }
+            foreach (string message in result.Messages)
+            {
+                _log.Info(message);
+            }
 
-        if (result.Success)
-        {
-            _typesConfigStore.Save(_dataDirectory, _typesConfig);
-            RebuildRows();
+            if (result.Success)
+            {
+                _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                RebuildRows();
+            }
+            else
+            {
+                _log.Error("Operation failed.");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            _log.Error("Operation failed.");
+            _log.Error($"Cleanup failed: {ex.Message}");
         }
     }
 
@@ -428,7 +533,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         if (result.Success)
         {
-            _typesConfigStore.Save(_dataDirectory, _typesConfig);
+            _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
             _log.Success(successMessage);
             RebuildRows();
         }
@@ -474,6 +579,9 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         return true;
     }
+
+    private static bool ContainsIgnoreCase(ObservableCollection<string> items, string value) =>
+        items.Any(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase));
 
     private static string GetMapId(string mapName)
     {

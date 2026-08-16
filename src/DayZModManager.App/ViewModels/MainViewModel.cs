@@ -16,11 +16,13 @@ public sealed class MainViewModel : ViewModelBase
     private readonly ITypesConfigStore _typesConfigStore;
     private readonly IApplyService _applyService;
     private readonly IProcessLauncher _launcher;
-    private readonly string _dataDirectory;
+    private readonly IDataDirectoryProvider _dataDirectoryProvider;
+    private readonly IDialogService _dialogs;
 
     private Settings _settings = new();
     private bool _isDirty;
     private string _statusText = "Configuration applied";
+    private Task<bool>? _pendingApply;
 
     public MainViewModel(
         ISettingsService settingsService,
@@ -35,14 +37,15 @@ public sealed class MainViewModel : ViewModelBase
         IFileSystem fileSystem,
         IDialogService dialogs,
         IProcessLauncher launcher,
-        string dataDirectory)
+        IDataDirectoryProvider dataDirectoryProvider)
     {
         _settingsService = settingsService;
         _modOrderStore = modOrderStore;
         _typesConfigStore = typesConfigStore;
         _applyService = applyService;
         _launcher = launcher;
-        _dataDirectory = dataDirectory;
+        _dataDirectoryProvider = dataDirectoryProvider;
+        _dialogs = dialogs;
 
         Log = new LogViewModel();
         ModState = new ModState();
@@ -51,26 +54,35 @@ public sealed class MainViewModel : ViewModelBase
         // --- Load persistent state ---
         _settings = LoadOrCreateSettings();
 
-        ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(_dataDirectory);
+        ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(_dataDirectoryProvider.Current);
         if (order.Status == ConfigLoadStatus.Success)
         {
             ModState.ReplaceLoadedMods(order.Value!);
         }
+        else if (order.Status == ConfigLoadStatus.Corrupt)
+        {
+            Log.Error("mod_order.json is corrupt and was ignored.");
+        }
 
-        ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(_dataDirectory);
+        ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(_dataDirectoryProvider.Current);
         if (types.Status == ConfigLoadStatus.Success)
         {
             ApplyLoadedTypes(types.Value!);
+        }
+        else if (types.Status == ConfigLoadStatus.Corrupt)
+        {
+            Log.Error("types_config.json is corrupt and was ignored.");
         }
 
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         MapTypes = new MapTypesViewModel(
             mapService, typesService, typesConfigStore, serverConfigService, batchFileService,
-            fileSystem, dialogs, Log, TypesConfig, _dataDirectory);
+            fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider);
         MapTypes.EnsureApplied = EnsureApplied;
         Settings = new SettingsViewModel(dialogs);
         Settings.ApplyRequested += async () => await ApplyAsync();
+        Settings.DataDirectoryChanged += HandleDataDirectoryChanged;
 
         ApplyCommand = new AsyncRelayCommand(async () => await ApplyAsync());
         StartServerCommand = new AsyncRelayCommand(StartServerAsync);
@@ -107,6 +119,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             await Mods.RefreshAsync(_settings.WorkshopPath);
             MapTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
+            MapTypes.ReconcileAppliedMap();
             Mods.MarkApplied();
             UpdateDirty();
         }
@@ -148,17 +161,32 @@ public sealed class MainViewModel : ViewModelBase
 
     private Settings LoadOrCreateSettings()
     {
-        ConfigLoadResult<Settings> result = _settingsService.Load(_dataDirectory);
+        string dataDirectory = _dataDirectoryProvider.Current;
+        ConfigLoadResult<Settings> result = _settingsService.Load(dataDirectory);
 
-        if (result.Status != ConfigLoadStatus.Success)
+        if (result.Status == ConfigLoadStatus.Success)
         {
-            Log.Warning("No configuration found. Set the server and workshop paths in the Settings tab.");
+            return result.Value!;
+        }
+
+        if (result.Status == ConfigLoadStatus.Corrupt)
+        {
+            bool backedUp = _settingsService.BackupCorrupt(dataDirectory);
+            string message = backedUp
+                ? "settings.json was corrupt and could not be read. Its contents were preserved as \"settings.json.corrupt\" and new defaults were created."
+                : "settings.json was corrupt and could not be read, and a backup could not be created. New defaults were created.";
+            Log.Error(message);
+            _dialogs.ShowMessage(message, "Settings file corrupt", isError: true);
+
             var defaults = new Settings();
-            _settingsService.Save(_dataDirectory, defaults);
+            _settingsService.Save(dataDirectory, defaults);
             return defaults;
         }
 
-        return result.Value!;
+        Log.Warning("No configuration found. Set the server and workshop paths in the Settings tab.");
+        var fresh = new Settings();
+        _settingsService.Save(dataDirectory, fresh);
+        return fresh;
     }
 
     private void ApplyLoadedTypes(TypesConfig loaded)
@@ -172,49 +200,96 @@ public sealed class MainViewModel : ViewModelBase
         TypesConfig.CurrentMap = loaded.CurrentMap;
     }
 
-    private async Task<bool> ApplyAsync()
+    /// <summary>Applies pending changes if any. Used when leaving the Mods tab or closing the window.</summary>
+    public async Task ApplyIfDirtyAsync()
     {
-        Settings newSettings = Settings.ToSettings();
-        IReadOnlyList<string> loadedMods = ModState.LoadedMods.ToList();
-
-        ApplyResult result = await Task.Run(() => _applyService.Apply(new ApplyContext
+        if (IsDirty)
         {
-            Settings = newSettings,
-            LoadedMods = loadedMods,
-            DataDirectory = _dataDirectory,
-        }));
-
-        foreach (string line in result.Logs)
-        {
-            Log.Info(line);
+            await ApplyAsync();
         }
+    }
 
-        if (!result.Success)
+    /// <summary>
+    /// Runs a single Apply at a time: overlapping requests (e.g. tab switch plus
+    /// Start Server) share the in-flight apply instead of writing files twice.
+    /// </summary>
+    private Task<bool> ApplyAsync() => _pendingApply ??= ApplyCoreAsync();
+
+    private async Task<bool> ApplyCoreAsync()
+    {
+        try
         {
-            Log.Error("Apply failed.");
+            Settings newSettings = Settings.ToSettings();
+            IReadOnlyList<string> loadedMods = ModState.LoadedMods.ToList();
+
+            string dataDirectory = _dataDirectoryProvider.Resolve(newSettings);
+
+            ApplyResult result = await Task.Run(() => _applyService.Apply(new ApplyContext
+            {
+                Settings = newSettings,
+                LoadedMods = loadedMods,
+                DataDirectory = dataDirectory,
+            }));
+
+            foreach (string line in result.Logs)
+            {
+                Log.Info(line);
+            }
+
+            if (!result.Success)
+            {
+                Log.Error("Apply failed.");
+                return false;
+            }
+
+            // Relocate the data files only after a successful apply so a failed
+            // Apply never moves them.
+            if (!string.Equals(dataDirectory, _dataDirectoryProvider.Current, StringComparison.OrdinalIgnoreCase))
+            {
+                _dataDirectoryProvider.MoveTo(dataDirectory, newSettings);
+            }
+
+            // From here the apply is committed. A UI refresh failure is logged as
+            // a warning rather than flipping a successful apply to a failure.
+            try
+            {
+                bool pathChanged = newSettings.WorkshopPath != _settings.WorkshopPath
+                    || newSettings.ServerPath != _settings.ServerPath;
+
+                _settings = newSettings;
+                Settings.MarkApplied(newSettings);
+                Mods.MarkApplied(loadedMods);
+
+                if (pathChanged)
+                {
+                    await Mods.RefreshAsync(newSettings.WorkshopPath);
+                    MapTypes.Refresh(newSettings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
+                    MapTypes.ReconcileAppliedMap();
+                }
+                else
+                {
+                    MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+                }
+
+                MapTypes.SyncEconomyCore();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Apply succeeded, but refreshing the UI failed: {ex.Message}");
+            }
+
+            UpdateDirty();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Apply failed: {ex.Message}");
             return false;
         }
-
-        bool pathChanged = newSettings.WorkshopPath != _settings.WorkshopPath
-            || newSettings.ServerPath != _settings.ServerPath;
-
-        _settings = newSettings;
-        Settings.MarkApplied(newSettings);
-        Mods.MarkApplied();
-
-        if (pathChanged)
+        finally
         {
-            await Mods.RefreshAsync(newSettings.WorkshopPath);
-            MapTypes.Refresh(newSettings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
+            _pendingApply = null;
         }
-        else
-        {
-            MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
-        }
-
-        MapTypes.SyncEconomyCore();
-        UpdateDirty();
-        return true;
     }
 
     private async Task StartServerAsync()
@@ -243,4 +318,25 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     private Task<bool> EnsureApplied() => !IsDirty ? Task.FromResult(true) : ApplyAsync();
+
+    /// <summary>
+    /// Relocates the data files immediately when the user browses a new data
+    /// directory, persisting the override into settings.json.
+    /// </summary>
+    private void HandleDataDirectoryChanged()
+    {
+        string picked = Settings.DataDirectory;
+        if (string.IsNullOrWhiteSpace(picked))
+        {
+            return;
+        }
+
+        // Persist the override using the currently displayed settings so the
+        // saved file never diverges from the form. Only the data directory is
+        // advanced in the applied snapshot; path edits stay deferred to Apply.
+        var merged = Settings.ToSettings();
+        _dataDirectoryProvider.MoveTo(picked, merged);
+        _settings = _settings with { DataDirectory = picked };
+        Settings.NotifyDataDirectoryApplied();
+    }
 }

@@ -136,10 +136,18 @@ public sealed class ModsViewModel : ViewModelBase
     }
 
     /// <summary>Marks the current state as applied (clears the dirty flag).</summary>
-    public void MarkApplied()
+    public void MarkApplied() => MarkApplied(_state.LoadedMods);
+
+    /// <summary>
+    /// Records <paramref name="appliedMods"/> (the snapshot that was actually
+    /// persisted) as the applied baseline and recomputes dirty from the current
+    /// in-memory list. Edits made after the snapshot — e.g. while an Apply was in
+    /// flight on a background thread — correctly remain pending.
+    /// </summary>
+    public void MarkApplied(IReadOnlyList<string> appliedMods)
     {
-        _savedLoaded = _state.LoadedMods.ToList();
-        IsDirty = false;
+        _savedLoaded = appliedMods.ToList();
+        UpdateDirtyFlag();
     }
 
     private void ApplyDiscovery(IReadOnlyList<string> workshopMods)
@@ -172,7 +180,6 @@ public sealed class ModsViewModel : ViewModelBase
             _state.Load(item.Name);
         }
 
-        _log.Info($"Loaded {items.Count} mod(s).");
         Rebuild();
     }
 
@@ -190,7 +197,6 @@ public sealed class ModsViewModel : ViewModelBase
             _state.Unload(item.Name);
         }
 
-        _log.Info($"Unloaded {items.Count} mod(s).");
         Rebuild();
     }
 
@@ -208,7 +214,6 @@ public sealed class ModsViewModel : ViewModelBase
             _state.Unload(name);
         }
 
-        _log.Info($"Removed {missing.Count} missing mod(s).");
         Rebuild();
     }
 
@@ -319,16 +324,11 @@ public sealed class ModsViewModel : ViewModelBase
         if (result.IsLoaded)
         {
             _state.Unload(result.Name);
-            _log.Info($"Unloaded {result.Name}.");
         }
         else if (!_state.Load(result.Name))
         {
             _log.Warning($"Cannot load {result.Name}: not found in workshop.");
             return;
-        }
-        else
-        {
-            _log.Info($"Loaded {result.Name}.");
         }
 
         Rebuild();

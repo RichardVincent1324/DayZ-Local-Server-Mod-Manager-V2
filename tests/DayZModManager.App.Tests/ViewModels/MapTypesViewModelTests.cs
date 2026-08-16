@@ -29,7 +29,7 @@ public class MapTypesViewModelTests
             new FakeDialogs(),
             new LogViewModel(),
             config,
-            @"D:\data");
+            new FakeDataDirectoryProvider());
     }
 
     private static Settings Settings() => new()
@@ -47,9 +47,9 @@ public class MapTypesViewModelTests
 
         MapTypesViewModel vm = Create(config, typesConfigStore: store);
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
 
         Assert.Equal(MapName, config.CurrentMap);
-        Assert.False(vm.CanApplyMap);
         Assert.True(store.SaveCalled);
     }
 
@@ -57,12 +57,35 @@ public class MapTypesViewModelTests
     public void Refresh_WithCurrentMap_DoesNotOverride()
     {
         var config = new TypesConfig { CurrentMap = MapName };
+        var store = new FakeTypesConfigStore();
 
-        MapTypesViewModel vm = Create(config);
+        MapTypesViewModel vm = Create(config, typesConfigStore: store);
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
 
         Assert.Equal(MapName, config.CurrentMap);
-        Assert.False(vm.CanApplyMap);
+        Assert.Equal(MapName, vm.SelectedMap);
+        Assert.False(store.SaveCalled, "an already-applied valid map should not be re-applied");
+    }
+
+    [Fact]
+    public void SelectingAMap_AppliesItImmediately()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = new TypesConfig();
+        var store = new FakeTypesConfigStore();
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+
+        MapTypesViewModel vm = Create(config, mapService: mapService, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = secondMap;
+
+        Assert.Equal(secondMap, config.CurrentMap);
+        Assert.Equal(secondMap, vm.SelectedMap);
+        Assert.True(store.SaveCalled);
     }
 
     [Fact]
@@ -72,8 +95,68 @@ public class MapTypesViewModelTests
 
         MapTypesViewModel vm = Create(config, new FakeMapService());
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
 
         Assert.Equal(string.Empty, config.CurrentMap);
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_FirstRun_AppliesFirstDiscoveredMap()
+    {
+        var config = new TypesConfig();
+        var store = new FakeTypesConfigStore();
+
+        MapTypesViewModel vm = Create(config, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(MapName, config.CurrentMap);
+        Assert.True(store.SaveCalled);
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_MissingRetainedMap_WarnsAndKeepsSelection()
+    {
+        const string missingMap = "dayzOffline.deerisle";
+        var config = new TypesConfig
+        {
+            CurrentMap = missingMap,
+            Maps = { [missingMap] = new MapTypesConfig() },
+        };
+        var store = new FakeTypesConfigStore();
+
+        MapTypesViewModel vm = Create(config, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(missingMap, config.CurrentMap);
+        Assert.Equal(missingMap, vm.SelectedMap);
+        Assert.False(store.SaveCalled, "a missing retained map must not trigger an auto-apply");
+    }
+
+    [Fact]
+    public void SelectingAMap_NotDiscoverable_RevertsToAppliedMap()
+    {
+        const string deadMap = "dayzOffline.deerisle";
+        var config = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Maps =
+            {
+                [MapName] = new MapTypesConfig(),
+                [deadMap] = new MapTypesConfig(), // persisted but no longer on disk
+            },
+        };
+        var store = new FakeTypesConfigStore();
+
+        MapTypesViewModel vm = Create(config, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = deadMap;
+
+        Assert.Equal(MapName, config.CurrentMap);
+        Assert.Equal(MapName, vm.SelectedMap);
+        Assert.False(store.SaveCalled, "an unresolvable map must not be applied");
     }
 
     private sealed class FakeMapService : IMapService
@@ -155,6 +238,17 @@ public class MapTypesViewModelTests
         public void WriteAllText(string path, string contents) { }
 
         public void CreateDirectory(string path) { }
+    }
+
+    private sealed class FakeDataDirectoryProvider : IDataDirectoryProvider
+    {
+        public string Current => @"D:\data";
+
+        public void Initialize() { }
+
+        public string Resolve(Settings settings) => Current;
+
+        public void MoveTo(string directory, Settings settings) { }
     }
 
     private sealed class FakeDialogs : IDialogService

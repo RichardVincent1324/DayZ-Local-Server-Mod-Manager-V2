@@ -249,6 +249,50 @@ public class ModsViewModelTests
     }
 
     [Fact]
+    public void MarkApplied_WithSnapshot_KeepsEditsMadeAfterSnapshotDirty()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        // Apply snapshot is ["@A"], but the user loads @B while Apply is in flight.
+        vm.SelectedAvailableItems.Add(vm.AvailableItems[0]);
+        vm.LoadSelectedCommand.Execute(null);
+
+        vm.MarkApplied(new[] { "@A" });
+
+        Assert.Equal(new[] { "@A", "@B" }, Names(vm.LoadedItems));
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public void MarkApplied_WithSnapshot_MatchingCurrentList_ClearsDirty()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.MarkApplied(new[] { "@A" });
+
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void MarkApplied_WithUpdatedSnapshot_ClearsDirty()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.SelectedAvailableItems.Add(vm.AvailableItems[0]);
+        vm.LoadSelectedCommand.Execute(null);
+
+        vm.MarkApplied(new[] { "@A", "@B" });
+
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
     public void Refresh_MarksMissingMods()
     {
         ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" });

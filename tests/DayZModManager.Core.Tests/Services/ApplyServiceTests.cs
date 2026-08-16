@@ -107,6 +107,28 @@ public class ApplyServiceTests
         Assert.False(result.Success);
         Assert.Contains(result.Logs, l => l.Contains("batch file", StringComparison.OrdinalIgnoreCase));
         Assert.Empty(junctions.Targets);
+
+        // Nothing should be persisted when the batch-file write fails.
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
+    }
+
+    [Fact]
+    public void Apply_JunctionFailure_DoesNotPersistConfiguration()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        (ApplyService service, FakeFileSystem _, FakeJunctionOperations junctions) = CreateRealServices(fs);
+        junctions.FailCreate = true;
+
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Logs, l => l.Contains("Failed to create junction"));
+
+        // A failed junction sync must not leave config on disk, otherwise the
+        // next start would reload changes the user was told were not applied.
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
     private sealed class StubBatchFileService : IBatchFileService

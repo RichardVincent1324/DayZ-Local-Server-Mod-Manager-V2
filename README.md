@@ -1,127 +1,254 @@
+
 # DayZ Local Server Mod Manager V2
 
-A Windows desktop application for managing **DayZ local servers and offline single-player environments**.
+> **A Windows mod manager for DayZ local servers, offline play, and single-player PvE.**
 
-DayZ Local Server Mod Manager V2 is the successor to [DayZ Local Server Mod Manager V1](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager), redesigned from the ground up with **C# / .NET 8 and WPF**.
+**DayZ Local Server Mod Manager V2** is a Windows desktop application designed to make heavily modded DayZ local servers easier to manage.
 
-The project is intended primarily for players who run DayZ through a **local server**, especially those who want a heavily modded PvE or single-player experience without relying on a full-featured public server management stack.
+It provides a graphical interface for managing your installed DayZ mods, load order, server configuration, map and `types.xml` settings, batch files, and mod directory structure — without having to repeatedly edit configuration files by hand.
 
-> **V2 is designed for offline/local-server use. It does not manage Bikeys or server-side signature verification.**
-
----
-<img width="600" alt="Screenshot 2026-08-22 175937" src="https://github.com/user-attachments/assets/9db4af27-ce20-44f4-aa23-732ba9b5ce6e" />
-
-<img width="600" alt="Screenshot 2026-08-22 175948" src="https://github.com/user-attachments/assets/3247a0fd-8567-499d-b91b-4648432c1105" />
-
-<img width="600" alt="Screenshot 2026-08-22 175951" src="https://github.com/user-attachments/assets/edc51624-2b66-4577-b100-aa50346c78c3" />
-
+V2 is the successor to the original [DayZ Local Server Mod Manager](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager), completely rebuilt with **C# / .NET 8 and WPF**.
 
 ---
 
+## ⬇️ Download
+
+### [Download DayZ Local Server Mod Manager V2](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)
+
+**Latest stable release: v2.0.0**
+
+* Windows x64
+* Self-contained
+* No separate .NET runtime installation required
+* Single executable
+
+> **V2 is designed for local/offline DayZ servers.**
+
+---
+
+<img width="500" alt="Screenshot 2026-08-22 175937" src="https://github.com/user-attachments/assets/9db4af27-ce20-44f4-aa23-732ba9b5ce6e" />
+
+<img width="500" alt="Screenshot 2026-08-22 175948" src="https://github.com/user-attachments/assets/3247a0fd-8567-499d-b91b-4648432c1105" />
+
+---
+
+## What Is This?
+
+Managing a heavily modded DayZ local server can become surprisingly tedious.
+
+You may need to:
+
+* Keep track of dozens of installed mods.
+* Decide which mods are currently active.
+* Maintain the correct mod load order.
+* Edit server configuration files.
+* Configure your map and `types.xml`.
+* Manage mod directories.
+* Launch the server with the correct parameters.
+* Repeat the process whenever you change your mod setup.
+
+V2 brings these tasks together into one Windows application.
+
+Instead of manually managing everything through Explorer and text editors, you can manage your local DayZ environment through a single graphical interface.
+
+---
 
 ## Features
 
 ### Mod Management
 
-* Detect and list installed DayZ mods.
+* Discover installed DayZ mods.
 * Enable or disable mods.
-* Reorder the active mod load order.
-* Generate and apply the server's mod configuration.
+* Manage the active mod list.
+* Reorder mods.
+* Apply the selected mod configuration to your server.
 * Manage mod directories through Windows junctions.
-* Keep the available-mod and loaded-mod workflows organized separately.
 
 ### Server Configuration
 
-V2 brings several configuration tasks into the same management workflow:
-
-* Server configuration management.
-* Batch file management.
-* Map configuration.
-* `types.xml` configuration.
-* Mod load-order configuration.
-* Server launch configuration.
+* Manage server configuration files.
+* Manage batch files used to launch the local server.
+* Configure map-related settings.
+* Configure `types.xml`.
+* Keep your local server configuration organized alongside your mod setup.
 
 ### Local Server Workflow
 
-The project is specifically designed around the workflow of running DayZ locally:
+V2 is designed around a simple workflow:
 
 ```text
-Steam Workshop Mods
-        ↓
-DayZ Local Server
-        ↓
+DayZ Mods
+   ↓
 DayZ Local Server Mod Manager V2
-        ↓
-Mod / Map / Types / Server Configuration
-        ↓
-Launch DayZ
+   ↓
+Mod / Load Order / Map / Types / Server Configuration
+   ↓
+Local DayZ Server
+   ↓
+DayZ
 ```
 
-The goal is to make configuring a heavily modded local DayZ installation easier without requiring a large external server-management system.
+The goal is simple:
+
+> **Spend less time managing files and more time playing DayZ.**
 
 ---
 
-## Important: `verifySignatures`
+# ⚠️ Important: Local / Offline Servers Only
 
-**This application does not manage Bikeys and does not provide Bikey/signature management.**
+V2 is intentionally focused on **offline and local-server use**.
 
-Because V2 is intended for offline and local-server usage, your DayZ server must run with signature verification disabled.
+It is **not** designed to be a complete public DayZ server administration platform, and it does **not** provide Bikey management.
 
-Open your DayZ server configuration and make sure you have:
+### Bikey / Signature Management
 
-```text
+V2 does **not** manage:
+
+* `.bikey` files
+* `.bisign` files
+* server-side signature verification
+* automated Bikey deployment
+
+Therefore, the intended V2 configuration requires:
+
+```cpp
 verifySignatures = 0;
 ```
 
-For example:
+in your DayZ server configuration.
+
+### Example
 
 ```cpp
 hostname = "My Local DayZ Server";
 verifySignatures = 0;
 ```
 
-### Why is this required?
+Without this setting, mods that rely on signature verification may not work correctly with the V2 workflow.
 
-DayZ normally uses signature verification to ensure that clients are using properly signed server-approved mods.
-
-V2 does **not** manage `.bikey` files, `.bisign` files, or server signature verification. Therefore, the intended V2 workflow is:
-
-```text
-Local / Offline Server
-        +
-verifySignatures = 0
-        +
-DayZ Local Server Mod Manager V2
-```
-
-This makes V2 particularly suitable for **personal local servers, offline experimentation, mod testing, and single-player PvE setups**.
-
-> **Do not use this configuration for a public server where proper mod signature verification is required.**
+> **Do not treat V2 as a public-server security or signature-management solution.**
+>
+> For public or shared dedicated servers that require proper signature verification and Bikey management, use a dedicated server-management solution designed for that purpose.
 
 ---
 
-## Requirements
+# Who Is V2 For?
 
-### Runtime
+V2 is primarily intended for players who:
+
+* Play DayZ offline or through a local server.
+* Prefer single-player PvE.
+* Run large mod collections.
+* Frequently change their mod setup.
+* Want a graphical alternative to manually editing server files.
+* Enjoy experimenting with different maps, mods, and server configurations.
+
+It is especially useful for players who have built their own heavily modded DayZ survival environment and want a cleaner way to maintain it.
+
+---
+
+# Getting Started
+
+## 1. Download V2
+
+Download the latest release from:
+
+**[GitHub Releases](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)**
+
+Download the Windows x64 executable.
+
+## 2. Prepare Your DayZ Local Server
+
+Make sure your DayZ local/dedicated server is already installed and working.
+
+V2 is a management tool; it does not replace the DayZ server itself.
+
+## 3. Disable Signature Verification
+
+Open your server configuration and make sure:
+
+```cpp
+verifySignatures = 0;
+```
+
+is configured.
+
+## 4. Open V2
+
+Launch:
+
+```text
+DayZModManagerV2.exe
+```
+
+and configure your local server environment.
+
+## 5. Configure Your Mods
+
+Use the application to select, organize, and configure the mods you want to use.
+
+## 6. Start Your Server
+
+Launch the local DayZ server using your configured server or batch-file setup.
+
+---
+
+# Requirements
+
+### For Users
 
 * Windows
-* .NET 8
+* 64-bit Windows system
 * DayZ Standalone
 * A working DayZ local/dedicated server installation
 
-The application targets `net8.0-windows` and uses WPF.
+The released application is published as a **self-contained Windows x64 application**, so users do not need to install the .NET runtime separately.
 
-### Development
+### For Developers
 
-To build the project from source:
+To build V2 from source:
 
-* .NET 8 SDK
 * Windows
+* .NET 8 SDK
 * Visual Studio 2022 or another compatible .NET development environment
 
 ---
 
-## Build
+# V1 → V2
+
+V2 is more than a visual redesign of the original project.
+
+The original V1 was built around a PowerShell-based implementation. V2 was redesigned as a proper Windows application using **C# / .NET 8 and WPF**.
+
+### Major improvements
+
+| V1                                     | V2                                  |
+| -------------------------------------- | ----------------------------------- |
+| PowerShell                             | C# / .NET 8                         |
+| PowerShell GUI                         | WPF                                 |
+| Script-oriented architecture           | Structured application architecture |
+| More fragmented configuration workflow | More integrated management workflow |
+| Complex state/checking logic           | Cleaner state-driven design         |
+| Limited testability                    | Dedicated test projects             |
+| Monolithic script                      | Separated Core and App layers       |
+
+The V2 solution currently separates:
+
+```text
+src/
+├── DayZModManager.Core
+└── DayZModManager.App
+
+tests/
+├── DayZModManager.Core.Tests
+└── DayZModManager.App.Tests
+```
+
+The Core layer contains the domain logic and services, while the App layer contains the WPF user interface and application-specific components.
+
+---
+
+# Build From Source
 
 Clone the repository:
 
@@ -130,204 +257,97 @@ git clone https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2
 cd DayZ-Local-Server-Mod-Manager-V2
 ```
 
-Build the solution:
+Build:
 
 ```bash
 dotnet build DayZModManagerV2.sln
 ```
 
-Run the application:
+Run:
 
 ```bash
 dotnet run --project src/DayZModManager.App
 ```
 
-Run the test suite:
+Run tests:
 
 ```bash
 dotnet test
 ```
 
----
+### Publish a Windows x64 build
 
-## Project Structure
-
-V2 separates the application layer from the core domain and service logic.
-
-```text
-DayZ-Local-Server-Mod-Manager-V2/
-│
-├── src/
-│   ├── DayZModManager.Core/
-│   │   ├── Abstractions/
-│   │   ├── IO/
-│   │   ├── Models/
-│   │   ├── Services/
-│   │   └── ...
-│   │
-│   └── DayZModManager.App/
-│       ├── Behaviors/
-│       ├── Dialogs/
-│       ├── Resources/
-│       ├── Services/
-│       ├── ViewModels/
-│       ├── MainWindow.xaml
-│       └── ...
-│
-├── tests/
-│   ├── DayZModManager.Core.Tests/
-│   └── DayZModManager.App.Tests/
-│
-├── DayZModManagerV2.sln
-├── LICENSE
-└── README.md
+```powershell
+dotnet publish src/DayZModManager.App `
+  -c Release `
+  -r win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:EnableCompressionInSingleFile=true `
+  -p:DebugType=None `
+  -p:DebugSymbols=false
 ```
 
-The architecture keeps the Core project independent from WPF while the App project contains the desktop UI, view models, behaviors, and application-specific services.
+---
+
+# Releases
+
+Stable builds are distributed through GitHub Releases.
+
+### Current Release
+
+**[v2.0.0 — First Stable Release](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/tag/v2.0.0)**
+
+Released **August 22, 2026**.
 
 ---
 
-## V1 → V2
+# Project Direction
 
-V2 is not intended to be merely a visual redesign of V1.
+The purpose of V2 is not to compete with large multiplayer server-management platforms.
 
-The original V1 was implemented as a PowerShell-based graphical manager. V2 was created as a larger architectural rewrite using C#/.NET and WPF.
+Instead, it focuses on a specific use case:
 
-### Major changes
+> **Making heavily modded DayZ local and single-player PvE environments easier to build and maintain.**
 
-| V1                                                          | V2                                      |
-| ----------------------------------------------------------- | --------------------------------------- |
-| PowerShell                                                  | C# / .NET 8                             |
-| PowerShell GUI                                              | WPF                                     |
-| Monolithic script-oriented design                           | Separated application/core architecture |
-| Mod Manager and configuration workflows were more separated | More integrated management workflow     |
-| Complex mod-checking workflow                               | Simplified state-driven management      |
-| Limited testability                                         | Dedicated unit-test projects            |
-| Script-based implementation                                 | Structured service/model architecture   |
-
-The new solution contains separate `Core`, `App`, and test projects, making future maintenance and expansion considerably easier than the original V1 structure.
+The project will continue to prioritize usability, reliability, and the needs of local-server players.
 
 ---
 
-## What V2 Is — and Is Not
+# Contributing
 
-### V2 is intended for:
+Bug reports, suggestions, and improvements are welcome.
 
-* Offline DayZ players
-* Local-server players
-* Single-player PvE environments
-* Personal modded servers
-* Mod testing and experimentation
-* Players who want a convenient graphical way to manage a large local mod collection
+When reporting a problem, please include:
 
-### V2 is not intended to be:
-
-* A public DayZ server administration platform
-* A replacement for mature multiplayer server managers
-* A Steam Workshop downloader
-* A Bikey management system
-* A server signature-management solution
-* A complete public-server security framework
-
-Its scope is deliberately narrower: **make the local DayZ modding experience easier to manage.**
+* What you were trying to do.
+* What you expected to happen.
+* What actually happened.
+* Relevant error messages or screenshots.
+* Your DayZ/server configuration when appropriate.
 
 ---
 
-## Typical Usage
-
-A typical workflow looks like this:
-
-### 1. Prepare your DayZ local server
-
-Make sure your DayZ server installation is working correctly.
-
-### 2. Disable signature verification
-
-Set:
-
-```cpp
-verifySignatures = 0;
-```
-
-### 3. Install your DayZ mods
-
-Install the required Workshop mods and make sure they are available to your local DayZ installation.
-
-### 4. Launch V2
-
-Open **DayZ Local Server Mod Manager V2** and configure your local server.
-
-### 5. Configure your mods
-
-Use the application to:
-
-* Select the mods you want to use.
-* Enable or disable mods.
-* Arrange their load order.
-* Apply the configuration.
-* Configure map and `types.xml` settings.
-* Manage your server-related files.
-
-### 6. Start the local server
-
-Launch the server using your configured server/batch configuration and then start DayZ.
-
----
-
-## Design Philosophy
-
-V2 was built around a simple idea:
-
-> **A local DayZ server should be easy to manage without requiring the complexity of a full multiplayer server-management platform.**
-
-The project focuses on the needs of players who want to build their own heavily modded DayZ environment and spend more time playing than manually editing configuration files.
-
----
-
-## Known Scope Limitation
-
-V2 intentionally does not handle DayZ signature files.
-
-This means:
-
-```text
-.bikey
-.bisign
-verifySignatures
-```
-
-are outside the scope of the application.
-
-For the intended local/offline workflow, use:
-
-```cpp
-verifySignatures = 0;
-```
-
-Users who require proper signature verification and Bikey management for a public or shared dedicated server should use a server-management solution designed for that purpose.
-
----
-
-## License
+# License
 
 This project is licensed under the [MIT License](LICENSE).
 
 ---
 
-## Repository
+# Disclaimer
 
-**V2:**
-https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2
+This project is an independent community tool.
 
-**V1:**
-https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager
+**DayZ** is a trademark of **Bohemia Interactive**.
+
+This project is not affiliated with or endorsed by Bohemia Interactive.
 
 ---
 
-## Disclaimer
+## Links
 
-This project is an independent community tool for managing local DayZ server files and configurations.
-
-DayZ is a trademark of Bohemia Interactive.
-
-This project is not affiliated with or endorsed by Bohemia Interactive.
+* **[Download Latest Release](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)**
+* **[View Releases](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases)**
+* **[V2 Repository](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2)**
+* **[V1 Repository](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager)**

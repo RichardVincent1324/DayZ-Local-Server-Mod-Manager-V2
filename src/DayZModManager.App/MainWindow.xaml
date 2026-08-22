@@ -25,9 +25,11 @@
         </DataTemplate>
 
         <DataTemplate x:Key="LogEntryTemplate" DataType="{x:Type vm:LogEntry}">
-            <TextBlock Text="{Binding Message}" FontFamily="Consolas" FontSize="12" Foreground="LightGray">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock">
+            <TextBox Text="{Binding Message}" IsReadOnly="True" IsHitTestVisible="False" Focusable="False"
+                     FontFamily="Consolas" FontSize="12"
+                     Background="Transparent" BorderThickness="0" VerticalContentAlignment="Center">
+                <TextBox.Style>
+                    <Style TargetType="TextBox">
                         <Setter Property="Foreground" Value="LightGray" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding Level}" Value="Success">
@@ -41,9 +43,84 @@
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
-                </TextBlock.Style>
-            </TextBlock>
+                </TextBox.Style>
+            </TextBox>
         </DataTemplate>
+
+        <Style x:Key="LogListItemStyle" TargetType="ListBoxItem">
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FF333333" />
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#FF2D4A6B" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ModListItemStyle" TargetType="ListBoxItem">
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Padding" Value="4,1" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#1F26A0DA" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#A826A0DA" />
+                            </MultiTrigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="Selector.IsSelectionActive" Value="False" />
+                                    <Condition Property="IsSelected" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#3DDADADA" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#FFDADADA" />
+                            </MultiTrigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="Selector.IsSelectionActive" Value="True" />
+                                    <Condition Property="IsSelected" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#3D26A0DA" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#FF26A0DA" />
+                            </MultiTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                            </Trigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBox}, Path=(beh:ListBoxDragDropReorder.IsDragActive)}" Value="True" />
+                                    <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="#3DDADADA" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#FFDADADA" />
+                            </MultiDataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <Style x:Key="ModActionButton" TargetType="Button">
             <Setter Property="Width" Value="86" />
@@ -91,13 +168,17 @@
 
         <!-- Footer: log -->
         <Border DockPanel.Dock="Bottom" Height="160" BorderBrush="#FFDDDDDD" BorderThickness="0,1,0,0">
-            <ListBox ItemsSource="{Binding Log.Entries}"
+            <ListBox x:Name="LogListBox"
+                     ItemsSource="{Binding Log.Entries}"
                      ItemTemplate="{StaticResource LogEntryTemplate}"
+                     ItemContainerStyle="{StaticResource LogListItemStyle}"
+                     SelectionMode="Extended"
                      Background="#FF1E1E1E"
                      BorderThickness="0"
                      beh:ListBoxAutoScroll.AutoScroll="True"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
-                     HorizontalContentAlignment="Stretch" />
+                     HorizontalContentAlignment="Stretch"
+                     PreviewKeyDown="LogListBox_PreviewKeyDown" />
         </Border>
 
         <!-- Tabs -->
@@ -128,6 +209,7 @@
                         <DockPanel Grid.Column="0">
                             <TextBlock DockPanel.Dock="Top" Text="{Binding LoadedCountText}" FontWeight="Bold" Margin="0,0,0,4" />
                             <ListBox x:Name="LoadedListBox" ItemsSource="{Binding LoadedItems}" SelectionMode="Extended"
+                                     ItemContainerStyle="{StaticResource ModListItemStyle}"
                                      beh:ListBoxSelection.SelectedItems="{Binding SelectedLoadedItems}"
                                      beh:MouseDoubleClickBehavior.Command="{Binding UnloadSelectedCommand}"
                                      beh:ListBoxDragDropReorder.ReorderCommand="{Binding ReorderCommand}"
@@ -135,8 +217,6 @@
                         </DockPanel>
 
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0">
-                            <Button Content="Move Up" Style="{StaticResource ModActionButton}" Command="{Binding MoveUpCommand}" Margin="0,0,0,6" />
-                            <Button Content="Move Down" Style="{StaticResource ModActionButton}" Command="{Binding MoveDownCommand}" Margin="0,0,0,16" />
                             <Button Content="Load" Style="{StaticResource ModActionButton}" Command="{Binding LoadSelectedCommand}" Margin="0,0,0,6" />
                             <Button Content="Unload" Style="{StaticResource ModActionButton}" Command="{Binding UnloadSelectedCommand}" />
                             <Button Content="Select All" Style="{StaticResource ModActionButton}" Click="SelectAll_Click" Focusable="False"

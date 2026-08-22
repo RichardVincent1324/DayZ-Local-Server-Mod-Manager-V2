@@ -60,41 +60,6 @@ public class ModStateTests
     }
 
     [Fact]
-    public void MoveUp_MovesModTowardStart()
-    {
-        var state = CreateState(loaded: new[] { "@A", "@B", "@C" });
-
-        Assert.True(state.MoveUp("@B"));
-        Assert.Equal(new[] { "@B", "@A", "@C" }, state.LoadedMods);
-    }
-
-    [Fact]
-    public void MoveUp_ReturnsFalse_AtTop()
-    {
-        var state = CreateState(loaded: new[] { "@A", "@B" });
-
-        Assert.False(state.MoveUp("@A"));
-        Assert.Equal(new[] { "@A", "@B" }, state.LoadedMods);
-    }
-
-    [Fact]
-    public void MoveDown_MovesModTowardEnd()
-    {
-        var state = CreateState(loaded: new[] { "@A", "@B", "@C" });
-
-        Assert.True(state.MoveDown("@B"));
-        Assert.Equal(new[] { "@A", "@C", "@B" }, state.LoadedMods);
-    }
-
-    [Fact]
-    public void MoveDown_ReturnsFalse_AtBottom()
-    {
-        var state = CreateState(loaded: new[] { "@A", "@B" });
-
-        Assert.False(state.MoveDown("@B"));
-    }
-
-    [Fact]
     public void AvailableMods_IsWorkshopMinusLoaded_Sorted()
     {
         var state = CreateState(

@@ -13,10 +13,14 @@ public interface IEconomyCoreService
 {
     /// <summary>
     /// Rewrites the ModTypes reference block to reference the given file names
-    /// (leaf names only, e.g. "CF_types.xml"). An empty list removes the block.
-    /// Returns false if the file is missing or malformed.
+    /// (leaf names only, e.g. "CF_types.xml"). <paramref name="desiredFileNames"/>
+    /// is the set that should be referenced; <paramref name="ownedFileNames"/>
+    /// is the set of leaf names this manager has previously generated for the
+    /// map, so entries it owns but no longer wants can be removed while entries
+    /// it does not own (the map's own files, entries added by other tools/mods)
+    /// are preserved. Returns false if the file is missing or malformed.
     /// </summary>
-    bool UpdateModTypes(string missionPath, IReadOnlyList<string> fileNames);
+    bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames);
 }
 
 public sealed class EconomyCoreService : IEconomyCoreService
@@ -30,7 +34,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public bool UpdateModTypes(string missionPath, IReadOnlyList<string> fileNames)
+    public bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames)
     {
         string configPath = Path.Combine(missionPath, "cfgeconomycore.xml");
         if (!_fileSystem.FileExists(configPath))
@@ -54,40 +58,103 @@ public sealed class EconomyCoreService : IEconomyCoreService
             return false;
         }
 
+        // Preserve the caller's ordering (mod load order, types before
+        // spawnabletypes) — a HashSet would destroy it. The set is used only for
+        // case-insensitive membership checks.
+        List<string> desired = desiredFileNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
+        var stale = new HashSet<string>(
+            ownedFileNames.Where(name => !desiredSet.Contains(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        bool changed = false;
+
+        // Remove only the entries this manager owns that are no longer desired;
+        // keep the map's own entries and entries added by other tools/mods.
         foreach (XElement ce in root.Descendants("ce").Where(IsModTypesCe).ToList())
         {
-            XNode? preceding = ce.PreviousNode;
-            ce.Remove();
-            if (preceding is XText text && string.IsNullOrWhiteSpace(text.Value))
+            foreach (XElement file in ce.Elements("file")
+                         .Where(f => stale.Contains((string?)f.Attribute("name") ?? string.Empty))
+                         .ToList())
             {
-                text.Remove();
+                file.Remove();
+                changed = true;
+            }
+
+            if (!ce.Elements("file").Any())
+            {
+                XNode? preceding = ce.PreviousNode;
+                ce.Remove();
+                if (preceding is XText text && string.IsNullOrWhiteSpace(text.Value))
+                {
+                    text.Remove();
+                }
+
+                changed = true;
             }
         }
 
-        if (fileNames.Count > 0)
+        if (desired.Count > 0)
         {
-            XElement? classes = root.Descendants("classes").FirstOrDefault();
-            (string newline, string indent) = DetectFormatting(classes);
-            XElement ce = BuildCe(fileNames, newline, indent);
-
-            if (classes is not null)
+            XElement? existing = root.Descendants("ce").FirstOrDefault(IsModTypesCe);
+            if (existing is not null)
             {
-                if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+                (string newline, string indent) = DetectFormatting(root.Descendants("classes").FirstOrDefault());
+                string fileIndent = indent + indent;
+                bool added = false;
+
+                foreach (string name in desired)
                 {
-                    classes.AddBeforeSelf(ce);
-                    classes.AddBeforeSelf(new XText(whitespace.Value));
+                    if (existing.Elements("file")
+                        .Any(f => string.Equals((string?)f.Attribute("name"), name, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    existing.Add(new XText(newline + fileIndent));
+                    existing.Add(new XElement("file",
+                        new XAttribute("name", name),
+                        new XAttribute("type", GetFileType(name))));
+                    added = true;
                 }
-                else
-                {
-                    classes.AddBeforeSelf(ce);
-                    classes.AddBeforeSelf(new XText(newline + indent));
-                }
+
+                changed |= added;
             }
             else
             {
-                root.Add(new XText(newline + indent));
-                root.Add(ce);
+                XElement? classes = root.Descendants("classes").FirstOrDefault();
+                (string newline, string indent) = DetectFormatting(classes);
+                XElement ce = BuildCe(desired, newline, indent);
+
+                if (classes is not null)
+                {
+                    if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+                    {
+                        classes.AddBeforeSelf(ce);
+                        classes.AddBeforeSelf(new XText(whitespace.Value));
+                    }
+                    else
+                    {
+                        classes.AddBeforeSelf(ce);
+                        classes.AddBeforeSelf(new XText(newline + indent));
+                    }
+                }
+                else
+                {
+                    root.Add(new XText(newline + indent));
+                    root.Add(ce);
+                }
+
+                changed = true;
             }
+        }
+
+        if (!changed)
+        {
+            return true;
         }
 
         _fileSystem.WriteAllText(configPath, Serialize(doc));
@@ -97,7 +164,15 @@ public sealed class EconomyCoreService : IEconomyCoreService
     private static bool IsModTypesCe(XElement ce)
     {
         string? folder = (string?)ce.Attribute("folder");
-        return folder is "./db/ModTypes" or @"db\ModTypes" or "ModTypes";
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return false;
+        }
+
+        string normalized = folder.Trim().Replace('\\', '/');
+        return normalized.Equals("./db/ModTypes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("ModTypes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static (string Newline, string Indent) DetectFormatting(XElement? classes)
@@ -123,17 +198,16 @@ public sealed class EconomyCoreService : IEconomyCoreService
 
         foreach (string name in fileNames)
         {
-            string type = name.Contains("spawnable", StringComparison.OrdinalIgnoreCase)
-                ? "spawnabletypes"
-                : "types";
-
             ce.Add(new XText(newline + fileIndent));
-            ce.Add(new XElement("file", new XAttribute("name", name), new XAttribute("type", type)));
+            ce.Add(new XElement("file", new XAttribute("name", name), new XAttribute("type", GetFileType(name))));
         }
 
         ce.Add(new XText(newline + indent));
         return ce;
     }
+
+    private static string GetFileType(string name) =>
+        name.Contains("spawnable", StringComparison.OrdinalIgnoreCase) ? "spawnabletypes" : "types";
 
     private static string Serialize(XDocument doc)
     {

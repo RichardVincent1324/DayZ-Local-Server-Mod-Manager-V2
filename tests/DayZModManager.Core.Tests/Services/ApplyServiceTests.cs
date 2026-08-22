@@ -88,7 +88,7 @@ public class ApplyServiceTests
     }
 
     [Fact]
-    public void Apply_AbortsBeforeJunctions_WhenBatchWriteFails()
+    public void Apply_DoesNotPersistConfiguration_WhenBatchWriteFails()
     {
         FakeFileSystem fs = SeedValidEnvironment();
         var junctions = new FakeJunctionOperations();
@@ -106,7 +106,11 @@ public class ApplyServiceTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Logs, l => l.Contains("batch file", StringComparison.OrdinalIgnoreCase));
-        Assert.Empty(junctions.Targets);
+
+        // Junctions are synchronized before the batch file, so they exist even
+        // though the batch write failed (they are reconciled again on the next
+        // Apply and are harmless while the server still points at the old list).
+        Assert.True(junctions.IsJunction($@"{ServerPath}\@CF"));
 
         // Nothing should be persisted when the batch-file write fails.
         Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
@@ -124,6 +128,10 @@ public class ApplyServiceTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Logs, l => l.Contains("Failed to create junction"));
+
+        // A failed junction sync aborts before the batch file or any configuration
+        // is touched, so the server still points at the previous mod list.
+        Assert.Contains("modList=-mod=@Old;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
 
         // A failed junction sync must not leave config on disk, otherwise the
         // next start would reload changes the user was told were not applied.

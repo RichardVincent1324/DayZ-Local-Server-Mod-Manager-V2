@@ -15,6 +15,9 @@ public sealed class FakeJunctionOperations : IJunctionOperations
 
     public bool IsJunction(string path) => _junctions.Contains(path);
 
+    public string? GetTarget(string path) =>
+        Targets.TryGetValue(path, out string? target) ? target : null;
+
     public bool Create(string linkPath, string targetPath)
     {
         if (FailCreate)

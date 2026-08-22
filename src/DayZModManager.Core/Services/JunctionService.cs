@@ -56,8 +56,24 @@ public sealed class JunctionService : IJunctionService
 
             if (_junctions.IsJunction(link))
             {
-                skipped++;
-                continue;
+                string? current = _junctions.GetTarget(link);
+                if (current is not null && PathsEqual(current, target))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                // The junction already exists but points somewhere else (e.g. the
+                // workshop path changed). Remove it and fall through to recreate it
+                // against the current target.
+                if (!_junctions.Delete(link))
+                {
+                    failed++;
+                    messages.Add($"Failed to remove stale junction: {mod}");
+                    continue;
+                }
+
+                messages.Add($"Junction re-targeted: {mod}");
             }
 
             if (_fileSystem.DirectoryExists(link))
@@ -149,4 +165,10 @@ public sealed class JunctionService : IJunctionService
             .Where(name => _junctions.IsJunction(Path.Combine(serverPath, name)))
             .ToList();
     }
+
+    private static bool PathsEqual(string a, string b) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(a.Trim()),
+            Path.TrimEndingDirectorySeparator(b.Trim()),
+            StringComparison.OrdinalIgnoreCase);
 }

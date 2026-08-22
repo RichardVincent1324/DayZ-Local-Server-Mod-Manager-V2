@@ -43,6 +43,6 @@ public sealed partial class ServerConfigService : IServerConfigService
         return true;
     }
 
-    [GeneratedRegex(@"template\s*=\s*""[^""]*""")]
+    [GeneratedRegex(@"^\s*template\s*=\s*""[^""]*""", RegexOptions.Multiline)]
     private static partial Regex TemplateRegex();
 }

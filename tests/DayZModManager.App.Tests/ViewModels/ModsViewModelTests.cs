@@ -66,33 +66,6 @@ public class ModsViewModelTests
     }
 
     [Fact]
-    public void MoveUp_ReordersLoadedList()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
-        Refresh(vm, @"D:\workshop");
-        vm.MarkApplied();
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-        vm.MoveUpCommand.Execute(null);
-
-        Assert.Equal(new[] { "@B", "@A", "@C" }, Names(vm.LoadedItems));
-        Assert.True(vm.IsDirty);
-    }
-
-    [Fact]
-    public void MoveDown_ReordersLoadedList()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
-        Refresh(vm, @"D:\workshop");
-        vm.MarkApplied();
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-        vm.MoveDownCommand.Execute(null);
-
-        Assert.Equal(new[] { "@A", "@C", "@B" }, Names(vm.LoadedItems));
-    }
-
-    [Fact]
     public void Reorder_MovesModToTargetIndex()
     {
         ModsViewModel vm = Create(new[] { "@A", "@B", "@C", "@D" }, new[] { "@A", "@B", "@C", "@D" });
@@ -300,88 +273,6 @@ public class ModsViewModelTests
         Refresh(vm, @"D:\workshop");
 
         Assert.Contains(vm.LoadedItems, i => i.Name == "@Ghost" && i.IsMissing);
-    }
-
-    [Fact]
-    public void MoveUpCommand_EnabledByDefault_DisabledWhenAllSelected()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A", "@B" });
-        Refresh(vm, @"D:\workshop");
-
-        Assert.True(vm.MoveUpCommand.CanExecute(null));
-        Assert.True(vm.MoveDownCommand.CanExecute(null));
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[0]);
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-
-        Assert.False(vm.MoveUpCommand.CanExecute(null));
-        Assert.False(vm.MoveDownCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void MoveCommands_StayEnabled_WhenOnlyAvailableItemsSelected()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A" });
-        Refresh(vm, @"D:\workshop");
-
-        vm.SelectedAvailableItems.Add(vm.AvailableItems[0]);
-
-        Assert.True(vm.MoveUpCommand.CanExecute(null));
-        Assert.True(vm.MoveDownCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void MoveCommands_StayEnabled_WhenLoadedListIsEmpty()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B" }, Array.Empty<string>());
-        Refresh(vm, @"D:\workshop");
-
-        Assert.True(vm.MoveUpCommand.CanExecute(null));
-        Assert.True(vm.MoveDownCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void MoveUp_DoesNothing_WhenSelectionAtTop()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
-        Refresh(vm, @"D:\workshop");
-        vm.MarkApplied();
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[0]);
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-        vm.MoveUpCommand.Execute(null);
-
-        Assert.Equal(new[] { "@A", "@B", "@C" }, Names(vm.LoadedItems));
-        Assert.False(vm.IsDirty);
-    }
-
-    [Fact]
-    public void MoveDown_DoesNothing_WhenSelectionAtBottom()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
-        Refresh(vm, @"D:\workshop");
-        vm.MarkApplied();
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[2]);
-        vm.MoveDownCommand.Execute(null);
-
-        Assert.Equal(new[] { "@A", "@B", "@C" }, Names(vm.LoadedItems));
-        Assert.False(vm.IsDirty);
-    }
-
-    [Fact]
-    public void MoveUp_MovesBlockUpOne()
-    {
-        ModsViewModel vm = Create(new[] { "@A", "@B", "@C", "@D" }, new[] { "@A", "@B", "@C", "@D" });
-        Refresh(vm, @"D:\workshop");
-        vm.MarkApplied();
-
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[1]);
-        vm.SelectedLoadedItems.Add(vm.LoadedItems[2]);
-        vm.MoveUpCommand.Execute(null);
-
-        Assert.Equal(new[] { "@B", "@C", "@A", "@D" }, Names(vm.LoadedItems));
     }
 
     [Fact]

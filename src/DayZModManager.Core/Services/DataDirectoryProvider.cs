@@ -129,11 +129,7 @@ public sealed class DataDirectoryProvider : IDataDirectoryProvider
                 }
 
                 string targetPath = Path.Combine(target, fileName);
-                if (!_fileSystem.FileExists(targetPath))
-                {
-                    _fileSystem.CopyFile(sourcePath, targetPath);
-                }
-
+                _fileSystem.CopyFile(sourcePath, targetPath);
                 _fileSystem.DeleteFile(sourcePath);
             }
             catch (Exception)

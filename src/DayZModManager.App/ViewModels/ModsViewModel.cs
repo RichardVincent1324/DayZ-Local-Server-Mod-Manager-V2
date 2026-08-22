@@ -96,8 +96,6 @@ public sealed class ModsViewModel : ViewModelBase
 
     public RelayCommand LoadSelectedCommand { get; private set; } = null!;
     public RelayCommand UnloadSelectedCommand { get; private set; } = null!;
-    public RelayCommand MoveUpCommand { get; private set; } = null!;
-    public RelayCommand MoveDownCommand { get; private set; } = null!;
     public AsyncRelayCommand RefreshCommand { get; private set; } = null!;
     public RelayCommand RemoveMissingCommand { get; private set; } = null!;
     public RelayCommand<ReorderRequest> ReorderCommand { get; private set; } = null!;
@@ -108,8 +106,6 @@ public sealed class ModsViewModel : ViewModelBase
     {
         LoadSelectedCommand = new RelayCommand(LoadSelected);
         UnloadSelectedCommand = new RelayCommand(UnloadSelected);
-        MoveUpCommand = new RelayCommand(MoveUp, () => CanMoveSelected);
-        MoveDownCommand = new RelayCommand(MoveDown, () => CanMoveSelected);
         RefreshCommand = new AsyncRelayCommand(() => RefreshAsync(_workshopPath));
         RemoveMissingCommand = new RelayCommand(RemoveMissing);
         ReorderCommand = new RelayCommand<ReorderRequest>(Reorder);
@@ -163,9 +159,6 @@ public sealed class ModsViewModel : ViewModelBase
 
         Rebuild();
     }
-
-    private bool CanMoveSelected => SelectedLoadedItems.Count == 0 || SelectedLoadedItems.Count < LoadedItems.Count;
-
     private void LoadSelected()
     {
         List<ModItemViewModel> items = SelectedAvailableItems.ToList();
@@ -215,89 +208,6 @@ public sealed class ModsViewModel : ViewModelBase
         }
 
         Rebuild();
-    }
-
-    private void MoveUp()
-    {
-        if (SelectedLoadedItems.Count == 0)
-        {
-            _log.Warning("Select one or more loaded mods to move.");
-            return;
-        }
-
-        var selected = new HashSet<string>(SelectedLoadedItems.Select(i => i.Name), StringComparer.Ordinal);
-
-        // No-op when the selected block already touches the top of the load order.
-        if (FindFirstSelectedIndex(selected) == 0)
-        {
-            return;
-        }
-
-        foreach (string name in _state.LoadedMods.ToList())
-        {
-            if (selected.Contains(name))
-            {
-                _state.MoveUp(name);
-            }
-        }
-
-        RefreshLoaded();
-        UpdateDirtyFlag();
-    }
-
-    private void MoveDown()
-    {
-        if (SelectedLoadedItems.Count == 0)
-        {
-            _log.Warning("Select one or more loaded mods to move.");
-            return;
-        }
-
-        var selected = new HashSet<string>(SelectedLoadedItems.Select(i => i.Name), StringComparer.Ordinal);
-
-        // No-op when the selected block already touches the bottom of the load order.
-        if (FindLastSelectedIndex(selected) == _state.LoadedMods.Count - 1)
-        {
-            return;
-        }
-
-        List<string> snapshot = _state.LoadedMods.ToList();
-        for (int i = snapshot.Count - 1; i >= 0; i--)
-        {
-            if (selected.Contains(snapshot[i]))
-            {
-                _state.MoveDown(snapshot[i]);
-            }
-        }
-
-        RefreshLoaded();
-        UpdateDirtyFlag();
-    }
-
-    private int FindFirstSelectedIndex(HashSet<string> selected)
-    {
-        for (int i = 0; i < _state.LoadedMods.Count; i++)
-        {
-            if (selected.Contains(_state.LoadedMods[i]))
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    private int FindLastSelectedIndex(HashSet<string> selected)
-    {
-        for (int i = _state.LoadedMods.Count - 1; i >= 0; i--)
-        {
-            if (selected.Contains(_state.LoadedMods[i]))
-            {
-                return i;
-            }
-        }
-
-        return -1;
     }
 
     private void Reorder(ReorderRequest? request)
@@ -486,7 +396,5 @@ public sealed class ModsViewModel : ViewModelBase
     private void NotifyCommandStates()
     {
         OnPropertyChanged(nameof(CanSelectAll));
-        MoveUpCommand?.RaiseCanExecuteChanged();
-        MoveDownCommand?.RaiseCanExecuteChanged();
     }
 }

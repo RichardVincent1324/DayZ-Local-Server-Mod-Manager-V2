@@ -45,6 +45,20 @@ public class JunctionServiceTests
     }
 
     [Fact]
+    public void Sync_RepointsJunction_WhenTargetDiffers()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(WorkshopPath, "@CF");
+        junctions.Create($@"{ServerPath}\@CF", $@"D:\OldWorkshop\@CF");
+
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(1, result.Created);
+        Assert.Equal($@"{WorkshopPath}\@CF", junctions.Targets[$@"{ServerPath}\@CF"]);
+    }
+
+    [Fact]
     public void Sync_RemovesJunctionsNotInLoadedSet()
     {
         (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();

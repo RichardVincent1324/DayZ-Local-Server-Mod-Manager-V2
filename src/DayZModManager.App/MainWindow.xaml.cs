@@ -1,5 +1,7 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
 using DayZModManager.App.ViewModels;
 
 namespace DayZModManager.App;
@@ -17,6 +19,33 @@ public partial class MainWindow : Window
 
         LoadedListBox.GotKeyboardFocus += (_, _) => _activeModList = LoadedListBox;
         AvailableListBox.GotKeyboardFocus += (_, _) => _activeModList = AvailableListBox;
+    }
+
+    private void LogListBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            LogListBox.SelectAll();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            if (Keyboard.FocusedElement is TextBox focused && focused.SelectionLength > 0)
+            {
+                return;
+            }
+
+            string text = string.Join(
+                Environment.NewLine,
+                LogListBox.SelectedItems.Cast<LogEntry>().Select(entry => entry.Message));
+
+            if (text.Length > 0)
+            {
+                Clipboard.SetText(text);
+            }
+
+            e.Handled = true;
+        }
     }
 
     private void SelectAll_Click(object sender, RoutedEventArgs e)
@@ -52,6 +81,14 @@ public partial class MainWindow : Window
         if (e.AddedItems.Count > 0 && ReferenceEquals(e.AddedItems[0], MapTypesTab))
         {
             viewModel.OnMapTypesTabActivated();
+        }
+
+        if (e.AddedItems.Count > 0 && ReferenceEquals(e.AddedItems[0], ModsTab))
+        {
+            // TabControl moves keyboard focus into the tab content when a tab is
+            // activated, landing on the search box. Move focus back to the tab
+            // header once that has settled.
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => ModsTab.Focus()));
         }
     }
 }

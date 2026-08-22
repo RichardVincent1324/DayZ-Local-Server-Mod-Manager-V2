@@ -115,6 +115,26 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
+    public void MoveTo_OverwritesExistingTargetFile_AndDeletesSource()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(SettingsPath(), "{}");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[\"@new\"]");
+
+        // Target directory already holds a (stale) config file.
+        string target = @"D:\server\DayZ-Local-Server-Mod-Manager-Data";
+        fs.AddFile(Path.Combine(target, ConfigFileNames.ModOrder), "[\"@stale\"]");
+        var provider = new DataDirectoryProvider(fs);
+        provider.Initialize();
+
+        provider.MoveTo(target, new Settings());
+
+        Assert.Equal(target, provider.Current);
+        Assert.Equal("[\"@new\"]", fs.TryGetFileContents(Path.Combine(target, ConfigFileNames.ModOrder)));
+        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder)));
+    }
+
+    [Fact]
     public void MoveTo_PersistsDataDirectoryOverride_InSettingsJson()
     {
         var fs = new FakeFileSystem();

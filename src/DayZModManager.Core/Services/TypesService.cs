@@ -108,6 +108,11 @@ public sealed class TypesService : ITypesService
 
         MapTypesConfig map = GetOrCreateMap(config, mapName);
 
+        // Snapshot the files this manager previously generated for the map before
+        // any mutation, so entries that are replaced below can still be removed
+        // from cfgeconomycore.xml.
+        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
+
         // Copy the selected files first so a mid-copy failure cannot leave the
         // previous configuration deleted or the config pointing at files that
         // were never written.
@@ -168,7 +173,7 @@ public sealed class TypesService : ITypesService
             GeneratedFiles = generated,
         });
 
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames);
+        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
     }
 
     public TypesOperationResult RemoveFiles(
@@ -186,6 +191,10 @@ public sealed class TypesService : ITypesService
         {
             return new TypesOperationResult { Success = true, Messages = messages };
         }
+
+        // Snapshot before removal so the removed files are still recognized as
+        // owned when cfgeconomycore.xml is regenerated.
+        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
 
         foreach (string leaf in fileLeaves)
         {
@@ -205,7 +214,7 @@ public sealed class TypesService : ITypesService
             messages.Add($"Removed {modName} types config (no files remaining)");
         }
 
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames);
+        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
     }
 
     public TypesOperationResult CleanInvalid(
@@ -221,8 +230,13 @@ public sealed class TypesService : ITypesService
         if (map is null)
         {
             messages.Add("No types configuration present.");
-            return RegenerateEconomyCore(missionPath, null, messages, loadedModNames);
+            return RegenerateEconomyCore(missionPath, null, messages, loadedModNames,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         }
+
+        // Snapshot before removal so the cleaned-up files are still recognized as
+        // owned when cfgeconomycore.xml is regenerated.
+        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
 
         List<ModTypesEntry> invalid = map.Mods
             .Where(entry => !validModNames.Contains(entry.ModName))
@@ -244,7 +258,7 @@ public sealed class TypesService : ITypesService
             messages.Add("No invalid types configurations found.");
         }
 
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames);
+        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
     }
 
     public bool SyncEconomyCore(
@@ -257,21 +271,25 @@ public sealed class TypesService : ITypesService
         IReadOnlyList<string> fileNames = map is null
             ? Array.Empty<string>()
             : GetAllGeneratedFileNames(map, loadedModNames);
+        IReadOnlySet<string> owned = map is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : GetAllOwnedFileNames(map);
 
-        return _economyCore.UpdateModTypes(missionPath, fileNames);
+        return _economyCore.UpdateModTypes(missionPath, fileNames, owned);
     }
 
     private TypesOperationResult RegenerateEconomyCore(
         string missionPath,
         MapTypesConfig? map,
         List<string> messages,
-        IReadOnlySet<string> loadedModNames)
+        IReadOnlySet<string> loadedModNames,
+        IReadOnlySet<string> owned)
     {
         IReadOnlyList<string> fileNames = map is null
             ? Array.Empty<string>()
             : GetAllGeneratedFileNames(map, loadedModNames);
 
-        if (!_economyCore.UpdateModTypes(missionPath, fileNames))
+        if (!_economyCore.UpdateModTypes(missionPath, fileNames, owned))
         {
             messages.Add("Failed to update cfgeconomycore.xml.");
             return new TypesOperationResult { Success = false, Messages = messages };
@@ -285,9 +303,18 @@ public sealed class TypesService : ITypesService
         IReadOnlySet<string> loadedModNames) =>
         map.Mods
             .Where(entry => loadedModNames.Contains(entry.ModName))
-            .SelectMany(entry => entry.GeneratedFiles)
+            .SelectMany(entry => entry.GeneratedFiles
+                // Within a mod, regular types must precede spawnabletypes; OrderBy
+                // is stable so ties keep their existing (copy) order.
+                .OrderBy(generated => Path.GetFileName(generated)!.Contains("spawnable", StringComparison.OrdinalIgnoreCase)))
             .Select(generated => Path.GetFileName(generated)!)
             .ToList();
+
+    private static IReadOnlySet<string> GetAllOwnedFileNames(MapTypesConfig map) =>
+        map.Mods
+            .SelectMany(entry => entry.GeneratedFiles)
+            .Select(generated => Path.GetFileName(generated)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private void DeleteGenerated(string missionPath, string relativeFile, List<string> messages)
     {

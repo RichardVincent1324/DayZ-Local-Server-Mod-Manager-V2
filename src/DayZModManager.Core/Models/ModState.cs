@@ -83,26 +83,6 @@ public sealed class ModState
         return true;
     }
 
-    /// <summary>Moves a loaded mod one position toward the start of the load order.</summary>
-    public bool MoveUp(string modName)
-    {
-        int index = IndexOfIgnoreCase(modName);
-        if (index <= 0) return false;
-
-        (_loadedMods[index - 1], _loadedMods[index]) = (_loadedMods[index], _loadedMods[index - 1]);
-        return true;
-    }
-
-    /// <summary>Moves a loaded mod one position toward the end of the load order.</summary>
-    public bool MoveDown(string modName)
-    {
-        int index = IndexOfIgnoreCase(modName);
-        if (index < 0 || index >= _loadedMods.Count - 1) return false;
-
-        (_loadedMods[index + 1], _loadedMods[index]) = (_loadedMods[index], _loadedMods[index + 1]);
-        return true;
-    }
-
     /// <summary>
     /// Moves a loaded mod to the given zero-based final index (clamped to the
     /// valid range). Returns false if the mod is not loaded or its position is

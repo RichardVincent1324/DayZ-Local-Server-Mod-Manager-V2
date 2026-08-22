@@ -32,6 +32,30 @@ public class ServerConfigServiceTests
     }
 
     [Fact]
+    public void UpdateTemplate_IgnoresCommentedTemplateLine()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{ServerPath}\serverDZ.cfg", """
+            class Missions
+            {
+                class DayZ
+                {
+                    ;template="dayzOffline.chernarusplus"; // sample comment
+                    template="dayzOffline.chernarusplus"; // Mission to load on server startup.
+                };
+            };
+            """);
+        var service = new ServerConfigService(fs);
+
+        bool result = service.UpdateTemplate(ServerPath, "dayzOffline.sakhal");
+
+        Assert.True(result);
+        string content = fs.TryGetFileContents($@"{ServerPath}\serverDZ.cfg")!;
+        Assert.Contains("template=\"dayzOffline.sakhal\"", content);
+        Assert.Contains(";template=\"dayzOffline.chernarusplus\"", content);
+    }
+
+    [Fact]
     public void UpdateTemplate_ReturnsFalse_WhenNoTemplateLine()
     {
         var fs = new FakeFileSystem();

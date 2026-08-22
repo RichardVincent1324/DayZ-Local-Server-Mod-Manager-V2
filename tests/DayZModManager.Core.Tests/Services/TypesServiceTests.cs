@@ -211,4 +211,29 @@ public class TypesServiceTests
         Assert.Contains("CF_types.xml", economy);
         Assert.DoesNotContain("OtherMod_types.xml", economy);
     }
+
+    [Fact]
+    public void ConfigureMod_OrdersTypesBeforeSpawnableTypesWithinMod()
+    {
+        FakeFileSystem fs = Seed();
+        var config = new TypesConfig();
+        var service = CreateService(fs);
+
+        // Supply the spawnable file first; the generated cfgeconomycore.xml must
+        // still list the regular types file before the spawnabletypes file.
+        service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[]
+            {
+                $@"{WorkshopPath}\@CF\cfgspawnabletypes.xml",
+                $@"{WorkshopPath}\@CF\types.xml",
+            }, Loaded("@CF"));
+
+        string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
+        int typesIndex = economy.IndexOf("CF_types.xml", StringComparison.Ordinal);
+        int spawnableIndex = economy.IndexOf("CF_cfgspawnabletypes.xml", StringComparison.Ordinal);
+
+        Assert.True(typesIndex >= 0, "types file missing");
+        Assert.True(spawnableIndex >= 0, "spawnabletypes file missing");
+        Assert.True(typesIndex < spawnableIndex, "types must precede spawnabletypes");
+    }
 }

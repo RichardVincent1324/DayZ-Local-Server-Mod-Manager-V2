@@ -67,4 +67,29 @@ public sealed class PhysicalFileSystem : IFileSystem
 
     public void CreateDirectory(string path)
         => Directory.CreateDirectory(path);
+
+    public void CopyDirectory(string sourcePath, string destinationPath)
+    {
+        Directory.CreateDirectory(destinationPath);
+        foreach (string directory in Directory.EnumerateDirectories(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, directory)));
+        }
+
+        foreach (string file in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            File.Copy(file, Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, file)), overwrite: true);
+        }
+    }
+
+    public void DeleteDirectory(string path, bool recursive)
+    {
+        if (DirectoryExists(path))
+        {
+            Directory.Delete(path, recursive);
+        }
+    }
+
+    public void MoveDirectory(string sourcePath, string destinationPath)
+        => Directory.Move(sourcePath, destinationPath);
 }

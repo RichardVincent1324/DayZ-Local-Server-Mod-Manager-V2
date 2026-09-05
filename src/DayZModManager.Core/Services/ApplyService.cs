@@ -99,7 +99,8 @@ public sealed class ApplyService : IApplyService
         // 3. Update the batch file. A failure here aborts before any configuration
         //    is persisted. Junctions for the loaded mods already exist by now;
         //    they are harmless and are reconciled again on the next Apply.
-        if (!_batchFile.WriteModList(context.Settings.BatFilePath, context.LoadedMods))
+        IReadOnlyList<string> modPaths = context.LoadedMods.Select(ModListFolder.Entry).ToList();
+        if (!_batchFile.WriteModList(context.Settings.BatFilePath, modPaths))
         {
             logs.Add("ERROR: Failed to update the batch file. No changes were made.");
             return new ApplyResult { Success = false, Logs = logs };

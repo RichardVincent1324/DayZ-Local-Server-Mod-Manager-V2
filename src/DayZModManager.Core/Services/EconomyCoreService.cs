@@ -206,8 +206,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return ce;
     }
 
-    private static string GetFileType(string name) =>
-        name.Contains("spawnable", StringComparison.OrdinalIgnoreCase) ? "spawnabletypes" : "types";
+    private static string GetFileType(string name) => TypesFileRoles.RoleOf(name);
 
     private static string Serialize(XDocument doc)
     {

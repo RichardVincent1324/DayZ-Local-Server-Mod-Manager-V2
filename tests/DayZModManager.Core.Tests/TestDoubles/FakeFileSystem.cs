@@ -69,6 +69,59 @@ public sealed class FakeFileSystem : IFileSystem
         }
     }
 
+    public void CopyDirectory(string sourcePath, string destinationPath)
+    {
+        if (!DirectoryExists(sourcePath))
+        {
+            return;
+        }
+
+        CreateDirectory(destinationPath);
+        string sourcePrefix = EnsureTrailingSeparator(sourcePath);
+
+        foreach (string directory in _directories.Keys
+                     .Where(d => d.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            string relative = directory[sourcePath.Length..].TrimStart('\\', '/');
+            CreateDirectory(Path.Combine(destinationPath, relative));
+        }
+
+        foreach (string file in _files.Keys
+                     .Where(f => f.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            string relative = file[sourcePath.Length..].TrimStart('\\', '/');
+            _files[Path.Combine(destinationPath, relative)] = _files[file];
+        }
+    }
+
+    public void DeleteDirectory(string path, bool recursive)
+    {
+        string prefix = EnsureTrailingSeparator(path);
+
+        foreach (string file in _files.Keys
+                     .Where(f => f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            _files.Remove(file);
+        }
+
+        foreach (string directory in _directories.Keys
+                     .Where(d => d.Equals(path, StringComparison.OrdinalIgnoreCase)
+                         || d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            _directories.Remove(directory);
+        }
+    }
+
+    public void MoveDirectory(string sourcePath, string destinationPath)
+    {
+        CopyDirectory(sourcePath, destinationPath);
+        DeleteDirectory(sourcePath, recursive: true);
+    }
+
     // --- Test helpers -----------------------------------------------------
 
     public void AddDirectory(string path, params string[] childDirectoryNames)

@@ -151,13 +151,20 @@ public sealed class SettingsViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsDirty));
     }
 
+    /// <summary>True when both essential paths are set, so a Browse can auto-apply safely.</summary>
+    private bool CanAutoApply =>
+        !string.IsNullOrWhiteSpace(WorkshopPath) && !string.IsNullOrWhiteSpace(ServerPath);
+
     private void BrowseWorkshop()
     {
         string? folder = _dialogs.PickFolder("Select the Steam Workshop folder (!Workshop)");
         if (folder is not null)
         {
             WorkshopPath = folder;
-            ApplyRequested?.Invoke();
+            if (CanAutoApply)
+            {
+                ApplyRequested?.Invoke();
+            }
         }
     }
 
@@ -167,7 +174,10 @@ public sealed class SettingsViewModel : ViewModelBase
         if (folder is not null)
         {
             ServerPath = folder;
-            ApplyRequested?.Invoke();
+            if (CanAutoApply)
+            {
+                ApplyRequested?.Invoke();
+            }
         }
     }
 
@@ -180,7 +190,10 @@ public sealed class SettingsViewModel : ViewModelBase
         if (file is not null)
         {
             BatFileName = file;
-            ApplyRequested?.Invoke();
+            if (CanAutoApply)
+            {
+                ApplyRequested?.Invoke();
+            }
         }
     }
 

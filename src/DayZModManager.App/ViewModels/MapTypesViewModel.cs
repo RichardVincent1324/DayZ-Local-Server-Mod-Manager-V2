@@ -15,6 +15,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 {
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
+    private readonly ISaveGameService _saveGameService;
     private readonly ITypesConfigStore _typesConfigStore;
     private readonly IServerConfigService _serverConfig;
     private readonly IBatchFileService _batchFile;
@@ -33,13 +34,17 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private string? _selectedMap;
     private string? _selectedMod;
+    private string? _selectedSave;
     private bool _isRestoring;
     private bool _isSwitching;
+    private bool _typesBusy;
+    private bool _isSaveBusy;
     private string? _pendingMap;
 
     public MapTypesViewModel(
         IMapService mapService,
         ITypesService typesService,
+        ISaveGameService saveGameService,
         ITypesConfigStore typesConfigStore,
         IServerConfigService serverConfig,
         IBatchFileService batchFile,
@@ -51,6 +56,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     {
         _mapService = mapService;
         _typesService = typesService;
+        _saveGameService = saveGameService;
         _typesConfigStore = typesConfigStore;
         _serverConfig = serverConfig;
         _batchFile = batchFile;
@@ -63,6 +69,10 @@ public sealed class MapTypesViewModel : ViewModelBase
         ConfigXmlCommand = new RelayCommand(ConfigureMod);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid);
+        LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is not null && !IsSaveBusy);
+        DeleteSaveCommand = new RelayCommand(DeleteSave, () => SelectedSave is not null && !IsSaveBusy);
+        AddSaveCommand = new RelayCommand(AddSave, () => !IsSaveBusy);
+        NewGameCommand = new RelayCommand(NewGame, () => !IsSaveBusy);
 
         SelectedTypesRows.CollectionChanged += (_, _) => NotifyCommandStates();
     }
@@ -98,6 +108,38 @@ public sealed class MapTypesViewModel : ViewModelBase
         set => SetField(ref _selectedMod, value);
     }
 
+    public string? SelectedSave
+    {
+        get => _selectedSave;
+        set
+        {
+            if (SetField(ref _selectedSave, value))
+            {
+                LoadSaveCommand.RaiseCanExecuteChanged();
+                DeleteSaveCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>True while a save operation is running in the background.</summary>
+    public bool IsSaveBusy
+    {
+        get => _isSaveBusy;
+        private set
+        {
+            if (SetField(ref _isSaveBusy, value))
+            {
+                LoadSaveCommand.RaiseCanExecuteChanged();
+                DeleteSaveCommand.RaiseCanExecuteChanged();
+                AddSaveCommand.RaiseCanExecuteChanged();
+                NewGameCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Names of stored progress saves for the current map.</summary>
+    public ObservableCollection<string> SaveNames { get; } = new();
+
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>
@@ -109,6 +151,10 @@ public sealed class MapTypesViewModel : ViewModelBase
     public RelayCommand ConfigXmlCommand { get; }
     public RelayCommand RemoveSelectedCommand { get; }
     public RelayCommand CleanInvalidCommand { get; }
+    public RelayCommand LoadSaveCommand { get; }
+    public RelayCommand AddSaveCommand { get; }
+    public RelayCommand DeleteSaveCommand { get; }
+    public RelayCommand NewGameCommand { get; }
 
     public void Refresh(Settings settings, IReadOnlyList<string> workshopMods, IReadOnlyList<string> loadedMods)
     {
@@ -127,6 +173,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         RebuildMapNames();
         RefreshModNames(loadedMods);
         RebuildRows();
+        RefreshSaves();
     }
 
     /// <summary>
@@ -241,6 +288,51 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Returns the current map's types config, if present.</summary>
+    private MapTypesConfig? CurrentMapConfig() =>
+        string.IsNullOrEmpty(_typesConfig.CurrentMap)
+            ? null
+            : _typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map) ? map : null;
+
+    /// <summary>
+    /// Returns the leaf names of the generated files currently configured for a mod.
+    /// </summary>
+    private HashSet<string> GetActiveLeafNames(string modName)
+    {
+        var leaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ModTypesEntry? entry = CurrentMapConfig()?.Mods.FirstOrDefault(m =>
+            string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return leaves;
+        }
+
+        foreach (string generated in entry.GeneratedFiles)
+        {
+            leaves.Add(Path.GetFileName(generated));
+        }
+
+        return leaves;
+    }
+
+    /// <summary>
+    /// Returns the active generated files (by leaf name) that would be deleted if
+    /// <paramref name="selectedFiles"/> became the mod's configuration.
+    /// </summary>
+    private List<string> FilesRemovedBySelection(string modName, HashSet<string> activeLeaves, IReadOnlyList<string> selectedFiles)
+    {
+        var kept = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string file in selectedFiles)
+        {
+            if (_typesService.GetGeneratedFileName(_workshopPath, modName, file) is { } leaf)
+            {
+                kept.Add(leaf);
+            }
+        }
+
+        return activeLeaves.Where(leaf => !kept.Contains(leaf)).ToList();
+    }
+
     private string? ResolveAppliedMapPath()
     {
         if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
@@ -283,8 +375,10 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        if (_isSwitching)
+        if (_isSwitching || _typesBusy)
         {
+            // A switch or a types operation is in flight; queue the latest
+            // selection so it is applied once the current operation finishes.
             _pendingMap = mapName;
             return;
         }
@@ -295,6 +389,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     private async Task SwitchMapAsync(string mapName)
     {
         _isSwitching = true;
+        _typesBusy = true;
         try
         {
             string? missionPath = ResolveMapPathForName(mapName);
@@ -322,6 +417,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         finally
         {
             _isSwitching = false;
+            _typesBusy = false;
             string? next = _pendingMap;
             _pendingMap = null;
 
@@ -329,6 +425,42 @@ public sealed class MapTypesViewModel : ViewModelBase
             {
                 _ = SwitchMapAsync(next);
             }
+        }
+    }
+
+    /// <summary>
+    /// Claims the single-user mutation slot shared by map switches and the types
+    /// operations (configure/remove/clean). Returns false when one is in flight.
+    /// </summary>
+    private bool TryBeginTypesOperation()
+    {
+        if (_typesBusy || _isSwitching)
+        {
+            return false;
+        }
+
+        _typesBusy = true;
+        return true;
+    }
+
+    private void EndTypesOperation() => _typesBusy = false;
+
+    /// <summary>
+    /// Applies a map selection that was queued while a types operation held the
+    /// mutation slot.
+    /// </summary>
+    private void DrainPendingMapSwitch()
+    {
+        if (_typesBusy || _isSwitching)
+        {
+            return;
+        }
+
+        string? next = _pendingMap;
+        _pendingMap = null;
+        if (next is not null && !string.Equals(next, _typesConfig.CurrentMap, StringComparison.Ordinal))
+        {
+            _ = SwitchMapAsync(next);
         }
     }
 
@@ -380,11 +512,18 @@ public sealed class MapTypesViewModel : ViewModelBase
         NotifyCommandStates();
         RebuildRows();
         SyncEconomyCore();
+        RefreshSaves();
         _log.Success($"Map switched to: {mapName}");
     }
 
     private async void ConfigureMod()
     {
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
         try
         {
             string? modName = SelectedMod;
@@ -403,10 +542,44 @@ public sealed class MapTypesViewModel : ViewModelBase
             IReadOnlyList<string> files = _typesService.DiscoverTypeFiles(_workshopPath, modName);
             _log.Info($"Found {files.Count} candidate type file(s) in {modName}.");
 
-            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files);
+            // Pre-select only the files that are currently configured for this
+            // mod so a re-run with no edits does not silently change anything.
+            HashSet<string> activeLeaves = GetActiveLeafNames(modName);
+            var activeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string file in files)
+            {
+                if (_typesService.GetGeneratedFileName(_workshopPath, modName, file) is { } leaf && activeLeaves.Contains(leaf))
+                {
+                    activeFiles.Add(file);
+                }
+            }
+
+            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files, activeFiles);
             if (selected is null || selected.Count == 0)
             {
                 return;
+            }
+
+            // Reconfiguring a mod that is already configured overwrites its files
+            // in db/ModTypes; never do that silently, even when the same file is
+            // selected again.
+            if (activeLeaves.Count > 0)
+            {
+                List<string> removed = FilesRemovedBySelection(modName, activeLeaves, selected);
+                string message = $"Mod {modName} already has configured type file(s). Reconfiguring will overwrite its current configuration in db/ModTypes with the newly selected file(s).";
+                if (removed.Count > 0)
+                {
+                    string list = string.Join("\n", removed.Select(name => "  \u2022 " + name));
+                    message += $"\n\nThe following currently configured file(s) will be deleted because they are no longer selected:\n{list}";
+                }
+
+                message += "\n\nContinue?";
+                bool replace = _dialogs.Confirm(message, "Replace types configuration?");
+                if (!replace)
+                {
+                    _log.Info("Types configuration cancelled.");
+                    return;
+                }
             }
 
             if (!await EnsureAppliedBeforeAsync("types configuration"))
@@ -423,10 +596,21 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             _log.Error($"Types configuration failed: {ex.Message}");
         }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
     }
 
     private async void RemoveSelected()
     {
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
         try
         {
             List<TypesRowViewModel> rows = SelectedTypesRows.ToList();
@@ -439,6 +623,14 @@ public sealed class MapTypesViewModel : ViewModelBase
             string? missionPath = ResolveAppliedMapPath();
             if (missionPath is null)
             {
+                return;
+            }
+
+            if (!_dialogs.Confirm(
+                $"Delete the selected {rows.Count} type file(s) from db/ModTypes?\n\nThis permanently removes the file(s) from the mission folder. Continue?",
+                "Remove type files"))
+            {
+                _log.Info("Removal cancelled.");
                 return;
             }
 
@@ -481,10 +673,21 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             _log.Error($"Removal failed: {ex.Message}");
         }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
     }
 
     private async void CleanInvalid()
     {
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
         try
         {
             string? missionPath = ResolveAppliedMapPath();
@@ -493,13 +696,35 @@ public sealed class MapTypesViewModel : ViewModelBase
                 return;
             }
 
+            var workshop = new HashSet<string>(_allMods, StringComparer.Ordinal);
+            var active = new HashSet<string>(_loadedMods.Where(workshop.Contains), StringComparer.Ordinal);
+
+            List<string> invalidMods = CurrentMapConfig() is { } mapConfig
+                ? mapConfig.Mods
+                    .Where(entry => !active.Contains(entry.ModName))
+                    .Select(entry => entry.ModName)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList()
+                : new List<string>();
+
+            if (invalidMods.Count > 0)
+            {
+                string list = string.Join("\n", invalidMods.Select(name => "  \u2022 " + name));
+                bool clean = _dialogs.Confirm(
+                    $"The following mod(s) are no longer active (not loaded or missing from the workshop) and their generated type file(s) will be DELETED from db/ModTypes:\n\n{list}\n\nContinue?",
+                    "Clean invalid types configurations?");
+                if (!clean)
+                {
+                    _log.Info("Cleanup cancelled.");
+                    return;
+                }
+            }
+
             if (!await EnsureAppliedBeforeAsync("cleanup"))
             {
                 return;
             }
 
-            var workshop = new HashSet<string>(_allMods, StringComparer.Ordinal);
-            var active = new HashSet<string>(_loadedMods.Where(workshop.Contains), StringComparer.Ordinal);
             TypesOperationResult result = _typesService.CleanInvalid(
                 _typesConfig, _typesConfig.CurrentMap, missionPath, active, LoadedSet());
 
@@ -521,6 +746,256 @@ public sealed class MapTypesViewModel : ViewModelBase
         catch (Exception ex)
         {
             _log.Error($"Cleanup failed: {ex.Message}");
+        }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
+    }
+
+    private async void LoadSave()
+    {
+        string? mapName = AppliedMapOrWarn();
+        string? saveName = SelectedSave;
+        if (mapName is null || saveName is null)
+        {
+            if (saveName is null)
+            {
+                _log.Warning("Select a stored save first.");
+            }
+
+            return;
+        }
+
+        bool confirmed = _dialogs.Confirm(
+            $"Load save \"{saveName}\" for map {mapName}?\n\nThis will REPLACE the current progress in {StorageLabel(mapName)} with the stored copy. The current progress will be lost. Continue?",
+            "Load Save");
+        if (!confirmed)
+        {
+            _log.Info("Load cancelled.");
+            return;
+        }
+
+        if (IsSaveBusy)
+        {
+            return;
+        }
+
+        string serverPath = _serverPath;
+        string dataDirectory = _dataDirectoryProvider.Current;
+        IsSaveBusy = true;
+        try
+        {
+            SaveGameResult result = await Task.Run(() => _saveGameService.LoadSave(serverPath, mapName, dataDirectory, saveName));
+            LogSaveResult(result);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to load save: {ex.Message}");
+        }
+        finally
+        {
+            IsSaveBusy = false;
+        }
+    }
+
+    private async void AddSave()
+    {
+        string? mapName = AppliedMapOrWarn();
+        if (mapName is null)
+        {
+            return;
+        }
+
+        string? name = _dialogs.AskText(
+            "Add Save",
+            $"Save the current progress of {mapName} ({StorageLabel(mapName)}) as:", string.Empty);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        string trimmed = name.Trim();
+        bool exists = SaveNames.Contains(trimmed, StringComparer.OrdinalIgnoreCase);
+        if (exists && !_dialogs.Confirm($"A save named \"{trimmed}\" already exists. Overwrite it?", "Overwrite save?"))
+        {
+            _log.Info("Save cancelled.");
+            return;
+        }
+
+        if (IsSaveBusy)
+        {
+            return;
+        }
+
+        string serverPath = _serverPath;
+        string dataDirectory = _dataDirectoryProvider.Current;
+        IsSaveBusy = true;
+        try
+        {
+            SaveGameResult result = await Task.Run(() => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists));
+            LogSaveResult(result);
+            if (result.Success)
+            {
+                RefreshSaves();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to save progress: {ex.Message}");
+        }
+        finally
+        {
+            IsSaveBusy = false;
+        }
+    }
+
+    private async void DeleteSave()
+    {
+        string? mapName = AppliedMapOrWarn();
+        string? saveName = SelectedSave;
+        if (mapName is null || saveName is null)
+        {
+            if (saveName is null)
+            {
+                _log.Warning("Select a stored save first.");
+            }
+
+            return;
+        }
+
+        bool confirmed = _dialogs.Confirm(
+            $"Delete the stored save \"{saveName}\"? This cannot be undone.", "Delete Save");
+        if (!confirmed)
+        {
+            _log.Info("Deletion cancelled.");
+            return;
+        }
+
+        if (IsSaveBusy)
+        {
+            return;
+        }
+
+        string dataDirectory = _dataDirectoryProvider.Current;
+        IsSaveBusy = true;
+        try
+        {
+            SaveGameResult result = await Task.Run(() => _saveGameService.DeleteSave(dataDirectory, mapName, saveName));
+            LogSaveResult(result);
+            if (result.Success)
+            {
+                RefreshSaves();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to delete save: {ex.Message}");
+        }
+        finally
+        {
+            IsSaveBusy = false;
+        }
+    }
+
+    private async void NewGame()
+    {
+        string? mapName = AppliedMapOrWarn();
+        if (mapName is null)
+        {
+            return;
+        }
+
+        bool confirmed = _dialogs.Confirm(
+            $"Start a NEW GAME on map {mapName}?\n\nThis will DELETE {StorageLabel(mapName)} so the map starts fresh on the next server launch. Continue?",
+            "New Game");
+        if (!confirmed)
+        {
+            _log.Info("New game cancelled.");
+            return;
+        }
+
+        if (IsSaveBusy)
+        {
+            return;
+        }
+
+        string serverPath = _serverPath;
+        IsSaveBusy = true;
+        try
+        {
+            SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName));
+            LogSaveResult(result);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to start a new game: {ex.Message}");
+        }
+        finally
+        {
+            IsSaveBusy = false;
+        }
+    }
+
+    /// <summary>Returns the applied map name, warning when none is applied yet.</summary>
+    private string? AppliedMapOrWarn()
+    {
+        if (string.IsNullOrWhiteSpace(_typesConfig.CurrentMap))
+        {
+            _log.Warning("Apply a map first before managing progress saves.");
+            return null;
+        }
+
+        return _typesConfig.CurrentMap;
+    }
+
+    private string StorageLabel(string mapName)
+    {
+        try
+        {
+            return Path.GetFileName(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
+        }
+        catch (Exception)
+        {
+            return "storage folder";
+        }
+    }
+
+    private void LogSaveResult(SaveGameResult result)
+    {
+        if (result.Success)
+        {
+            _log.Success(result.Message);
+        }
+        else
+        {
+            _log.Error(result.Message);
+        }
+    }
+
+    /// <summary>Rebuilds the stored-save list for the current map.</summary>
+    private void RefreshSaves()
+    {
+        SaveNames.Clear();
+        SelectedSave = null;
+
+        string mapName = _typesConfig.CurrentMap;
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(mapName))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (string save in _saveGameService.ListSaves(_dataDirectoryProvider.Current, mapName))
+            {
+                SaveNames.Add(save);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to list progress saves: {ex.Message}");
         }
     }
 

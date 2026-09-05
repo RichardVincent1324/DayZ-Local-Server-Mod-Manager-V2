@@ -15,6 +15,12 @@ public sealed class UiDialogService : IDialogService
     public bool Confirm(string message, string title) =>
         MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 
+    public string? AskText(string title, string prompt, string defaultValue = "")
+    {
+        var window = new TextPromptWindow(title, prompt, defaultValue);
+        return window.ShowDialog() == true ? window.Result : null;
+    }
+
     public string? PickFolder(string title = "Select a folder")
     {
         var dialog = new OpenFolderDialog { Title = title };
@@ -32,7 +38,7 @@ public sealed class UiDialogService : IDialogService
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files)
+    public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null)
     {
         if (files.Count == 0)
         {
@@ -41,7 +47,7 @@ public sealed class UiDialogService : IDialogService
         }
 
         string basePath = GetCommonBasePath(files);
-        var viewModel = new TypeFilePickerViewModel(modName, files, basePath);
+        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, activeFiles);
         var window = new TypeFilePickerWindow(viewModel);
         return window.ShowDialog() == true ? window.SelectedFiles : null;
     }

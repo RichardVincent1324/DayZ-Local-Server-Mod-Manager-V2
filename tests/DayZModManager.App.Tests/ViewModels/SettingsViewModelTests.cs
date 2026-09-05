@@ -126,7 +126,7 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void BrowseWorkshop_SetsPath_AndRaisesApplyRequested()
+    public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenServerPathNotSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\picked" };
         var vm = new SettingsViewModel(dialogs);
@@ -136,21 +136,83 @@ public class SettingsViewModelTests
         vm.BrowseWorkshopCommand.Execute(null);
 
         Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.False(raised);
+    }
+
+    [Fact]
+    public void BrowseWorkshop_RaisesApplyRequested_WhenServerPathSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { ServerPath = @"D:\server" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\picked", vm.WorkshopPath);
         Assert.True(raised);
+    }
+
+    [Fact]
+    public void BrowseServer_SetsPath_ButSkipsApply_WhenWorkshopPathNotSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\server" };
+        var vm = new SettingsViewModel(dialogs);
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseServerCommand.Execute(null);
+
+        Assert.Equal(@"D:\server", vm.ServerPath);
+        Assert.False(raised);
+    }
+
+    [Fact]
+    public void BrowseServer_RaisesApplyRequested_WhenWorkshopPathSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\server" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseServerCommand.Execute(null);
+
+        Assert.Equal(@"D:\server", vm.ServerPath);
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void BrowseBatchFile_SetsPath_ButSkipsApply_WhenPathsNotSet()
+    {
+        var dialogs = new FakeDialogs { File = @"D:\start.bat" };
+        var vm = new SettingsViewModel(dialogs);
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseBatchFileCommand.Execute(null);
+
+        Assert.Equal(@"D:\start.bat", vm.BatFileName);
+        Assert.False(raised);
     }
 
     private sealed class FakeDialogs : IDialogService
     {
         public string? Folder { get; set; }
 
+        public string? File { get; set; }
+
         public void ShowMessage(string message, string title, bool isError = false) { }
 
         public bool Confirm(string message, string title) => true;
 
+        public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
+
         public string? PickFolder(string title = "Select a folder") => Folder;
 
-        public string? PickFile(string title, string filter, string initialDirectory) => null;
+        public string? PickFile(string title, string filter, string initialDirectory) => File;
 
-        public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files) => null;
+        public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null) => null;
     }
 }

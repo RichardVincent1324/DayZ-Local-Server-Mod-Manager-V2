@@ -39,4 +39,20 @@ public interface IFileSystem
 
     /// <summary>Creates a directory (including parents). Idempotent.</summary>
     void CreateDirectory(string path);
+
+    /// <summary>
+    /// Recursively copies a directory tree to <paramref name="destinationPath"/>,
+    /// creating the destination as needed. Overwrites existing files.
+    /// </summary>
+    void CopyDirectory(string sourcePath, string destinationPath);
+
+    /// <summary>
+    /// Deletes a directory. When <paramref name="recursive"/> is true the whole
+    /// tree is removed; otherwise only an empty directory is deleted. Does nothing
+    /// when the directory does not exist.
+    /// </summary>
+    void DeleteDirectory(string path, bool recursive);
+
+    /// <summary>Moves (renames) a directory. The destination must not exist.</summary>
+    void MoveDirectory(string sourcePath, string destinationPath);
 }

@@ -22,6 +22,14 @@ public interface ITypesService
     IReadOnlyList<string> DiscoverTypeFiles(string workshopPath, string modName);
 
     /// <summary>
+    /// Returns the mission file leaf name the manager would generate for a source
+    /// file (e.g. <c>InediaInfectedAI_Hardcore_types.xml</c>), or null when the
+    /// source file does not live under the mod. Used to preview configuration
+    /// changes before they are applied.
+    /// </summary>
+    string? GetGeneratedFileName(string workshopPath, string modName, string sourceFile);
+
+    /// <summary>
     /// Copies the selected source files for a mod into the mission, replacing any
     /// previous configuration for that mod, and updates cfgeconomycore.xml to
     /// reference only the types of the mods in <paramref name="loadedModNames"/>.
@@ -89,6 +97,13 @@ public sealed class TypesService : ITypesService
             .ToList();
     }
 
+    public string? GetGeneratedFileName(string workshopPath, string modName, string sourceFile)
+    {
+        string modPath = Path.Combine(workshopPath, modName);
+        string? relative = GetRelativeWithin(modPath, sourceFile);
+        return relative is null ? null : BuildDestinationName(CleanModName(modName), relative);
+    }
+
     public TypesOperationResult ConfigureMod(
         TypesConfig config,
         string mapName,
@@ -116,7 +131,7 @@ public sealed class TypesService : ITypesService
         // Copy the selected files first so a mid-copy failure cannot leave the
         // previous configuration deleted or the config pointing at files that
         // were never written.
-        string cleanModName = modName.StartsWith('@') ? modName[1..] : modName;
+        string cleanModName = CleanModName(modName);
         var generated = new List<string>();
         var sourceRelative = new List<string>();
         var copied = new List<string>();
@@ -124,8 +139,7 @@ public sealed class TypesService : ITypesService
         foreach (string source in sourceFiles)
         {
             string relative = Path.GetRelativePath(modPath, source);
-            string safeRelative = relative.Replace('\\', '_').Replace('/', '_');
-            string destinationName = $"{cleanModName}_{safeRelative}";
+            string destinationName = BuildDestinationName(cleanModName, relative);
             string destinationFull = Path.Combine(missionPath, "db", "ModTypes", destinationName);
 
             try
@@ -328,6 +342,42 @@ public sealed class TypesService : ITypesService
 
     private static MapTypesConfig? GetMap(TypesConfig config, string mapName) =>
         config.Maps.TryGetValue(mapName, out MapTypesConfig? map) ? map : null;
+
+    private static string CleanModName(string modName) =>
+        modName.StartsWith('@') ? modName[1..] : modName;
+
+    /// <summary>Builds the destination file name for a mod-relative source path.</summary>
+    private static string BuildDestinationName(string cleanModName, string relative)
+    {
+        string safeRelative = relative.Replace('\\', '_').Replace('/', '_');
+        return $"{cleanModName}_{safeRelative}";
+    }
+
+    /// <summary>
+    /// Returns the path of <paramref name="fullPath"/> relative to
+    /// <paramref name="basePath"/>, or null when it is not a descendant.
+    /// </summary>
+    private static string? GetRelativeWithin(string basePath, string fullPath)
+    {
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            return null;
+        }
+
+        string relative;
+        try
+        {
+            relative = Path.GetRelativePath(basePath, fullPath);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        return relative.Equals(".", StringComparison.Ordinal) || relative.StartsWith("..", StringComparison.Ordinal)
+            ? null
+            : relative;
+    }
 
     private static MapTypesConfig GetOrCreateMap(TypesConfig config, string mapName)
     {

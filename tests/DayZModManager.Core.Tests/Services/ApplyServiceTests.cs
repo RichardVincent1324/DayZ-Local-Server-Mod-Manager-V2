@@ -62,10 +62,10 @@ public class ApplyServiceTests
         Assert.Equal(new[] { "@CF" }, savedOrder);
 
         // Batch file updated
-        Assert.Contains("modList=-mod=@CF;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
+        Assert.Contains("modList=-mod=ModList/@CF;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
 
-        // Junction created
-        Assert.True(junctions.IsJunction($@"{ServerPath}\@CF"));
+        // Junction created under the ModList folder
+        Assert.True(junctions.IsJunction($@"{ServerPath}\{ModListFolder.Name}\@CF"));
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class ApplyServiceTests
         // Junctions are synchronized before the batch file, so they exist even
         // though the batch write failed (they are reconciled again on the next
         // Apply and are harmless while the server still points at the old list).
-        Assert.True(junctions.IsJunction($@"{ServerPath}\@CF"));
+        Assert.True(junctions.IsJunction($@"{ServerPath}\{ModListFolder.Name}\@CF"));
 
         // Nothing should be persisted when the batch-file write fails.
         Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);

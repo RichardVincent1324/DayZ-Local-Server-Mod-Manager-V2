@@ -272,44 +272,81 @@
                         <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0" />
                     </StackPanel>
 
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding TypesRows}"
-                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
-                              CanUserSortColumns="False"
-                              SelectionMode="Extended" HeadersVisibility="Column"
-                              HorizontalGridLinesBrush="#FFECECEC" VerticalGridLinesBrush="#FFECECEC"
-                              beh:DataGridSelection.SelectedItems="{Binding SelectedTypesRows}">
-                        <DataGrid.ColumnHeaderStyle>
-                            <Style TargetType="DataGridColumnHeader">
-                                <Setter Property="BorderBrush" Value="#FFE0E0E0" />
-                                <Setter Property="BorderThickness" Value="0,0,0,0.5" />
-                            </Style>
-                        </DataGrid.ColumnHeaderStyle>
-                        <DataGrid.RowStyle>
-                            <Style TargetType="DataGridRow">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsInactive}" Value="True">
-                                        <Setter Property="Foreground" Value="Gray" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </DataGrid.RowStyle>
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="*" />
-                            <DataGridTextColumn Header="Types Files" Binding="{Binding FileName}" Width="*" />
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="8*" />
+                            <ColumnDefinition Width="2*" />
+                        </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Remove Selected" Command="{Binding RemoveSelectedCommand}" Width="120" />
-                        <Button Content="Clean Invalid" Command="{Binding CleanInvalidCommand}" Width="120" Margin="8,0,0,0" />
-                    </StackPanel>
+                        <DataGrid Grid.Column="0" Margin="0,0,8,0" ItemsSource="{Binding TypesRows}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                  CanUserSortColumns="False"
+                                  SelectionMode="Extended" HeadersVisibility="Column"
+                                  HorizontalGridLinesBrush="#FFECECEC" VerticalGridLinesBrush="#FFECECEC"
+                                  beh:DataGridSelection.SelectedItems="{Binding SelectedTypesRows}">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="BorderBrush" Value="#FFE0E0E0" />
+                                    <Setter Property="BorderThickness" Value="0,0,0,0.5" />
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsInactive}" Value="True">
+                                            <Setter Property="Foreground" Value="Gray" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="4*" />
+                                <DataGridTextColumn Header="Types Files" Binding="{Binding FileName}" Width="6*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <DataGrid Grid.Column="1" Margin="8,0,0,0" ItemsSource="{Binding SaveNames}"
+                                  SelectedItem="{Binding SelectedSave}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                  CanUserSortColumns="False"
+                                  SelectionMode="Single" SelectionUnit="FullRow" HeadersVisibility="Column"
+                                  HorizontalGridLinesBrush="#FFECECEC" VerticalGridLinesBrush="#FFECECEC">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="BorderBrush" Value="#FFE0E0E0" />
+                                    <Setter Property="BorderThickness" Value="0,0,0,0.5" />
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Progress Saves" Binding="{Binding}" Width="*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+
+                    <Grid Grid.Row="3" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                            <Button Content="Remove Selected" Command="{Binding RemoveSelectedCommand}" Width="120" />
+                            <Button Content="Clean Invalid" Command="{Binding CleanInvalidCommand}" Width="120" Margin="8,0,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal">
+                            <Button Content="Load Save" Command="{Binding LoadSaveCommand}" Width="96" />
+                            <Button Content="Add Save" Command="{Binding AddSaveCommand}" Width="96" Margin="8,0,0,0" />
+                            <Button Content="Delete" Command="{Binding DeleteSaveCommand}" Width="96" Margin="8,0,0,0" />
+                            <Button Content="New Game" Command="{Binding NewGameCommand}" Width="96" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Grid>
 
                     <TextBlock Grid.Row="4" Margin="0,4,0,0" Foreground="Gray" FontSize="11"
-                               Text="Note: 3rd-party map mission folders must be manually placed in mpmissions. Gray rows indicate mods that are not loaded or no longer present in the workshop." />
+                               Text="Note: 3rd-party map mission folders must be manually placed in mpmissions. Gray rows indicate mods that are not loaded or no longer present in the workshop. Each mod may only have one types and one spawnabletypes file active." />
                 </Grid>
             </TabItem>
 
-            <TabItem Header="Settings" DataContext="{Binding Settings}">
+            <TabItem Header=" Settings " DataContext="{Binding Settings}">
                 <StackPanel Margin="10">
                     <Grid>
                         <Grid.ColumnDefinitions>

@@ -102,6 +102,7 @@ public sealed class DataDirectoryProvider : IDataDirectoryProvider
         if (!string.Equals(target, _current, StringComparison.OrdinalIgnoreCase))
         {
             MigrateDataFiles(_current, target);
+            MigrateSavesDirectory(_current, target);
         }
 
         _current = target;
@@ -109,6 +110,32 @@ public sealed class DataDirectoryProvider : IDataDirectoryProvider
         WritePointer(target);
 
         ConfigJson.Write(_fileSystem, Path.Combine(target, ConfigFileNames.Settings), settings);
+    }
+
+    private void MigrateSavesDirectory(string source, string target)
+    {
+        if (string.IsNullOrEmpty(source) || string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string sourceSaves = Path.Combine(source, SaveGameService.SavesRootName);
+        if (!_fileSystem.DirectoryExists(sourceSaves))
+        {
+            return;
+        }
+
+        try
+        {
+            // Merge into any existing Saves folder, then remove the source copy.
+            _fileSystem.CopyDirectory(sourceSaves, Path.Combine(target, SaveGameService.SavesRootName));
+            _fileSystem.DeleteDirectory(sourceSaves, recursive: true);
+        }
+        catch (Exception)
+        {
+            // Best-effort migration: leave the folder where it is rather than
+            // failing the whole relocation.
+        }
     }
 
     private void MigrateDataFiles(string source, string target)

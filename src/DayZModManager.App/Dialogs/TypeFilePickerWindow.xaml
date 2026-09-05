@@ -7,9 +7,14 @@
     <DockPanel Margin="12">
         <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8"
                    Text="{Binding ModName, StringFormat=Types files found for {0} - check the ones to include:}" />
-        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button Content="OK" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Ok_Click" />
-            <Button Content="Cancel" Width="80" IsCancel="True" Click="Cancel_Click" />
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Vertical" Margin="0,8,0,0">
+            <TextBlock Margin="0,0,0,6" Foreground="Gray" FontSize="11"
+                       TextWrapping="Wrap"
+                       Text="Select at most two files per mod (one types file and one spawnabletypes file). Files that are already configured for this mod are pre-selected; choosing another file of the same type replaces the previous one." />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="OK" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Ok_Click" />
+                <Button Content="Cancel" Width="80" IsCancel="True" Click="Cancel_Click" />
+            </StackPanel>
         </StackPanel>
         <Border BorderBrush="Gray" BorderThickness="1">
             <ScrollViewer VerticalScrollBarVisibility="Auto">

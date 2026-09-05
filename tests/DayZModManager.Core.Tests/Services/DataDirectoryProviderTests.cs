@@ -135,6 +135,27 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
+    public void MoveTo_MigratesSavesLibrary()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(SettingsPath(), "{}");
+        string legacySaves = Path.Combine(AppPaths.LegacyDirectory(), SaveGameService.SavesRootName);
+        string map = "dayzOffline.chernarusplus";
+        fs.AddDirectory(legacySaves, map);
+        fs.AddDirectory(Path.Combine(legacySaves, map), "Alpha");
+        fs.AddFile(Path.Combine(legacySaves, map, "Alpha", "players.db"), "data");
+        var provider = new DataDirectoryProvider(fs);
+        provider.Initialize();
+
+        string target = @"D:\server\DayZ-Local-Server-Mod-Manager-Data";
+        provider.MoveTo(target, new Settings());
+
+        string targetSave = Path.Combine(target, SaveGameService.SavesRootName, map, "Alpha", "players.db");
+        Assert.True(fs.FileExists(targetSave));
+        Assert.False(fs.DirectoryExists(legacySaves));
+    }
+
+    [Fact]
     public void MoveTo_PersistsDataDirectoryOverride_InSettingsJson()
     {
         var fs = new FakeFileSystem();
@@ -216,6 +237,15 @@ public class DataDirectoryProviderTests
         }
 
         public void CreateDirectory(string path) => _inner.CreateDirectory(path);
+
+        public void CopyDirectory(string sourcePath, string destinationPath) =>
+            _inner.CopyDirectory(sourcePath, destinationPath);
+
+        public void DeleteDirectory(string path, bool recursive) =>
+            _inner.DeleteDirectory(path, recursive);
+
+        public void MoveDirectory(string sourcePath, string destinationPath) =>
+            _inner.MoveDirectory(sourcePath, destinationPath);
 
         public void AddFile(string path, string contents) => _inner.AddFile(path, contents);
     }

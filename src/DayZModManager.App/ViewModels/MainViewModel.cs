@@ -24,6 +24,8 @@ public sealed class MainViewModel : ViewModelBase
     private string _statusText = "Configuration applied";
     private Task<bool>? _pendingApply;
 
+    private bool _relocatingDataDirectory;
+
     public MainViewModel(
         ISettingsService settingsService,
         IModOrderStore modOrderStore,
@@ -32,6 +34,7 @@ public sealed class MainViewModel : ViewModelBase
         IModDiscoveryService discoveryService,
         IMapService mapService,
         ITypesService typesService,
+        ISaveGameService saveGameService,
         IServerConfigService serverConfigService,
         IBatchFileService batchFileService,
         IFileSystem fileSystem,
@@ -77,7 +80,7 @@ public sealed class MainViewModel : ViewModelBase
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         MapTypes = new MapTypesViewModel(
-            mapService, typesService, typesConfigStore, serverConfigService, batchFileService,
+            mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider);
         MapTypes.EnsureApplied = EnsureApplied;
         Settings = new SettingsViewModel(dialogs);
@@ -117,7 +120,24 @@ public sealed class MainViewModel : ViewModelBase
     {
         try
         {
-            await Mods.RefreshAsync(_settings.WorkshopPath);
+            Settings startupSettings = _settings;
+            await Mods.RefreshAsync(startupSettings.WorkshopPath);
+
+            // Coordinate with any Apply that started while discovery was running
+            // (e.g. the user picked paths from the Settings tab). Waiting here
+            // prevents two actors from rewriting the same batch/config files.
+            if (_pendingApply is not null)
+            {
+                await _pendingApply;
+            }
+
+            // If settings changed while discovery ran, the startup reconcile below
+            // would target a stale server/workshop; leave the newer state alone.
+            if (SettingsChanged(startupSettings, _settings))
+            {
+                return;
+            }
+
             MapTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
             MapTypes.ReconcileAppliedMap();
             Mods.MarkApplied();
@@ -128,6 +148,12 @@ public sealed class MainViewModel : ViewModelBase
             Log.Error($"Initialization failed: {ex.Message}");
         }
     }
+
+    private static bool SettingsChanged(Settings before, Settings after) =>
+        !string.Equals(before.WorkshopPath, after.WorkshopPath, StringComparison.OrdinalIgnoreCase)
+        || !string.Equals(before.ServerPath, after.ServerPath, StringComparison.OrdinalIgnoreCase)
+        || !string.Equals(before.BatFileName, after.BatFileName, StringComparison.OrdinalIgnoreCase)
+        || !string.Equals(before.DataDirectory, after.DataDirectory, StringComparison.OrdinalIgnoreCase);
 
     public LogViewModel Log { get; }
 
@@ -321,22 +347,42 @@ public sealed class MainViewModel : ViewModelBase
 
     /// <summary>
     /// Relocates the data files immediately when the user browses a new data
-    /// directory, persisting the override into settings.json.
+    /// directory, persisting the override into settings.json. Runs only after any
+    /// in-flight Apply has finished so the two never relocate concurrently.
     /// </summary>
-    private void HandleDataDirectoryChanged()
+    private async void HandleDataDirectoryChanged()
     {
-        string picked = Settings.DataDirectory;
-        if (string.IsNullOrWhiteSpace(picked))
+        if (_relocatingDataDirectory)
         {
             return;
         }
 
-        // Persist the override using the currently displayed settings so the
-        // saved file never diverges from the form. Only the data directory is
-        // advanced in the applied snapshot; path edits stay deferred to Apply.
-        var merged = Settings.ToSettings();
-        _dataDirectoryProvider.MoveTo(picked, merged);
-        _settings = _settings with { DataDirectory = picked };
-        Settings.NotifyDataDirectoryApplied();
+        _relocatingDataDirectory = true;
+        try
+        {
+            // Wait for an Apply that may still be writing into the old directory.
+            if (_pendingApply is not null)
+            {
+                await _pendingApply;
+            }
+
+            string picked = Settings.DataDirectory;
+            if (string.IsNullOrWhiteSpace(picked))
+            {
+                return;
+            }
+
+            // Persist the override on top of the applied baseline (not the raw
+            // form, which may hold un-applied path edits) so a restart never
+            // presents never-applied settings as the applied state.
+            var persisted = _settings with { DataDirectory = picked };
+            _dataDirectoryProvider.MoveTo(picked, persisted);
+            _settings = persisted;
+            Settings.NotifyDataDirectoryApplied();
+        }
+        finally
+        {
+            _relocatingDataDirectory = false;
+        }
     }
 }

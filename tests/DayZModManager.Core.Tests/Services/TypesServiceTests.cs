@@ -236,4 +236,38 @@ public class TypesServiceTests
         Assert.True(spawnableIndex >= 0, "spawnabletypes file missing");
         Assert.True(typesIndex < spawnableIndex, "types must precede spawnabletypes");
     }
+
+    [Fact]
+    public void GetGeneratedFileName_RootFile()
+    {
+        FakeFileSystem fs = Seed();
+
+        string? leaf = CreateService(fs)
+            .GetGeneratedFileName(WorkshopPath, "@CF", $@"{WorkshopPath}\@CF\types.xml");
+
+        Assert.Equal("CF_types.xml", leaf);
+    }
+
+    [Fact]
+    public void GetGeneratedFileName_NestedFile_UsesUnderscores()
+    {
+        FakeFileSystem fs = Seed();
+        string source = $@"{WorkshopPath}\@InediaInfectedAI\Hardcore\types.xml";
+
+        string? leaf = CreateService(fs)
+            .GetGeneratedFileName(WorkshopPath, "@InediaInfectedAI", source);
+
+        Assert.Equal("InediaInfectedAI_Hardcore_types.xml", leaf);
+    }
+
+    [Fact]
+    public void GetGeneratedFileName_ReturnsNull_WhenSourceOutsideMod()
+    {
+        FakeFileSystem fs = Seed();
+
+        string? leaf = CreateService(fs)
+            .GetGeneratedFileName(WorkshopPath, "@CF", @"D:\elsewhere\types.xml");
+
+        Assert.Null(leaf);
+    }
 }

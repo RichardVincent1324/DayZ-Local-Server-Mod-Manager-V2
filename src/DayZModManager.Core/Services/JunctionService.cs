@@ -17,15 +17,17 @@ public sealed record JunctionSyncResult
 }
 
 /// <summary>
-/// Synchronizes junctions in the server root with the desired loaded-mod set.
-/// Loaded mods get a junction; any existing junction that is not loaded is removed
-/// (which also cleans up orphans whose source mod was deleted).
+/// Synchronizes junctions under the <see cref="ModListFolder.Name"/> folder in the
+/// server root with the desired loaded-mod set. Loaded mods get a junction; any
+/// existing junction that is not loaded is removed (which also cleans up orphans
+/// whose source mod was deleted). Junctions created directly in the server root
+/// by older versions are left untouched.
 /// </summary>
 public interface IJunctionService
 {
     JunctionSyncResult Sync(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods);
 
-    /// <summary>Returns mod junction names in the server root not present in <paramref name="validModNames"/>.</summary>
+    /// <summary>Returns mod junction names under the ModList folder not present in <paramref name="validModNames"/>.</summary>
     IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames);
 
     /// <summary>Returns the loaded mods whose junction is missing or not a junction.</summary>
@@ -49,9 +51,33 @@ public sealed class JunctionService : IJunctionService
         int created = 0, removed = 0, skipped = 0, failed = 0;
         var loadedSet = new HashSet<string>(loadedMods, StringComparer.OrdinalIgnoreCase);
 
+        string junctionDir = Path.Combine(serverPath, ModListFolder.Name);
+        if (!_fileSystem.DirectoryExists(junctionDir))
+        {
+            try
+            {
+                _fileSystem.CreateDirectory(junctionDir);
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                messages.Add($"Failed to create mod folder: {junctionDir} ({ex.Message})");
+                return new JunctionSyncResult
+                {
+                    Created = created,
+                    Removed = removed,
+                    Skipped = skipped,
+                    Failed = failed,
+                    Messages = messages,
+                };
+            }
+
+            messages.Add($"Mod folder created: {ModListFolder.Name}");
+        }
+
         foreach (string mod in loadedMods)
         {
-            string link = Path.Combine(serverPath, mod);
+            string link = Path.Combine(junctionDir, mod);
             string target = Path.Combine(workshopPath, mod);
 
             if (_junctions.IsJunction(link))
@@ -102,14 +128,14 @@ public sealed class JunctionService : IJunctionService
             }
         }
 
-        foreach (string mod in GetJunctionedMods(serverPath))
+        foreach (string mod in GetJunctionedMods(junctionDir))
         {
             if (loadedSet.Contains(mod))
             {
                 continue;
             }
 
-            if (_junctions.Delete(Path.Combine(serverPath, mod)))
+            if (_junctions.Delete(Path.Combine(junctionDir, mod)))
             {
                 removed++;
                 messages.Add($"Junction removed: {mod}");
@@ -133,17 +159,18 @@ public sealed class JunctionService : IJunctionService
 
     public IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames)
     {
-        return GetJunctionedMods(serverPath)
+        return GetJunctionedMods(JunctionDir(serverPath))
             .Where(mod => !validModNames.Contains(mod))
             .ToList();
     }
 
     public IReadOnlyList<string> Verify(string serverPath, IReadOnlyList<string> loadedMods)
     {
+        string junctionDir = JunctionDir(serverPath);
         var missing = new List<string>();
         foreach (string mod in loadedMods)
         {
-            if (!_junctions.IsJunction(Path.Combine(serverPath, mod)))
+            if (!_junctions.IsJunction(Path.Combine(junctionDir, mod)))
             {
                 missing.Add(mod);
             }
@@ -152,17 +179,19 @@ public sealed class JunctionService : IJunctionService
         return missing;
     }
 
-    private IReadOnlyList<string> GetJunctionedMods(string serverPath)
+    private static string JunctionDir(string serverPath) => Path.Combine(serverPath, ModListFolder.Name);
+
+    private IReadOnlyList<string> GetJunctionedMods(string junctionDir)
     {
-        if (!_fileSystem.DirectoryExists(serverPath))
+        if (!_fileSystem.DirectoryExists(junctionDir))
         {
             return Array.Empty<string>();
         }
 
         return _fileSystem
-            .GetDirectories(serverPath)
+            .GetDirectories(junctionDir)
             .Where(name => name.StartsWith("@", StringComparison.Ordinal))
-            .Where(name => _junctions.IsJunction(Path.Combine(serverPath, name)))
+            .Where(name => _junctions.IsJunction(Path.Combine(junctionDir, name)))
             .ToList();
     }
 

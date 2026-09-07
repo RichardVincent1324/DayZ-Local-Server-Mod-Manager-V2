@@ -24,6 +24,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly LogViewModel _log;
     private readonly TypesConfig _typesConfig;
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
+    private readonly IDayZServerProcessState _serverProcess;
 
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
@@ -52,7 +53,8 @@ public sealed class MapTypesViewModel : ViewModelBase
         IDialogService dialogs,
         LogViewModel log,
         TypesConfig typesConfig,
-        IDataDirectoryProvider dataDirectoryProvider)
+        IDataDirectoryProvider dataDirectoryProvider,
+        IDayZServerProcessState serverProcess)
     {
         _mapService = mapService;
         _typesService = typesService;
@@ -65,6 +67,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         _log = log;
         _typesConfig = typesConfig;
         _dataDirectoryProvider = dataDirectoryProvider;
+        _serverProcess = serverProcess;
 
         ConfigXmlCommand = new RelayCommand(ConfigureMod);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => CanRemoveSelected);
@@ -178,9 +181,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     /// <summary>
     /// Called at startup: retains the last-applied map (validating it is still
-    /// present on the server) and applies a default map for a first-time user so
-    /// the map_profiles folder is created. Does not rewrite server files for an
-    /// already-applied map.
+    /// present on the server) and, for a first-time user whose server is already
+    /// configured, applies the first discovered map so the server is provisioned
+    /// for it (mission template and batch serverProfile) before its first launch.
+    /// Does not rewrite server files for an already-applied map, and never
+    /// auto-applies while there is no real mission folder on a configured server.
     /// </summary>
     public void ReconcileAppliedMap()
     {
@@ -199,7 +204,15 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        string defaultMap = MapNames[0];
+        // Nothing has been applied yet. Auto-apply a default map only when a real
+        // mission folder exists on a configured server; before the user sets the
+        // server path there is nothing to switch to and no server file to write.
+        if (string.IsNullOrWhiteSpace(_serverPath) || _discoveredMaps.Count == 0)
+        {
+            return;
+        }
+
+        string defaultMap = _discoveredMaps[0].Name;
         SetRestoringSelection(defaultMap);
         ApplyMapCore(defaultMap);
     }
@@ -488,21 +501,25 @@ public sealed class MapTypesViewModel : ViewModelBase
         _typesConfig.CurrentMap = mapName;
         _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
 
-        string mapId = GetMapId(mapName);
-
         if (!_serverConfig.UpdateTemplate(_serverPath, mapName))
         {
             _log.Warning("Failed to update the server template (serverDZ.cfg).");
         }
 
-        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{mapId}"))
+        // The map profile folder mirrors the mpmissions mission folder exactly
+        // (e.g. map_profiles\dayzOffline.chernarusplus) so profiles and logs line
+        // up 1:1 with the mission the tool runs.
+        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{mapName}"))
         {
             _log.Warning("Failed to update the batch file serverProfile.");
         }
 
+        // Pre-create the profile folder the batch serverProfile points at. DayZ
+        // also creates it on its first boot, so this is only a convenience; a
+        // failure is non-fatal.
         try
         {
-            _fileSystem.CreateDirectory(Path.Combine(_serverPath, "map_profiles", mapId));
+            _fileSystem.CreateDirectory(Path.Combine(_serverPath, "map_profiles", mapName));
         }
         catch (Exception ex)
         {
@@ -768,9 +785,27 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        bool confirmed = _dialogs.Confirm(
-            $"Load save \"{saveName}\" for map {mapName}?\n\nThis will REPLACE the current progress in {StorageLabel(mapName)} with the stored copy. The current progress will be lost. Continue?",
-            "Load Save");
+        if (RefuseWhileServerRunning("loading a save"))
+        {
+            return;
+        }
+
+        string dataDirectory = _dataDirectoryProvider.Current;
+        string warning = BuildLoadCompatibilityWarning(mapName, dataDirectory, saveName);
+        string message =
+            $"Load save \"{saveName}\" for map {mapName}?\n\nThis will REPLACE the current progress in {StorageLabel(mapName)} with the stored copy. The current progress will be lost.";
+
+        bool confirmed;
+        if (string.IsNullOrWhiteSpace(warning))
+        {
+            confirmed = _dialogs.Confirm(message, "Load Save");
+        }
+        else
+        {
+            string note = "For investigation, go to:\n" + _saveGameService.GetSaveFolderPath(dataDirectory, mapName, saveName);
+            confirmed = _dialogs.ConfirmWithWarning(message, "Load Save", warning, note);
+        }
+
         if (!confirmed)
         {
             _log.Info("Load cancelled.");
@@ -783,7 +818,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        string dataDirectory = _dataDirectoryProvider.Current;
         IsSaveBusy = true;
         try
         {
@@ -804,6 +838,11 @@ public sealed class MapTypesViewModel : ViewModelBase
     {
         string? mapName = AppliedMapOrWarn();
         if (mapName is null)
+        {
+            return;
+        }
+
+        if (RefuseWhileServerRunning("saving progress"))
         {
             return;
         }
@@ -834,7 +873,9 @@ public sealed class MapTypesViewModel : ViewModelBase
         IsSaveBusy = true;
         try
         {
-            SaveGameResult result = await Task.Run(() => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists));
+            SaveMetaData meta = BuildSaveSnapshot(mapName);
+            SaveGameResult result = await Task.Run(
+                () => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists, meta));
             LogSaveResult(result);
             if (result.Success)
             {
@@ -907,6 +948,11 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
+        if (RefuseWhileServerRunning("starting a new game"))
+        {
+            return;
+        }
+
         bool confirmed = _dialogs.Confirm(
             $"Start a NEW GAME on map {mapName}?\n\nThis will DELETE {StorageLabel(mapName)} so the map starts fresh on the next server launch. Continue?",
             "New Game");
@@ -962,6 +1008,112 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Captures the current configuration a progress save depends on: the loaded
+    /// mod list (order matters) and the map's active generated type files.
+    /// </summary>
+    private SaveMetaData BuildSaveSnapshot(string mapName)
+    {
+        string storageFolder;
+        try
+        {
+            storageFolder = Path.GetFileName(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
+        }
+        catch (Exception)
+        {
+            storageFolder = string.Empty;
+        }
+
+        return new SaveMetaData
+        {
+            Map = mapName,
+            StorageFolder = storageFolder,
+            SavedAtUtc = DateTime.UtcNow,
+            ModList = _loadedMods.ToList(),
+            TypesFiles = _typesService.GetActiveTypeFileNames(_typesConfig, mapName, LoadedSet()).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// Describes how a stored save's configuration snapshot differs from the
+    /// current setup, for display in the Load Save confirmation. An empty result
+    /// means the configurations match.
+    /// </summary>
+    private string BuildLoadCompatibilityWarning(string mapName, string dataDirectory, string saveName)
+    {
+        ConfigLoadResult<SaveMetaData> stored;
+        try
+        {
+            stored = _saveGameService.GetMeta(dataDirectory, mapName, saveName);
+        }
+        catch (Exception)
+        {
+            return "This save's configuration snapshot could not be read, so compatibility with the current mod/type setup cannot be verified.";
+        }
+
+        if (stored.Status == ConfigLoadStatus.Missing)
+        {
+            return "This save has no configuration snapshot (created by an older version), so compatibility with the current mod/type setup cannot be verified.";
+        }
+
+        if (stored.Status == ConfigLoadStatus.Corrupt)
+        {
+            return "This save's configuration snapshot is unreadable, so compatibility with the current mod/type setup cannot be verified.";
+        }
+
+        SaveMetaData saved = stored.Value!;
+        SaveMetaData current = BuildSaveSnapshot(mapName);
+
+        var lines = new List<string>();
+
+        if (!saved.ModList.SequenceEqual(current.ModList, StringComparer.OrdinalIgnoreCase))
+        {
+            List<string> onlyInSave = saved.ModList
+                .Where(mod => !current.ModList.Contains(mod, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            List<string> onlyNow = current.ModList
+                .Where(mod => !saved.ModList.Contains(mod, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            lines.Add($"This save was created with a different mod setup ({saved.ModList.Count} mod(s) then vs {current.ModList.Count} now).");
+            if (onlyInSave.Count > 0)
+            {
+                lines.Add("  In save but not loaded now: " + string.Join(", ", onlyInSave));
+            }
+
+            if (onlyNow.Count > 0)
+            {
+                lines.Add("  Loaded now but not in save: " + string.Join(", ", onlyNow));
+            }
+
+            if (onlyInSave.Count == 0 && onlyNow.Count == 0)
+            {
+                lines.Add("  The mods match but their load order differs.");
+            }
+        }
+
+        var savedTypes = saved.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentTypes = current.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!savedTypes.SetEquals(currentTypes))
+        {
+            List<string> removed = saved.TypesFiles.Where(file => !currentTypes.Contains(file)).ToList();
+            List<string> added = current.TypesFiles.Where(file => !savedTypes.Contains(file)).ToList();
+
+            lines.Add($"This save was created with different active type files ({saved.TypesFiles.Count} then vs {current.TypesFiles.Count} now).");
+            if (removed.Count > 0)
+            {
+                lines.Add("  Type file(s) in save but not active now: " + string.Join(", ", removed));
+            }
+
+            if (added.Count > 0)
+            {
+                lines.Add("  Active type file(s) now but not in save: " + string.Join(", ", added));
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
     private void LogSaveResult(SaveGameResult result)
     {
         if (result.Success)
@@ -972,6 +1124,24 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             _log.Error(result.Message);
         }
+    }
+
+    /// <summary>
+    /// Refuses a progress-save operation while the DayZ server is running, since
+    /// it may be writing to the live storage folder. Shows a modal error plus a log
+    /// line and returns true when the operation was blocked.
+    /// </summary>
+    private bool RefuseWhileServerRunning(string purpose)
+    {
+        if (!_serverProcess.IsDayZServerRunning())
+        {
+            return false;
+        }
+
+        string message = $"The DayZ server is running. Stop it before {purpose} to avoid corrupting the saved progress data.";
+        _log.Error(message);
+        _dialogs.ShowMessage(message, "DayZ Server running", isError: true);
+        return true;
     }
 
     /// <summary>Rebuilds the stored-save list for the current map.</summary>
@@ -1057,10 +1227,4 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private static bool ContainsIgnoreCase(ObservableCollection<string> items, string value) =>
         items.Any(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase));
-
-    private static string GetMapId(string mapName)
-    {
-        int dot = mapName.LastIndexOf('.');
-        return dot >= 0 ? mapName[(dot + 1)..] : mapName;
-    }
 }

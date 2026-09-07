@@ -79,11 +79,11 @@ Instead of manually managing everything through Explorer and text editors, you c
 - Save the current world progress of the active map (the `storage_<instanceId>` folder, where `instanceId` comes from `serverDZ.cfg`, defaulting to 1)
 - Add, load, and delete named saves, and start a fresh game — all stored under the manager's data directory (`Saves\<map>\<saveName>`)
 - Loading a save is staged so an interruption never destroys the current progress; folder operations run off the UI thread
-- Saves follow the data directory when it is relocated
+- Saves follow the data directory when it is relocated (for example when a server path is configured and the data folder moves under the server)
 
 ### Other
 
-- Data/config files (`settings.json`, `mod_order.json`, `types_config.json`, saves) live in a data directory that can be relocated from the Settings tab
+- Data/config files (`settings.json`, `mod_order.json`, `types_config.json`, saves) live in a data directory that is derived automatically: `%LOCALAPPDATA%\DayZ-Mod-Manager-V2` until a server path is configured, then `<serverPath>\DayZ-Mod-Manager-V2`
 
 ---
 

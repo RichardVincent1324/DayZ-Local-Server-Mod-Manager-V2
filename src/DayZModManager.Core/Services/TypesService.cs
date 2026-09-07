@@ -69,6 +69,16 @@ public interface ITypesService
         string mapName,
         string missionPath,
         IReadOnlySet<string> loadedModNames);
+
+    /// <summary>
+    /// Returns the active generated type-file leaf names for a map (in the same
+    /// order cfgeconomycore.xml references them), considering only the mods in
+    /// <paramref name="loadedModNames"/>. Empty when the map has no configuration.
+    /// </summary>
+    IReadOnlyList<string> GetActiveTypeFileNames(
+        TypesConfig config,
+        string mapName,
+        IReadOnlySet<string> loadedModNames);
 }
 
 public sealed class TypesService : ITypesService
@@ -290,6 +300,15 @@ public sealed class TypesService : ITypesService
             : GetAllOwnedFileNames(map);
 
         return _economyCore.UpdateModTypes(missionPath, fileNames, owned);
+    }
+
+    public IReadOnlyList<string> GetActiveTypeFileNames(
+        TypesConfig config,
+        string mapName,
+        IReadOnlySet<string> loadedModNames)
+    {
+        MapTypesConfig? map = GetMap(config, mapName);
+        return map is null ? Array.Empty<string>() : GetAllGeneratedFileNames(map, loadedModNames);
     }
 
     private TypesOperationResult RegenerateEconomyCore(

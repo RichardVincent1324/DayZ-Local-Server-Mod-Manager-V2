@@ -258,17 +258,22 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
                         <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
-                        <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280" />
+                            <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
+							ScrollViewer.CanContentScroll="False"
+							VirtualizingStackPanel.IsVirtualizing="False"
+							MaxDropDownHeight="300" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
                         <TextBlock Text="Types Config:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
-                        <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}" Width="280" />
+                        <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}" Width="280"
+						ScrollViewer.CanContentScroll="False"
+						VirtualizingStackPanel.IsVirtualizing="False"
+						MaxDropDownHeight="300" />
                         <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0" />
                     </StackPanel>
 
@@ -340,14 +345,12 @@
                             <Button Content="New Game" Command="{Binding NewGameCommand}" Width="96" Margin="8,0,0,0" />
                         </StackPanel>
                     </Grid>
-
-                    <TextBlock Grid.Row="4" Margin="0,4,0,0" Foreground="Gray" FontSize="11"
-                               Text="Note: 3rd-party map mission folders must be manually placed in mpmissions. Gray rows indicate mods that are not loaded or no longer present in the workshop. Each mod may only have one types and one spawnabletypes file active." />
                 </Grid>
             </TabItem>
 
             <TabItem Header=" Settings " DataContext="{Binding Settings}">
                 <StackPanel Margin="10">
+                    <TextBlock Text="Configuration" FontSize="14" FontWeight="Bold" Margin="0,0,0,10" />
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="130" />
@@ -362,11 +365,39 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Workshop path:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WorkshopPath}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="0" Grid.Column="1" Margin="0,0,8,8">
+                            <TextBlock Text="{Binding WorkshopPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZ\!Workshop" Foreground="LightGray" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding WorkshopPath}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <Button Grid.Row="0" Grid.Column="2" Content="Browse" Command="{Binding BrowseWorkshopCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Server path:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ServerPath}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,8,8">
+                            <TextBlock Text="{Binding ServerPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZServer" Foreground="LightGray" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ServerPath}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <Button Grid.Row="1" Grid.Column="2" Content="Browse" Command="{Binding BrowseServerCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch file:" VerticalAlignment="Center" Margin="0,0,8,8" />
@@ -375,8 +406,22 @@
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Data directory:" VerticalAlignment="Center" Margin="0,0,8,8" />
                         <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding EffectiveDataDirectory}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
-                        <Button Grid.Row="3" Grid.Column="2" Content="Browse" Command="{Binding BrowseDataDirectoryCommand}" Width="80" Margin="0,0,0,8" />
                     </Grid>
+
+                    <Border Height="1" Background="#FFDDDDDD" Margin="0,14,0,14" />
+
+                    <TextBlock Text="Features" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" />
+                    <CheckBox x:Name="AutoCleanServerLogsCheckBox"
+                              Content="Auto-clean old server log files (keep the 3 newest)"
+                              IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              Click="AutoCleanServerLogs_Click"
+                              Loaded="AutoCleanServerLogsCheckBox_Loaded"
+                              VerticalContentAlignment="Center">
+                        <CheckBox.ToolTip>
+                            <ToolTip Style="{StaticResource WrappingToolTipStyle}"
+                                     Content="On every app start, Apply and Start Server: when more than 10 DayZServer_x64_*.RPT or script_*.log files have accumulated in map_profiles\&lt;current map&gt;, the oldest are deleted until only the 3 most recent of each remain. Below that no files are touched. Default: off." />
+                        </CheckBox.ToolTip>
+                    </CheckBox>
                 </StackPanel>
             </TabItem>
         </TabControl>

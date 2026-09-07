@@ -39,7 +39,7 @@ public class SettingsServiceTests
             WorkshopPath = @"D:\DayZ\!Workshop",
             ServerPath = @"D:\DayZServer",
             BatFileName = "LocalServer.example.bat",
-            DataDirectory = @"D:\DayZServer\DayZ-Local-Server-Mod-Manager-Data",
+            AutoCleanServerLogs = true,
         };
 
         service.Save(@"C:\data", settings);
@@ -49,7 +49,7 @@ public class SettingsServiceTests
         Assert.Equal(settings.WorkshopPath, result.Value!.WorkshopPath);
         Assert.Equal(settings.ServerPath, result.Value!.ServerPath);
         Assert.Equal(settings.BatFileName, result.Value!.BatFileName);
-        Assert.Equal(settings.DataDirectory, result.Value!.DataDirectory);
+        Assert.True(result.Value.AutoCleanServerLogs);
     }
 
     [Fact]
@@ -79,7 +79,24 @@ public class SettingsServiceTests
         Assert.Equal(ConfigLoadStatus.Success, result.Status);
         Assert.Equal(Settings.CurrentSchemaVersion, result.Value!.SchemaVersion);
         Assert.Equal(@"D:\ws", result.Value.WorkshopPath);
-        Assert.Equal(string.Empty, result.Value.DataDirectory);
+        Assert.False(result.Value.AutoCleanServerLogs);
+    }
+
+    [Fact]
+    public void Load_MigratesSchemaV2_AddingAutoCleanFlagDefaultingToFalse()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(
+            @"C:\data\settings.json",
+            "{\"serverPath\":\"D:\\\\srv\",\"batFileName\":\"run.bat\",\"schemaVersion\":2}");
+        var service = new SettingsService(fs);
+
+        ConfigLoadResult<Settings> result = service.Load(@"C:\data");
+
+        Assert.Equal(ConfigLoadStatus.Success, result.Status);
+        Assert.Equal(Settings.CurrentSchemaVersion, result.Value!.SchemaVersion);
+        Assert.Equal(@"D:\srv", result.Value.ServerPath);
+        Assert.False(result.Value.AutoCleanServerLogs);
     }
 
     [Fact]

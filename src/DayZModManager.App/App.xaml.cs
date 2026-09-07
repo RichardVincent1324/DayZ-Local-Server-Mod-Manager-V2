@@ -67,9 +67,11 @@ public partial class App : Application
         services.AddSingleton<IEconomyCoreService, EconomyCoreService>();
         services.AddSingleton<ITypesService, TypesService>();
         services.AddSingleton<ISaveGameService, SaveGameService>();
+        services.AddSingleton<IDayZServerProcessState, DayZServerProcessState>();
         services.AddSingleton<IMapService, MapService>();
         services.AddSingleton<IValidationService, ValidationService>();
         services.AddSingleton<IApplyService, ApplyService>();
+        services.AddSingleton<IServerLogCleanupService, ServerLogCleanupService>();
         services.AddSingleton<IDialogService, UiDialogService>();
         services.AddSingleton<IProcessLauncher, ProcessLauncher>();
 
@@ -87,6 +89,8 @@ public partial class App : Application
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<IProcessLauncher>(),
+            sp.GetRequiredService<IServerLogCleanupService>(),
+            sp.GetRequiredService<IDayZServerProcessState>(),
             dataDirectoryProvider));
 
         return services.BuildServiceProvider();

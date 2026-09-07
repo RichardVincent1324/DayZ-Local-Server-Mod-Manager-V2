@@ -2,6 +2,36 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
-
+        <!-- Universal ToolTip style: wraps long text to a shared MaxWidth. -->
+        <Style x:Key="WrappingToolTipStyle" TargetType="ToolTip">
+            <Setter Property="Background" Value="#FFF5F5F5" />
+            <Setter Property="BorderBrush" Value="#FF999999" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#FF111111" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="6,4"
+                                SnapsToDevicePixels="True">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="4" ShadowDepth="2"
+                                                  Opacity="0.35" Direction="270" />
+                            </Border.Effect>
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       TextWrapping="Wrap"
+                                       MaxWidth="420"
+                                       TextAlignment="Left"
+                                       Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- Applies automatically to ToolTips created from a ToolTip="..." string
+             attribute where implicit-style resolution reaches the Application. -->
+        <Style TargetType="ToolTip" BasedOn="{StaticResource WrappingToolTipStyle}" />
     </Application.Resources>
 </Application>

@@ -25,7 +25,7 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Initialize_ExistingInstall_PinsLegacy()
+    public void Initialize_ExistingInstall_UsesLegacy_WithoutPointer()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
@@ -34,14 +34,14 @@ public class DataDirectoryProviderTests
         provider.Initialize();
 
         Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
-        Assert.True(fs.FileExists(PointerPath()));
-        Assert.Equal(AppPaths.LegacyDirectory(), fs.TryGetFileContents(PointerPath()));
+        Assert.False(fs.FileExists(PointerPath()));
     }
 
     [Fact]
     public void Initialize_PointerFile_UsesPointedDirectory()
     {
         var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\elsewhere");
         fs.AddFile(PointerPath(), @"D:\elsewhere");
         var provider = new DataDirectoryProvider(fs);
 
@@ -51,7 +51,31 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Resolve_UnpinnedFreshInstall_UsesServerPathDefault()
+    public void Initialize_StalePointerToMissingDirectory_FallsBackToLegacy()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(PointerPath(), @"D:\deleted");
+        var provider = new DataDirectoryProvider(fs);
+
+        provider.Initialize();
+
+        Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
+    }
+
+    [Fact]
+    public void Initialize_EmptyPointer_FallsBackToLegacy()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(PointerPath(), "   ");
+        var provider = new DataDirectoryProvider(fs);
+
+        provider.Initialize();
+
+        Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
+    }
+
+    [Fact]
+    public void Resolve_FreshInstallWithServerPath_UsesServerPathDefault()
     {
         var provider = new DataDirectoryProvider(new FakeFileSystem());
         provider.Initialize();
@@ -62,42 +86,34 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Resolve_PinnedExistingInstall_KeepsPinnedLocation()
+    public void Resolve_ExistingInstallWithServerPath_UsesServerPathDefault()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
-        Assert.Equal(AppPaths.LegacyDirectory(), provider.Resolve(new Settings { ServerPath = @"D:\server" }));
+        Assert.Equal(
+            Path.Combine(@"D:\server", AppPaths.DataDirectoryName),
+            provider.Resolve(new Settings { ServerPath = @"D:\server" }));
     }
 
     [Fact]
-    public void Resolve_ExplicitOverride_Wins()
-    {
-        var provider = new DataDirectoryProvider(new FakeFileSystem());
-        provider.Initialize();
-
-        Assert.Equal(@"D:\custom", provider.Resolve(new Settings { DataDirectory = @"D:\custom" }));
-    }
-
-    [Fact]
-    public void MoveTo_MigratesDataFiles_UpdatesPointerAndCurrent()
+    public void MoveTo_MigratesTypesConfig_UpdatesPointerAndCurrent()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[]");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig), "{}");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
-        string target = @"D:\server\DayZ-Local-Server-Mod-Manager-Data";
+        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
         provider.MoveTo(target, new Settings());
 
         Assert.Equal(target, provider.Current);
         Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.Settings)));
-        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.ModOrder)));
-        Assert.False(fs.FileExists(SettingsPath()));
-        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder)));
+        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.TypesConfig)));
+        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig)));
         Assert.Equal(target, fs.TryGetFileContents(PointerPath()));
     }
 
@@ -115,23 +131,25 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void MoveTo_OverwritesExistingTargetFile_AndDeletesSource()
+    public void MoveTo_DoesNotOverwriteTargetModOrder()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[\"@new\"]");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig), "{}");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[\"@legacy\"]");
 
-        // Target directory already holds a (stale) config file.
-        string target = @"D:\server\DayZ-Local-Server-Mod-Manager-Data";
-        fs.AddFile(Path.Combine(target, ConfigFileNames.ModOrder), "[\"@stale\"]");
+        // The ApplyService has already written the authoritative mod order into
+        // the target before relocation runs.
+        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
+        fs.AddFile(Path.Combine(target, ConfigFileNames.ModOrder), "[\"@applied\"]");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
         provider.MoveTo(target, new Settings());
 
         Assert.Equal(target, provider.Current);
-        Assert.Equal("[\"@new\"]", fs.TryGetFileContents(Path.Combine(target, ConfigFileNames.ModOrder)));
-        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder)));
+        Assert.Equal("[\"@applied\"]", fs.TryGetFileContents(Path.Combine(target, ConfigFileNames.ModOrder)));
+        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.TypesConfig)));
     }
 
     [Fact]
@@ -147,7 +165,7 @@ public class DataDirectoryProviderTests
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
-        string target = @"D:\server\DayZ-Local-Server-Mod-Manager-Data";
+        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
         provider.MoveTo(target, new Settings());
 
         string targetSave = Path.Combine(target, SaveGameService.SavesRootName, map, "Alpha", "players.db");
@@ -156,29 +174,31 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void MoveTo_PersistsDataDirectoryOverride_InSettingsJson()
+    public void MoveTo_PersistsSettingsJson_InTarget()
     {
         var fs = new FakeFileSystem();
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
-        provider.MoveTo(@"D:\custom", new Settings { DataDirectory = @"D:\custom" });
+        provider.MoveTo(@"D:\custom", new Settings { WorkshopPath = @"D:\ws" });
 
         string? json = fs.TryGetFileContents(@"D:\custom\settings.json");
         Assert.NotNull(json);
-        Assert.Contains("\"dataDirectory\"", json);
+        Assert.Contains("\"workshopPath\"", json);
     }
 
     [Fact]
-    public void Initialize_DoesNotThrow_WhenPointerWriteFails()
+    public void Initialize_DoesNotWrite_WhenHonoringPointer()
     {
+        // Honoring a pointer performs no writes, so a write failure must not surface.
         var fs = new FailingFileSystem { ThrowOnWriteAllText = true };
-        fs.AddFile(SettingsPath(), "{}"); // existing install -> pins legacy by writing the pointer
+        fs.AddDirectory(@"D:\elsewhere");
+        fs.AddFile(PointerPath(), @"D:\elsewhere");
         var provider = new DataDirectoryProvider(fs);
 
         provider.Initialize();
 
-        Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
+        Assert.Equal(@"D:\elsewhere", provider.Current);
     }
 
     [Fact]
@@ -186,7 +206,7 @@ public class DataDirectoryProviderTests
     {
         var fs = new FailingFileSystem { ThrowOnCopyFile = true };
         fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[]");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig), "{}");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
@@ -248,5 +268,7 @@ public class DataDirectoryProviderTests
             _inner.MoveDirectory(sourcePath, destinationPath);
 
         public void AddFile(string path, string contents) => _inner.AddFile(path, contents);
+
+        public void AddDirectory(string path) => _inner.CreateDirectory(path);
     }
 }

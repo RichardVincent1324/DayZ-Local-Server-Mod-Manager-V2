@@ -56,6 +56,45 @@ public class TypesServiceTests
         Assert.DoesNotContain(files, f => f.EndsWith("economy.xml", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static TypesConfig ConfigWith(params ModTypesEntry[] entries) =>
+        new() { Maps = { [MapName] = new MapTypesConfig { Mods = entries.ToList() } } };
+
+    private static ModTypesEntry Entry(string modName, params string[] generated) =>
+        new() { ModName = modName, GeneratedFiles = generated.ToList() };
+
+    [Fact]
+    public void GetActiveTypeFileNames_ReturnsLeavesInEconomyCoreOrder()
+    {
+        TypesConfig config = ConfigWith(
+            Entry("@CF", @"db\ModTypes\CF_cfgspawnabletypes.xml", @"db\ModTypes\CF_types.xml"));
+
+        IReadOnlyList<string> names = CreateService(Seed()).GetActiveTypeFileNames(config, MapName, Loaded("@CF"));
+
+        Assert.Equal(new[] { "CF_types.xml", "CF_cfgspawnabletypes.xml" }, names);
+    }
+
+    [Fact]
+    public void GetActiveTypeFileNames_FiltersToLoadedMods()
+    {
+        TypesConfig config = ConfigWith(
+            Entry("@CF", @"db\ModTypes\CF_types.xml", @"db\ModTypes\CF_cfgspawnabletypes.xml"),
+            Entry("@Other", @"db\ModTypes\Other_types.xml"));
+
+        IReadOnlyList<string> names = CreateService(Seed()).GetActiveTypeFileNames(config, MapName, Loaded("@CF"));
+
+        Assert.Equal(new[] { "CF_types.xml", "CF_cfgspawnabletypes.xml" }, names);
+    }
+
+    [Fact]
+    public void GetActiveTypeFileNames_ReturnsEmpty_WhenNoMapConfig()
+    {
+        var config = new TypesConfig();
+
+        IReadOnlyList<string> names = CreateService(Seed()).GetActiveTypeFileNames(config, MapName, Loaded("@CF"));
+
+        Assert.Empty(names);
+    }
+
     [Fact]
     public void ConfigureMod_CopiesFilesAndUpdatesConfig()
     {

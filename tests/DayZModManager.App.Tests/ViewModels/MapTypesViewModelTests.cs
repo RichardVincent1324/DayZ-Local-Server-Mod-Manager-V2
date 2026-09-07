@@ -18,13 +18,19 @@ public class MapTypesViewModelTests
         ITypesConfigStore? typesConfigStore = null,
         FakeTypesService? typesService = null,
         FakeDialogs? dialogs = null,
-        FakeSaveGameService? saveGameService = null)
+        FakeSaveGameService? saveGameService = null,
+        FakeServerProcessState? serverProcess = null,
+        FakeFileSystem? fileSystem = null,
+        FakeBatchFileService? batchFileService = null)
     {
         mapService ??= new FakeMapService(new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"));
         typesConfigStore ??= new FakeTypesConfigStore();
         typesService ??= new FakeTypesService();
         dialogs ??= new FakeDialogs();
         saveGameService ??= new FakeSaveGameService();
+        serverProcess ??= new FakeServerProcessState();
+        fileSystem ??= new FakeFileSystem();
+        batchFileService ??= new FakeBatchFileService();
 
         return new MapTypesViewModel(
             mapService,
@@ -32,12 +38,13 @@ public class MapTypesViewModelTests
             saveGameService,
             typesConfigStore,
             new FakeServerConfigService(),
-            new FakeBatchFileService(),
-            new FakeFileSystem(),
+            batchFileService,
+            fileSystem,
             dialogs,
             new LogViewModel(),
             config,
-            new FakeDataDirectoryProvider());
+            new FakeDataDirectoryProvider(),
+            serverProcess);
     }
 
     private static Settings Settings() => new()
@@ -74,6 +81,24 @@ public class MapTypesViewModelTests
         Assert.Equal(MapName, config.CurrentMap);
         Assert.Equal(MapName, vm.SelectedMap);
         Assert.False(store.SaveCalled, "an already-applied valid map should not be re-applied");
+    }
+
+    [Fact]
+    public void ApplyingAMap_NamesProfileFolderAfterMission()
+    {
+        var config = new TypesConfig();
+        var batch = new FakeBatchFileService();
+        var fs = new FakeFileSystem();
+
+        MapTypesViewModel vm = Create(config, batchFileService: batch, fileSystem: fs);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(MapName, config.CurrentMap);
+
+        // The profile folder mirrors the mpmissions mission folder exactly.
+        Assert.Equal($@"map_profiles\{MapName}", batch.LastServerProfile);
+        Assert.True(fs.DirectoryExists($@"{ServerPath}\map_profiles\{MapName}"));
     }
 
     [Fact]
@@ -140,6 +165,34 @@ public class MapTypesViewModelTests
         Assert.Equal(missingMap, config.CurrentMap);
         Assert.Equal(missingMap, vm.SelectedMap);
         Assert.False(store.SaveCalled, "a missing retained map must not trigger an auto-apply");
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_NoServerPath_DoesNotAutoApply()
+    {
+        var config = new TypesConfig();
+        var store = new FakeTypesConfigStore();
+
+        MapTypesViewModel vm = Create(config, typesConfigStore: store);
+        vm.Refresh(new Settings { ServerPath = string.Empty }, Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(string.Empty, config.CurrentMap);
+        Assert.False(store.SaveCalled, "no auto-apply should happen without a configured server path");
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_ConfigOnlyMap_NoServerMap_DoesNotAutoApply()
+    {
+        var config = new TypesConfig { Maps = { [MapName] = new MapTypesConfig() } };
+        var store = new FakeTypesConfigStore();
+
+        MapTypesViewModel vm = Create(config, mapService: new FakeMapService(), typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(string.Empty, config.CurrentMap);
+        Assert.False(store.SaveCalled, "a config-only map with no folder on the server must not be auto-applied");
     }
 
     [Fact]
@@ -414,7 +467,7 @@ public class MapTypesViewModelTests
 
         vm.LoadSaveCommand.Execute(null);
 
-        Assert.True(fakeDialogs.ConfirmCalls >= 1);
+        Assert.True(fakeDialogs.ConfirmWithWarningCalls >= 1);
         Assert.Equal(0, saves.LoadSaveCalls);
     }
 
@@ -471,6 +524,169 @@ public class MapTypesViewModelTests
         await WaitUntilAsync(() => saves.DeleteSaveCalls == 1);
         Assert.Equal(1, saves.DeleteSaveCalls);
         Assert.Equal("Alpha", saves.LastDeleteName);
+    }
+
+    [Fact]
+    public async Task AddSave_CapturesConfigurationSnapshot()
+    {
+        var dialogs = new FakeDialogs { AskTextResult = "First" };
+        var saves = new FakeSaveGameService();
+        var types = new FakeTypesService { ActiveTypeFiles = new[] { "CF_types.xml" } };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), types, dialogs, saveGameService: saves);
+
+        vm.AddSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.AddSaveCalls == 1);
+
+        Assert.NotNull(saves.LastAddMeta);
+        Assert.Equal(MapName, saves.LastAddMeta.Map);
+        Assert.Equal("storage_1", saves.LastAddMeta.StorageFolder);
+        Assert.Equal(new[] { "@CF" }, saves.LastAddMeta.ModList);
+        Assert.Equal(new[] { "CF_types.xml" }, saves.LastAddMeta.TypesFiles);
+        Assert.NotEqual(default, saves.LastAddMeta.SavedAtUtc);
+    }
+
+    [Fact]
+    public async Task LoadSave_MismatchedConfig_WarnsAndLoadsOnConfirm()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService
+        {
+            StoredSaves = new[] { "Alpha" },
+            MetaToReturn = ConfigLoadResult<SaveMetaData>.Success(new SaveMetaData
+            {
+                Map = MapName,
+                ModList = new List<string> { "@CF", "@Extra" },
+                TypesFiles = new List<string> { "Old_types.xml" },
+            }),
+        };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        vm.SelectedSave = "Alpha";
+
+        vm.LoadSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
+
+        Assert.Equal(1, dialogs.ConfirmWithWarningCalls);
+        Assert.Contains("different mod setup", dialogs.LastWarningMessage);
+        Assert.Contains("@Extra", dialogs.LastWarningMessage);
+        Assert.Contains("different active type files", dialogs.LastWarningMessage);
+        Assert.Contains("For investigation", dialogs.LastWarningNote);
+        Assert.Contains("Alpha", dialogs.LastWarningNote);
+        Assert.Equal(1, saves.LoadSaveCalls);
+    }
+
+    [Fact]
+    public async Task LoadSave_MatchingConfig_DoesNotWarn()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService
+        {
+            StoredSaves = new[] { "Alpha" },
+            MetaToReturn = ConfigLoadResult<SaveMetaData>.Success(new SaveMetaData
+            {
+                Map = MapName,
+                StorageFolder = "storage_1",
+                ModList = new List<string> { "@CF" },
+                TypesFiles = new List<string>(),
+            }),
+        };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        vm.SelectedSave = "Alpha";
+
+        vm.LoadSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
+
+        Assert.True(dialogs.ConfirmCalls >= 1);
+        Assert.Equal(0, dialogs.ConfirmWithWarningCalls);
+        Assert.DoesNotContain("different mod setup", dialogs.LastConfirmMessage);
+        Assert.DoesNotContain("configuration snapshot", dialogs.LastConfirmMessage);
+        Assert.Equal(1, saves.LoadSaveCalls);
+    }
+
+    [Fact]
+    public async Task LoadSave_NoSnapshot_WarnsOlderFormat()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        vm.SelectedSave = "Alpha";
+
+        vm.LoadSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
+
+        Assert.Equal(1, dialogs.ConfirmWithWarningCalls);
+        Assert.Contains("no configuration snapshot", dialogs.LastWarningMessage);
+        Assert.Equal(1, saves.LoadSaveCalls);
+    }
+
+    [Fact]
+    public async Task LoadSave_CorruptSnapshot_WarnsUnreadable()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService
+        {
+            StoredSaves = new[] { "Alpha" },
+            MetaToReturn = ConfigLoadResult<SaveMetaData>.Corrupt(),
+        };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        vm.SelectedSave = "Alpha";
+
+        vm.LoadSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
+
+        Assert.Equal(1, dialogs.ConfirmWithWarningCalls);
+        Assert.Contains("snapshot is unreadable", dialogs.LastWarningMessage);
+        Assert.Equal(1, saves.LoadSaveCalls);
+    }
+
+    [Fact]
+    public void AddSave_Blocked_WhenServerRunning()
+    {
+        var dialogs = new FakeDialogs();
+        var saves = new FakeSaveGameService();
+        var process = new FakeServerProcessState { Running = true };
+
+        MapTypesViewModel vm = Create(AppliedConfig(), dialogs: dialogs, saveGameService: saves, serverProcess: process);
+
+        vm.AddSaveCommand.Execute(null);
+
+        Assert.Equal(0, saves.AddSaveCalls);
+        Assert.Contains("server is running", dialogs.LastErrorMessage);
+    }
+
+    [Fact]
+    public void LoadSave_Blocked_WhenServerRunning()
+    {
+        var dialogs = new FakeDialogs();
+        var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var process = new FakeServerProcessState { Running = true };
+
+        MapTypesViewModel vm = Create(AppliedConfig(), dialogs: dialogs, saveGameService: saves, serverProcess: process);
+        vm.SelectedSave = "Alpha";
+
+        vm.LoadSaveCommand.Execute(null);
+
+        Assert.Equal(0, saves.LoadSaveCalls);
+        Assert.Contains("server is running", dialogs.LastErrorMessage);
+    }
+
+    [Fact]
+    public void NewGame_Blocked_WhenServerRunning()
+    {
+        var dialogs = new FakeDialogs();
+        var saves = new FakeSaveGameService();
+        var process = new FakeServerProcessState { Running = true };
+
+        MapTypesViewModel vm = Create(AppliedConfig(), dialogs: dialogs, saveGameService: saves, serverProcess: process);
+
+        vm.NewGameCommand.Execute(null);
+
+        Assert.Equal(0, saves.NewGameCalls);
+        Assert.Contains("server is running", dialogs.LastErrorMessage);
     }
 
     private sealed class FakeMapService : IMapService
@@ -546,6 +762,11 @@ public class MapTypesViewModelTests
         public bool SyncEconomyCore(TypesConfig config, string mapName, string missionPath, IReadOnlySet<string> loadedModNames) =>
             true;
 
+        public IReadOnlyList<string> ActiveTypeFiles { get; set; } = Array.Empty<string>();
+
+        public IReadOnlyList<string> GetActiveTypeFileNames(
+            TypesConfig config, string mapName, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
+
         private static string? RelativeWithin(string basePath, string fullPath)
         {
             string relative = Path.GetRelativePath(basePath, fullPath);
@@ -577,7 +798,13 @@ public class MapTypesViewModelTests
 
         public bool WriteModList(string batFilePath, IReadOnlyList<string> modNames) => true;
 
-        public bool WriteServerProfile(string batFilePath, string relativeProfile) => true;
+        public string? LastServerProfile { get; private set; }
+
+        public bool WriteServerProfile(string batFilePath, string relativeProfile)
+        {
+            LastServerProfile = relativeProfile;
+            return true;
+        }
     }
 
     private sealed class FakeSaveGameService : ISaveGameService
@@ -589,6 +816,10 @@ public class MapTypesViewModelTests
         public string? LastAddName { get; private set; }
 
         public bool LastAddOverwrite { get; private set; }
+
+        public SaveMetaData? LastAddMeta { get; private set; }
+
+        public ConfigLoadResult<SaveMetaData> MetaToReturn { get; set; } = ConfigLoadResult<SaveMetaData>.Missing();
 
         public int LoadSaveCalls { get; private set; }
 
@@ -607,11 +838,15 @@ public class MapTypesViewModelTests
 
         public IReadOnlyList<string> ListSaves(string dataDirectory, string mapName) => StoredSaves;
 
-        public SaveGameResult AddSave(string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite)
+        public string GetSaveFolderPath(string dataDirectory, string mapName, string saveName) =>
+            Path.Combine(dataDirectory, "Progress_Saves", mapName, saveName);
+
+        public SaveGameResult AddSave(string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite, SaveMetaData? meta = null)
         {
             AddSaveCalls++;
             LastAddName = saveName;
             LastAddOverwrite = overwrite;
+            LastAddMeta = meta;
             return new SaveGameResult { Success = true, Message = $"Saved \"{saveName}\"." };
         }
 
@@ -621,6 +856,8 @@ public class MapTypesViewModelTests
             LastLoadName = saveName;
             return new SaveGameResult { Success = true, Message = $"Loaded \"{saveName}\"." };
         }
+
+        public ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName) => MetaToReturn;
 
         public SaveGameResult NewGame(string serverPath, string mapName)
         {
@@ -638,7 +875,9 @@ public class MapTypesViewModelTests
 
     private sealed class FakeFileSystem : IFileSystem
     {
-        public bool DirectoryExists(string path) => false;
+        private readonly HashSet<string> _directories = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool DirectoryExists(string path) => _directories.Contains(path);
 
         public IReadOnlyList<string> GetDirectories(string path) => Array.Empty<string>();
 
@@ -654,11 +893,11 @@ public class MapTypesViewModelTests
 
         public void WriteAllText(string path, string contents) { }
 
-        public void CreateDirectory(string path) { }
+        public void CreateDirectory(string path) => _directories.Add(path);
 
         public void CopyDirectory(string sourcePath, string destinationPath) { }
 
-        public void DeleteDirectory(string path, bool recursive) { }
+        public void DeleteDirectory(string path, bool recursive) => _directories.Remove(path);
 
         public void MoveDirectory(string sourcePath, string destinationPath) { }
     }
@@ -674,6 +913,13 @@ public class MapTypesViewModelTests
         public void MoveTo(string directory, Settings settings) { }
     }
 
+    private sealed class FakeServerProcessState : IDayZServerProcessState
+    {
+        public bool Running { get; set; }
+
+        public bool IsDayZServerRunning() => Running;
+    }
+
     private sealed class FakeDialogs : IDialogService
     {
         public bool ConfirmResult { get; set; } = true;
@@ -682,18 +928,43 @@ public class MapTypesViewModelTests
 
         public string? LastConfirmMessage { get; private set; }
 
+        public int ConfirmWithWarningCalls { get; private set; }
+
+        public string? LastWarningMessage { get; private set; }
+
+        public string? LastWarningNote { get; private set; }
+
         public IReadOnlyList<string>? SelectedFiles { get; set; }
 
         public IReadOnlySet<string>? LastActiveFiles { get; private set; }
 
         public string? AskTextResult { get; set; } = null;
 
-        public void ShowMessage(string message, string title, bool isError = false) { }
+        public string? LastErrorMessage { get; private set; }
+
+        public string? LastErrorTitle { get; private set; }
+
+        public void ShowMessage(string message, string title, bool isError = false)
+        {
+            if (isError)
+            {
+                LastErrorMessage = message;
+                LastErrorTitle = title;
+            }
+        }
 
         public bool Confirm(string message, string title)
         {
             ConfirmCalls++;
             LastConfirmMessage = message;
+            return ConfirmResult;
+        }
+
+        public bool ConfirmWithWarning(string message, string title, string warning, string note = "")
+        {
+            ConfirmWithWarningCalls++;
+            LastWarningMessage = warning;
+            LastWarningNote = note;
             return ConfirmResult;
         }
 

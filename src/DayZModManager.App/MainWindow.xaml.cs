@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.Collections.Generic;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -21,6 +22,29 @@ public partial class MainWindow : Window
         AvailableListBox.GotKeyboardFocus += (_, _) => _activeModList = AvailableListBox;
     }
 
+    private void AutoCleanServerLogsCheckBox_Loaded(object sender, RoutedEventArgs e)
+    {
+        // Reflect the persisted value once the element is realized (the Settings
+        // tab content is only created on first selection). Double-writes are
+        // harmless, and this no longer relies on the IsChecked binding.
+        if (DataContext is MainViewModel viewModel
+            && AutoCleanServerLogsCheckBox.IsChecked != viewModel.Settings.AutoCleanServerLogs)
+        {
+            AutoCleanServerLogsCheckBox.IsChecked = viewModel.Settings.AutoCleanServerLogs;
+        }
+    }
+
+    private void AutoCleanServerLogs_Click(object sender, RoutedEventArgs e)
+    {
+        // Belt-and-braces: the two-way binding normally writes the value, but if
+        // it ever fails the click still reaches the view model so Apply persists
+        // the ticked state. Setting the same value again is a no-op.
+        if (sender is CheckBox { DataContext: SettingsViewModel settings } box)
+        {
+            settings.AutoCleanServerLogs = box.IsChecked == true;
+        }
+    }
+
     private void LogListBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
@@ -35,9 +59,14 @@ public partial class MainWindow : Window
                 return;
             }
 
+            var selected = new HashSet<object>(LogListBox.SelectedItems.Cast<object>());
             string text = string.Join(
                 Environment.NewLine,
-                LogListBox.SelectedItems.Cast<LogEntry>().Select(entry => entry.Message));
+                LogListBox.Items
+                    .Cast<object>()
+                    .Where(selected.Contains)
+                    .OfType<LogEntry>()
+                    .Select(entry => entry.Message));
 
             if (text.Length > 0)
             {

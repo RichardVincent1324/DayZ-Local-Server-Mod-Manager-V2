@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DayZModManager.Core.Abstractions;
+using DayZModManager.Core.Models;
 
 namespace DayZModManager.Core.Services;
 
@@ -14,8 +15,11 @@ public sealed record SaveGameResult
 /// <summary>
 /// Manages world-progress saves for a DayZ mission. The live data lives in
 /// <c>mpmissions\&lt;mapName&gt;\storage_&lt;instanceId&gt;</c> (instanceId from
-/// serverDZ.cfg); copies are stored under
-/// <c>&lt;dataDirectory&gt;\Saves\&lt;mapName&gt;\&lt;saveName&gt;</c>.
+/// serverDZ.cfg); each stored save lives under
+/// <c>&lt;dataDirectory&gt;\Progress_Saves\&lt;mapName&gt;\&lt;saveName&gt;</c>
+/// and holds a nested copy of the storage folder plus a <c>meta.json</c>
+/// configuration snapshot. Saves created before meta.json existed (flat folder
+/// layout) are still loadable.
 /// </summary>
 public interface ISaveGameService
 {
@@ -31,15 +35,34 @@ public interface ISaveGameService
     /// <summary>Returns the names of saved progress folders for a map.</summary>
     IReadOnlyList<string> ListSaves(string dataDirectory, string mapName);
 
-    /// <summary>Copies the live storage folder into the save library.</summary>
-    SaveGameResult AddSave(string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite);
+    /// <summary>
+    /// Returns the full folder path of a stored save (where its storage folder and
+    /// <c>meta.json</c> live).
+    /// </summary>
+    string GetSaveFolderPath(string dataDirectory, string mapName, string saveName);
+
+    /// <summary>
+    /// Copies the live storage folder into the save library (nested under the
+    /// save folder). When <paramref name="meta"/> is supplied it is written to
+    /// <c>meta.json</c> next to the copied folder.
+    /// </summary>
+    SaveGameResult AddSave(
+        string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
+        SaveMetaData? meta = null);
 
     /// <summary>
     /// Replaces the live storage folder with a stored save. The replacement is
     /// staged to a temporary folder first so the current progress is not lost if
-    /// the copy fails.
+    /// the copy fails. Supports the current nested layout as well as the legacy
+    /// flat layout used before configuration snapshots existed.
     /// </summary>
     SaveGameResult LoadSave(string serverPath, string mapName, string dataDirectory, string saveName);
+
+    /// <summary>
+    /// Reads the configuration snapshot of a stored save. Missing when the save
+    /// has no <c>meta.json</c> (older-format save).
+    /// </summary>
+    ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName);
 
     /// <summary>Deletes the live storage folder so the map starts fresh.</summary>
     SaveGameResult NewGame(string serverPath, string mapName);
@@ -51,9 +74,15 @@ public interface ISaveGameService
 public sealed partial class SaveGameService : ISaveGameService
 {
     /// <summary>Folder under the data directory that hosts the save library.</summary>
-    internal const string SavesRootName = "Saves";
+    internal const string SavesRootName = "Progress_Saves";
+
+    /// <summary>File name of the configuration snapshot stored inside each save folder.</summary>
+    internal const string MetaFileName = "meta.json";
 
     private const string TemporarySuffix = ".restore";
+
+    /// <summary>Prefix for the hidden staging folder used while building a save.</summary>
+    private const string StagingPrefix = ".save_";
 
     private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -63,10 +92,12 @@ public sealed partial class SaveGameService : ISaveGameService
     };
 
     private readonly IFileSystem _fileSystem;
+    private readonly IDayZServerProcessState _processState;
 
-    public SaveGameService(IFileSystem fileSystem)
+    public SaveGameService(IFileSystem fileSystem, IDayZServerProcessState processState)
     {
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+        _processState = processState ?? throw new ArgumentNullException(nameof(processState));
     }
 
     public int ReadInstanceId(string serverPath)
@@ -101,8 +132,18 @@ public sealed partial class SaveGameService : ISaveGameService
             .ToList();
     }
 
-    public SaveGameResult AddSave(string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite)
+    public string GetSaveFolderPath(string dataDirectory, string mapName, string saveName) =>
+        Path.Combine(SavesLibrary(dataDirectory, mapName), saveName);
+
+    public SaveGameResult AddSave(
+        string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
+        SaveMetaData? meta = null)
     {
+        if (_processState.IsDayZServerRunning())
+        {
+            return Failure("The DayZ server is running. Stop it before saving progress so the storage folder is not corrupted.");
+        }
+
         string? name = NormalizeSaveName(saveName);
         if (name is null)
         {
@@ -121,19 +162,71 @@ public sealed partial class SaveGameService : ISaveGameService
             return Failure($"A save named \"{name}\" already exists.");
         }
 
+        // Build the complete save in a hidden staging folder (outside the per-map
+        // library so it can never appear in the save list). The previous save is
+        // only replaced once the new one is fully written, so a failure never
+        // deletes an existing save or leaves a partial one behind.
+        string staging = Path.Combine(SavesRootPath(dataDirectory), StagingPrefix + Guid.NewGuid().ToString("N"));
         try
         {
             _fileSystem.CreateDirectory(Path.GetDirectoryName(target)!);
-            if (_fileSystem.DirectoryExists(target))
-            {
-                _fileSystem.DeleteDirectory(target, recursive: true);
-            }
-
-            _fileSystem.CopyDirectory(liveStorage, target);
+            _fileSystem.CreateDirectory(staging);
+            // Store the storage folder nested so the snapshot meta.json can sit
+            // beside it without mixing into the world data.
+            _fileSystem.CopyDirectory(liveStorage, Path.Combine(staging, Path.GetFileName(liveStorage)));
         }
         catch (Exception ex)
         {
+            TryDeleteDirectory(staging);
             return Failure($"Failed to save progress: {ex.Message}");
+        }
+
+        if (meta is not null)
+        {
+            meta.Map = string.IsNullOrWhiteSpace(meta.Map) ? mapName : meta.Map;
+            meta.StorageFolder = Path.GetFileName(liveStorage);
+
+            try
+            {
+                ConfigJson.Write(_fileSystem, Path.Combine(staging, MetaFileName), meta);
+            }
+            catch (Exception ex)
+            {
+                // Do not leave a save that cannot be verified against its config.
+                TryDeleteDirectory(staging);
+                return Failure($"Failed to save configuration snapshot: {ex.Message}");
+            }
+        }
+
+        // Promote the staged save into place.
+        string backup = target + ".old";
+        try
+        {
+            TryDeleteDirectory(backup);
+            if (_fileSystem.DirectoryExists(target))
+            {
+                _fileSystem.MoveDirectory(target, backup);
+            }
+
+            _fileSystem.MoveDirectory(staging, target);
+        }
+        catch (Exception ex)
+        {
+            // Roll the previous save back if promotion fails.
+            if (!_fileSystem.DirectoryExists(target) && _fileSystem.DirectoryExists(backup))
+            {
+                TryMoveDirectory(backup, target);
+            }
+
+            TryDeleteDirectory(staging);
+            return Failure($"Failed to finalize the save: {ex.Message}");
+        }
+
+        TryDeleteDirectory(backup);
+
+        if (meta is not null)
+        {
+            return Success($"Saved current progress as \"{name}\" ({meta.ModList.Count} mod(s), {meta.TypesFiles.Count} type file(s)).");
         }
 
         return Success($"Saved current progress as \"{name}\".");
@@ -141,14 +234,19 @@ public sealed partial class SaveGameService : ISaveGameService
 
     public SaveGameResult LoadSave(string serverPath, string mapName, string dataDirectory, string saveName)
     {
+        if (_processState.IsDayZServerRunning())
+        {
+            return Failure("The DayZ server is running. Stop it before loading a save so the current progress is not corrupted.");
+        }
+
         string? name = NormalizeSaveName(saveName);
         if (name is null)
         {
             return Failure("Invalid save name.");
         }
 
-        string source = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
-        if (!_fileSystem.DirectoryExists(source))
+        string saveFolder = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
+        if (!_fileSystem.DirectoryExists(saveFolder))
         {
             return Failure($"Save \"{name}\" was not found.");
         }
@@ -159,7 +257,15 @@ public sealed partial class SaveGameService : ISaveGameService
             return Failure($"Mission folder not found: {missionPath}");
         }
 
+        string? sourceRoot = ResolveSavedContentRoot(saveFolder);
+        if (sourceRoot is null)
+        {
+            return Failure($"Save \"{name}\" contains no storage data.");
+        }
+
         string liveStorage = GetStorageFolderPath(serverPath, mapName);
+        CleanStaleRestoreFolders(liveStorage);
+
         string temp = liveStorage + TemporarySuffix + "_" + Guid.NewGuid().ToString("N");
         string backup = liveStorage + ".old";
 
@@ -168,7 +274,7 @@ public sealed partial class SaveGameService : ISaveGameService
             // Stage a fresh copy first. Until it succeeds, the live folder (and
             // any .old backup left by an earlier interrupted load) stays intact,
             // so a failed copy can never destroy the current progress.
-            _fileSystem.CopyDirectory(source, temp);
+            _fileSystem.CopyDirectory(sourceRoot, temp);
 
             if (_fileSystem.DirectoryExists(liveStorage))
             {
@@ -208,8 +314,71 @@ public sealed partial class SaveGameService : ISaveGameService
         return Success($"Loaded save \"{name}\" into {Path.GetFileName(liveStorage)}.");
     }
 
+    public ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName)
+    {
+        string metaPath = Path.Combine(SavesLibrary(dataDirectory, mapName), saveName, MetaFileName);
+        return ConfigJson.Read<SaveMetaData>(_fileSystem, metaPath);
+    }
+
+    /// <summary>
+    /// Resolves the folder whose contents represent a stored save's world data.
+    /// Prefers the nested layout (the storage folder recorded in meta.json, or a
+    /// lone sub-folder of a meta-less save). The legacy flat layout is only used
+    /// for saves without meta.json; when a meta.json exists but no usable storage
+    /// folder can be resolved, null is returned so the save is reported as corrupt
+    /// rather than copying meta.json or stray files into the live world.
+    /// </summary>
+    private string? ResolveSavedContentRoot(string saveFolder)
+    {
+        string metaPath = Path.Combine(saveFolder, MetaFileName);
+        bool hasMeta = _fileSystem.FileExists(metaPath);
+        bool metaValid = false;
+        if (hasMeta)
+        {
+            ConfigLoadResult<SaveMetaData> meta = ConfigJson.Read<SaveMetaData>(_fileSystem, metaPath);
+            metaValid = meta.Status == ConfigLoadStatus.Success && !string.IsNullOrWhiteSpace(meta.Value!.StorageFolder);
+            if (metaValid)
+            {
+                string nested = Path.Combine(saveFolder, meta.Value!.StorageFolder);
+                if (_fileSystem.DirectoryExists(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+
+        // A lone sub-folder with no direct world files is treated as nested
+        // (covers meta-less and interrupted new-format saves). meta.json itself
+        // does not count as a direct file.
+        IReadOnlyList<string> directFiles = _fileSystem.GetFiles(saveFolder, "*", recursive: false);
+        bool hasNonMetaFiles = directFiles.Any(file =>
+            !string.Equals(Path.GetFileName(file), MetaFileName, StringComparison.OrdinalIgnoreCase));
+        IReadOnlyList<string> children = _fileSystem.GetDirectories(saveFolder);
+        if (children.Count == 1
+            && !hasNonMetaFiles
+            && _fileSystem.DirectoryExists(Path.Combine(saveFolder, children[0])))
+        {
+            return Path.Combine(saveFolder, children[0]);
+        }
+
+        // Legacy layout: the storage contents were copied directly into the save
+        // folder. Only applies to saves without a snapshot.
+        if (!hasMeta && hasNonMetaFiles)
+        {
+            return saveFolder;
+        }
+
+        // No clean storage data could be resolved.
+        return null;
+    }
+
     public SaveGameResult NewGame(string serverPath, string mapName)
     {
+        if (_processState.IsDayZServerRunning())
+        {
+            return Failure("The DayZ server is running. Stop it before starting a new game so the storage folder is not corrupted.");
+        }
+
         string liveStorage = GetStorageFolderPath(serverPath, mapName);
         if (!_fileSystem.DirectoryExists(liveStorage))
         {
@@ -255,7 +424,10 @@ public sealed partial class SaveGameService : ISaveGameService
     }
 
     private string SavesLibrary(string dataDirectory, string mapName) =>
-        Path.Combine(dataDirectory, SavesRootName, mapName);
+        Path.Combine(SavesRootPath(dataDirectory), mapName);
+
+    private string SavesRootPath(string dataDirectory) =>
+        Path.Combine(dataDirectory, SavesRootName);
 
     private static string? NormalizeSaveName(string? saveName)
     {
@@ -291,6 +463,57 @@ public sealed partial class SaveGameService : ISaveGameService
         catch (Exception)
         {
             // Best effort: a locked file must not break the surrounding operation.
+        }
+    }
+
+    /// <summary>Moves a folder, ignoring failures (used for best-effort rollback).</summary>
+    private void TryMoveDirectory(string source, string destination)
+    {
+        try
+        {
+            if (_fileSystem.DirectoryExists(source))
+            {
+                _fileSystem.MoveDirectory(source, destination);
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: a failed rollback still leaves the data in the backup.
+        }
+    }
+
+    /// <summary>
+    /// Removes stale <c>storage_&lt;id&gt;.restore*</c> staging folders left behind
+    /// in the mission folder by interrupted loads. Never throws.
+    /// </summary>
+    private void CleanStaleRestoreFolders(string liveStorage)
+    {
+        string? missionPath = Path.GetDirectoryName(liveStorage);
+        string leaf = Path.GetFileName(liveStorage);
+        if (string.IsNullOrWhiteSpace(missionPath) || string.IsNullOrWhiteSpace(leaf))
+        {
+            return;
+        }
+
+        string prefix = leaf + TemporarySuffix;
+        try
+        {
+            if (!_fileSystem.DirectoryExists(missionPath))
+            {
+                return;
+            }
+
+            foreach (string name in _fileSystem.GetDirectories(missionPath))
+            {
+                if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDeleteDirectory(Path.Combine(missionPath, name));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort cleanup must never fail the load.
         }
     }
 

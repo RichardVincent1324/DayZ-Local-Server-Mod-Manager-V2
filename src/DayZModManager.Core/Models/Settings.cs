@@ -5,7 +5,7 @@ namespace DayZModManager.Core.Models;
 /// </summary>
 public sealed record Settings
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public string WorkshopPath { get; init; } = string.Empty;
 
@@ -18,11 +18,12 @@ public sealed record Settings
     public string BatFileName { get; init; } = "LocalServer.example.bat";
 
     /// <summary>
-    /// Optional override for the directory where configuration data files are
-    /// stored. When empty, the directory is derived from <see cref="ServerPath"/>
-    /// (a per-server subfolder) or the legacy AppData location.
+    /// When enabled, old DayZ server log files (the DayZServer_x64_*.RPT and
+    /// script_*.log files in the active map's profile folder) are pruned to the
+    /// three most recent of each. Cleanup runs on app start, after an Apply, and
+    /// before starting the server.
     /// </summary>
-    public string DataDirectory { get; init; } = string.Empty;
+    public bool AutoCleanServerLogs { get; init; }
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
@@ -30,5 +31,5 @@ public sealed record Settings
     /// Full path to the launch batch file. A rooted <see cref="BatFileName"/> is
     /// used directly; otherwise it is combined with <see cref="ServerPath"/>.
     /// </summary>
-    public string BatFilePath => Path.IsPathRooted(BatFileName) ? BatFileName : Path.Combine(ServerPath, BatFileName);
+        public string BatFilePath => Path.IsPathRooted(BatFileName) ? BatFileName : Path.Combine(ServerPath, BatFileName);
 }

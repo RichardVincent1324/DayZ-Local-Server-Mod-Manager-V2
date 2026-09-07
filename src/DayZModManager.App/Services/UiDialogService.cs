@@ -15,6 +15,17 @@ public sealed class UiDialogService : IDialogService
     public bool Confirm(string message, string title) =>
         MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 
+    public bool ConfirmWithWarning(string message, string title, string warning, string note = "")
+    {
+        if (string.IsNullOrWhiteSpace(warning))
+        {
+            return Confirm(message, title);
+        }
+
+        var window = new WarningConfirmWindow(message, title, warning, note);
+        return window.ShowDialog() == true;
+    }
+
     public string? AskText(string title, string prompt, string defaultValue = "")
     {
         var window = new TextPromptWindow(title, prompt, defaultValue);

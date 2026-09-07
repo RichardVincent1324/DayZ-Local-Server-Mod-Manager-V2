@@ -7,6 +7,14 @@ public interface IDialogService
 
     bool Confirm(string message, string title);
 
+    /// <summary>
+    /// Confirmation whose <paramref name="warning"/> (when non-empty) is rendered
+    /// prominently in red above the Yes/No buttons so it cannot be missed. A plain
+    /// <paramref name="note"/> (e.g. a path for investigation) is shown in normal
+    /// text below the warning.
+    /// </summary>
+    bool ConfirmWithWarning(string message, string title, string warning, string note = "");
+
     /// <summary>Opens a folder picker. Returns the chosen path, or null if cancelled.</summary>
     string? PickFolder(string title = "Select a folder");
 

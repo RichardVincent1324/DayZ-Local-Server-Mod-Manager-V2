@@ -3,96 +3,83 @@ using DayZModManager.Core.Models;
 
 namespace DayZModManager.Core.Services;
 
-/// <summary>
-/// Resolves the directory where configuration data files are persisted and
-/// orchestrates relocation when that location changes.
-/// </summary>
-public interface IDataDirectoryProvider
-{
-    /// <summary>Current effective data directory.</summary>
-    string Current { get; }
-
-    /// <summary>Runs the startup bootstrap: rediscovers or pins the active data directory.</summary>
-    void Initialize();
-
     /// <summary>
-    /// Resolves the effective data directory for a settings snapshot, honoring an
-    /// explicit override, a previously pinned location, or (for a fresh install)
-    /// the server-path derived default.
+    /// Resolves the directory where configuration data files are persisted and
+    /// orchestrates relocation when that location changes.
     /// </summary>
-    string Resolve(Settings settings);
-
-    /// <summary>
-    /// Moves existing data files to <paramref name="directory"/>, persists
-    /// <paramref name="settings"/> there, updates the pointer anchor, and makes
-    /// it the current data directory.
-    /// </summary>
-    void MoveTo(string directory, Settings settings);
-}
-
-public sealed class DataDirectoryProvider : IDataDirectoryProvider
-{
-    private static readonly string[] DataFileNames =
+    public interface IDataDirectoryProvider
     {
-        ConfigFileNames.Settings,
-        ConfigFileNames.ModOrder,
-        ConfigFileNames.TypesConfig,
-    };
+        /// <summary>Current effective data directory.</summary>
+        string Current { get; }
 
-    private readonly IFileSystem _fileSystem;
+        /// <summary>Runs the startup bootstrap: rediscovers the active data directory.</summary>
+        void Initialize();
 
-    private string _current = string.Empty;
-    private bool _pinned;
+        /// <summary>
+        /// Resolves the effective data directory for a settings snapshot: a
+        /// per-server subfolder under the server path once configured, otherwise
+        /// the legacy bootstrap directory.
+        /// </summary>
+        string Resolve(Settings settings);
 
-    public DataDirectoryProvider(IFileSystem fileSystem)
-    {
-        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+        /// <summary>
+        /// Moves existing data files to <paramref name="directory"/>, persists
+        /// <paramref name="settings"/> there, updates the pointer anchor, and makes
+        /// it the current data directory.
+        /// </summary>
+        void MoveTo(string directory, Settings settings);
     }
 
-    public string Current => _current;
-
-    public void Initialize()
+    public sealed class DataDirectoryProvider : IDataDirectoryProvider
     {
-        string legacy = AppPaths.LegacyDirectory();
-        string pointerPath = PointerPath();
-
-        if (_fileSystem.FileExists(pointerPath))
+        // Only the types configuration must be carried across a relocation: the
+        // ApplyService authors settings.json and mod_order.json into the target
+        // directory before MoveTo runs (and MoveTo re-authors settings.json), so
+        // migrating those two over the freshly-written copies would clobber the
+        // just-applied mod order. Saves are migrated separately.
+        private static readonly string[] DataFileNames =
         {
-            string? pointed = ReadPointer();
-            _current = string.IsNullOrWhiteSpace(pointed) ? legacy : pointed;
-            _pinned = true;
-            return;
+            ConfigFileNames.TypesConfig,
+        };
+
+        private readonly IFileSystem _fileSystem;
+
+        private string _current = string.Empty;
+
+        public DataDirectoryProvider(IFileSystem fileSystem)
+        {
+            _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         }
 
-        if (_fileSystem.FileExists(Path.Combine(legacy, ConfigFileNames.Settings)))
+        public string Current => _current;
+
+        public void Initialize()
         {
-            // Existing install: keep the legacy location until the user changes it.
-            WritePointer(legacy);
+            string legacy = AppPaths.LegacyDirectory();
+            string pointerPath = PointerPath();
+
+            if (_fileSystem.FileExists(pointerPath))
+            {
+                string? pointed = ReadPointer();
+
+                // Honor the pointer only while it points at a directory that still
+                // exists. A stale pointer (e.g. the data folder was deleted) must not
+                // pin the app to a location that would be silently recreated empty.
+                if (!string.IsNullOrWhiteSpace(pointed)
+                    && _fileSystem.DirectoryExists(pointed))
+                {
+                    _current = pointed;
+                    return;
+                }
+            }
+
+            // Bootstrap at the legacy anchor until a server path is configured; the
+            // server-path derived default is adopted once an Apply relocates there.
             _current = legacy;
-            _pinned = true;
-            return;
         }
 
-        // Fresh install: start at the bootstrap anchor. The server-path derived
-        // default is adopted once a server path is configured.
-        _current = legacy;
-        _pinned = false;
-    }
-
-    public string Resolve(Settings settings)
-    {
-        if (!string.IsNullOrWhiteSpace(settings.DataDirectory))
-        {
-            return settings.DataDirectory;
-        }
-
-        if (_pinned)
-        {
-            return _current;
-        }
-
-        return AppPaths.Resolve(null, settings.ServerPath);
-    }
+        public string Resolve(Settings settings) =>
+            AppPaths.Resolve(settings.ServerPath);
 
     public void MoveTo(string directory, Settings settings)
     {
@@ -106,7 +93,6 @@ public sealed class DataDirectoryProvider : IDataDirectoryProvider
         }
 
         _current = target;
-        _pinned = true;
         WritePointer(target);
 
         ConfigJson.Write(_fileSystem, Path.Combine(target, ConfigFileNames.Settings), settings);

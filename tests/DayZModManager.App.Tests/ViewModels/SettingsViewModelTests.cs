@@ -1,6 +1,7 @@
 using System.IO;
 using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
+using DayZModManager.Core;
 using DayZModManager.Core.Models;
 
 namespace DayZModManager.App.Tests.ViewModels;
@@ -16,7 +17,7 @@ public class SettingsViewModelTests
             WorkshopPath = @"D:\workshop",
             ServerPath = @"D:\server",
             BatFileName = "LocalServer.bat",
-            DataDirectory = @"D:\custom-data",
+            AutoCleanServerLogs = true,
         };
 
         vm.Load(settings);
@@ -25,7 +26,7 @@ public class SettingsViewModelTests
         Assert.Equal(@"D:\workshop", vm.WorkshopPath);
         Assert.Equal(@"D:\server", vm.ServerPath);
         Assert.Equal("LocalServer.bat", vm.BatFileName);
-        Assert.Equal(@"D:\custom-data", vm.DataDirectory);
+        Assert.True(vm.AutoCleanServerLogs);
     }
 
     [Fact]
@@ -40,75 +41,122 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public void TogglingAutoCleanServerLogs_MarksDirty_UntilApplied()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings());
+        Assert.False(vm.AutoCleanServerLogs);
+
+        vm.AutoCleanServerLogs = true;
+
+        Assert.True(vm.IsDirty);
+        vm.MarkApplied(vm.ToSettings());
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void ClickValueWrite_ReflectsCheckedAndUncheckedStates()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings());
+        Assert.False(vm.IsDirty);
+
+        // Same write the checkbox Click handler performs (box.IsChecked == true).
+        bool checkedValue = true;
+        vm.AutoCleanServerLogs = checkedValue;
+
+        Assert.True(vm.AutoCleanServerLogs);
+        Assert.True(vm.IsDirty);
+        Assert.True(vm.ToSettings().AutoCleanServerLogs);
+
+        vm.MarkApplied(vm.ToSettings());
+        checkedValue = false;
+        vm.AutoCleanServerLogs = checkedValue;
+
+        Assert.False(vm.AutoCleanServerLogs);
+        Assert.True(vm.IsDirty);
+        Assert.False(vm.ToSettings().AutoCleanServerLogs);
+    }
+
+    [Fact]
+    public void TogglingAutoClean_WithPathsConfigured_RaisesApplyRequested()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        int raises = 0;
+        vm.ApplyRequested += () => raises++;
+
+        vm.AutoCleanServerLogs = true;
+        Assert.Equal(1, raises);
+
+        vm.AutoCleanServerLogs = false;
+        Assert.Equal(2, raises);
+    }
+
+    [Fact]
+    public void TogglingAutoClean_WithoutPathsConfigured_DoesNotAutoApply()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings());
+        int raises = 0;
+        vm.ApplyRequested += () => raises++;
+
+        vm.AutoCleanServerLogs = true;
+
+        Assert.Equal(0, raises);
+        Assert.True(vm.IsDirty);
+        Assert.True(vm.ToSettings().AutoCleanServerLogs);
+    }
+
+    [Fact]
+    public void SettingSameAutoCleanValueTwice_RaisesOnlyOnce()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        int raises = 0;
+        vm.ApplyRequested += () => raises++;
+
+        vm.AutoCleanServerLogs = true;
+        vm.AutoCleanServerLogs = true;
+
+        Assert.Equal(1, raises);
+    }
+
+    [Fact]
     public void ToSettings_RoundTripsValues()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
         vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "b.bat" });
 
         vm.WorkshopPath = "ws2";
+        vm.AutoCleanServerLogs = true;
 
         Settings result = vm.ToSettings();
 
         Assert.Equal("ws2", result.WorkshopPath);
         Assert.Equal("srv", result.ServerPath);
         Assert.Equal("b.bat", result.BatFileName);
+        Assert.True(result.AutoCleanServerLogs);
     }
 
     [Fact]
-    public void SettingDataDirectory_MarksDirty()
-    {
-        var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { DataDirectory = @"D:\a" });
-
-        vm.DataDirectory = @"D:\b";
-
-        Assert.True(vm.IsDirty);
-    }
-
-    [Fact]
-    public void ToSettings_IncludesDataDirectory()
-    {
-        var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings());
-        vm.DataDirectory = @"D:\data";
-
-        Assert.Equal(@"D:\data", vm.ToSettings().DataDirectory);
-    }
-
-    [Fact]
-    public void EffectiveDataDirectory_WithoutOverride_UsesServerPathDefault()
+    public void EffectiveDataDirectory_WithServerPath_UsesServerPathDefault()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
         vm.Load(new Settings { ServerPath = @"D:\DayZServer" });
 
         Assert.Equal(
-            Path.Combine(@"D:\DayZServer", "DayZ-Local-Server-Mod-Manager-Data"),
+            Path.Combine(@"D:\DayZServer", AppPaths.DataDirectoryName),
             vm.EffectiveDataDirectory);
     }
 
     [Fact]
-    public void EffectiveDataDirectory_WithOverride_UsesOverride()
+    public void EffectiveDataDirectory_WithoutServerPath_UsesLegacyDirectory()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { ServerPath = @"D:\DayZServer" });
+        vm.Load(new Settings());
 
-        vm.DataDirectory = @"D:\custom";
-
-        Assert.Equal(@"D:\custom", vm.EffectiveDataDirectory);
-    }
-
-    [Fact]
-    public void BrowseDataDirectory_SetsPath_AndRaisesDataDirectoryChanged()
-    {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked-data" };
-        var vm = new SettingsViewModel(dialogs);
-        bool raised = false;
-        vm.DataDirectoryChanged += () => raised = true;
-
-        vm.BrowseDataDirectoryCommand.Execute(null);
-
-        Assert.Equal(@"D:\picked-data", vm.DataDirectory);
-        Assert.True(raised);
+        Assert.Equal(AppPaths.LegacyDirectory(), vm.EffectiveDataDirectory);
     }
 
     [Fact]
@@ -206,6 +254,8 @@ public class SettingsViewModelTests
         public void ShowMessage(string message, string title, bool isError = false) { }
 
         public bool Confirm(string message, string title) => true;
+
+        public bool ConfirmWithWarning(string message, string title, string warning, string note = "") => true;
 
         public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
 

@@ -12,8 +12,8 @@ public class SettingsTests
 
         Assert.Equal(Path.Combine(@"D:\DayZServer", "run.bat"), settings.BatFilePath);
     }
-
-    [Fact]
+	
+	[Fact]
     public void BatFilePath_UsesRootedPath_AsIs()
     {
         string rooted = Path.GetFullPath(Path.Combine("subdir", "run.bat"));

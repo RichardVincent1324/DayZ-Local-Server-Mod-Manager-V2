@@ -25,7 +25,10 @@ namespace DayZModManager.Core.Services;
         /// <summary>
         /// Moves existing data files to <paramref name="directory"/>, persists
         /// <paramref name="settings"/> there, updates the pointer anchor, and makes
-        /// it the current data directory.
+        /// it the current data directory. Throws when a critical file (the types
+        /// configuration or the progress saves library) cannot be migrated, in which
+        /// case the current directory and the pointer are left on the source so user
+        /// data is never stranded in a directory the app stops reading.
         /// </summary>
         void MoveTo(string directory, Settings settings);
     }
@@ -88,6 +91,10 @@ namespace DayZModManager.Core.Services;
 
         if (!string.Equals(target, _current, StringComparison.OrdinalIgnoreCase))
         {
+            // A failed migration must never silently strand user data (the per-map
+            // types configuration and the progress saves) in a directory the app
+            // stops reading. Abort the relocation before the pointer moves so the
+            // caller surfaces the error and the data stays in the source directory.
             MigrateDataFiles(_current, target);
             MigrateSavesDirectory(_current, target);
         }
@@ -117,10 +124,9 @@ namespace DayZModManager.Core.Services;
             _fileSystem.CopyDirectory(sourceSaves, Path.Combine(target, SaveGameService.SavesRootName));
             _fileSystem.DeleteDirectory(sourceSaves, recursive: true);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Best-effort migration: leave the folder where it is rather than
-            // failing the whole relocation.
+            throw new IOException($"Failed to move the progress saves to {target}: {ex.Message}", ex);
         }
     }
 
@@ -133,22 +139,21 @@ namespace DayZModManager.Core.Services;
 
         foreach (string fileName in DataFileNames)
         {
+            string sourcePath = Path.Combine(source, fileName);
+            if (!_fileSystem.FileExists(sourcePath))
+            {
+                continue;
+            }
+
             try
             {
-                string sourcePath = Path.Combine(source, fileName);
-                if (!_fileSystem.FileExists(sourcePath))
-                {
-                    continue;
-                }
-
                 string targetPath = Path.Combine(target, fileName);
                 _fileSystem.CopyFile(sourcePath, targetPath);
                 _fileSystem.DeleteFile(sourcePath);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Best-effort migration: leave the file where it is rather than
-                // failing the whole relocation.
+                throw new IOException($"Failed to move {fileName} to {target}: {ex.Message}", ex);
             }
         }
     }

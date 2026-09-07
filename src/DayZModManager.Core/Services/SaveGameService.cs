@@ -17,9 +17,9 @@ public sealed record SaveGameResult
 /// <c>mpmissions\&lt;mapName&gt;\storage_&lt;instanceId&gt;</c> (instanceId from
 /// serverDZ.cfg); each stored save lives under
 /// <c>&lt;dataDirectory&gt;\Progress_Saves\&lt;mapName&gt;\&lt;saveName&gt;</c>
-/// and holds a nested copy of the storage folder plus a <c>meta.json</c>
-/// configuration snapshot. Saves created before meta.json existed (flat folder
-/// layout) are still loadable.
+/// and holds a nested copy of the storage folder, a snapshot of the mission's
+/// <c>db\ModTypes</c> folder, and a <c>meta.json</c> configuration snapshot.
+/// Saves created before meta.json existed (flat folder layout) are still loadable.
 /// </summary>
 public interface ISaveGameService
 {
@@ -42,9 +42,17 @@ public interface ISaveGameService
     string GetSaveFolderPath(string dataDirectory, string mapName, string saveName);
 
     /// <summary>
+    /// Returns the folder inside a stored save where the mission's <c>db\ModTypes</c>
+    /// contents were snapshot at save time. The folder may not exist for saves that
+    /// predate this feature or had no types configured.
+    /// </summary>
+    string GetModTypesSnapshotPath(string dataDirectory, string mapName, string saveName);
+
+    /// <summary>
     /// Copies the live storage folder into the save library (nested under the
     /// save folder). When <paramref name="meta"/> is supplied it is written to
-    /// <c>meta.json</c> next to the copied folder.
+    /// <c>meta.json</c> next to the copied folder, and the mission's
+    /// <c>db\ModTypes</c> folder is snapshot into the save as well.
     /// </summary>
     SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
@@ -79,7 +87,20 @@ public sealed partial class SaveGameService : ISaveGameService
     /// <summary>File name of the configuration snapshot stored inside each save folder.</summary>
     internal const string MetaFileName = "meta.json";
 
+    /// <summary>
+    /// Folder inside each save folder that holds a snapshot of the mission's
+    /// <c>db\ModTypes</c> contents taken at save time.
+    /// </summary>
+    internal const string ModTypesSnapshotFolderName = "ModTypes";
+
     private const string TemporarySuffix = ".restore";
+
+    /// <summary>
+    /// Suffix used for the previous copy of a save or of the live storage while an
+    /// overwrite/load is promoted. Leftovers are internal bookkeeping and must
+    /// never be surfaced as normal saves.
+    /// </summary>
+    internal const string OldBackupSuffix = ".old";
 
     /// <summary>Prefix for the hidden staging folder used while building a save.</summary>
     private const string StagingPrefix = ".save_";
@@ -128,12 +149,18 @@ public sealed partial class SaveGameService : ISaveGameService
 
         return _fileSystem
             .GetDirectories(library)
+            // Promotion backups (e.g. "Alpha.old" left by an interrupted AddSave)
+            // are internal bookkeeping, never loadable saves.
+            .Where(name => !name.EndsWith(OldBackupSuffix, StringComparison.OrdinalIgnoreCase))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     public string GetSaveFolderPath(string dataDirectory, string mapName, string saveName) =>
         Path.Combine(SavesLibrary(dataDirectory, mapName), saveName);
+
+    public string GetModTypesSnapshotPath(string dataDirectory, string mapName, string saveName) =>
+        Path.Combine(GetSaveFolderPath(dataDirectory, mapName, saveName), ModTypesSnapshotFolderName);
 
     public SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
@@ -156,6 +183,11 @@ public sealed partial class SaveGameService : ISaveGameService
             return Failure($"No storage folder found at {liveStorage}. Start the server once before saving progress.");
         }
 
+        // The live ModTypes folder sits beside the storage folder (under the
+        // mission's db subfolder). It holds the generated type files the world's
+        // economy loads, so a snapshot is taken alongside the world data.
+        string liveModTypes = Path.Combine(Path.GetDirectoryName(liveStorage)!, "db", "ModTypes");
+
         string target = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
         if (_fileSystem.DirectoryExists(target) && !overwrite)
         {
@@ -174,6 +206,11 @@ public sealed partial class SaveGameService : ISaveGameService
             // Store the storage folder nested so the snapshot meta.json can sit
             // beside it without mixing into the world data.
             _fileSystem.CopyDirectory(liveStorage, Path.Combine(staging, Path.GetFileName(liveStorage)));
+
+            if (meta is not null && _fileSystem.DirectoryExists(liveModTypes))
+            {
+                _fileSystem.CopyDirectory(liveModTypes, Path.Combine(staging, ModTypesSnapshotFolderName));
+            }
         }
         catch (Exception ex)
         {
@@ -199,12 +236,17 @@ public sealed partial class SaveGameService : ISaveGameService
         }
 
         // Promote the staged save into place.
-        string backup = target + ".old";
+        string backup = target + OldBackupSuffix;
         try
         {
-            TryDeleteDirectory(backup);
             if (_fileSystem.DirectoryExists(target))
             {
+                // A stale backup from an earlier interrupted run is only removed
+                // when the current save is about to take its place. When the target
+                // is missing but a backup exists (interrupted overwrite), the backup
+                // is kept until the new save has been promoted so a failure below
+                // can still fall back to it.
+                TryDeleteDirectory(backup);
                 _fileSystem.MoveDirectory(target, backup);
             }
 
@@ -248,7 +290,23 @@ public sealed partial class SaveGameService : ISaveGameService
         string saveFolder = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
         if (!_fileSystem.DirectoryExists(saveFolder))
         {
-            return Failure($"Save \"{name}\" was not found.");
+            // An interrupted AddSave overwrite leaves the previous copy as
+            // "<name>.old" with no "<name>" folder. Restore it so the last fully
+            // committed save stays loadable instead of the save being reported lost.
+            string backupFolder = saveFolder + OldBackupSuffix;
+            if (!_fileSystem.DirectoryExists(backupFolder))
+            {
+                return Failure($"Save \"{name}\" was not found.");
+            }
+
+            try
+            {
+                _fileSystem.MoveDirectory(backupFolder, saveFolder);
+            }
+            catch (Exception ex)
+            {
+                return Failure($"Save \"{name}\" is recovering from an interrupted overwrite, but its previous copy could not be restored: {ex.Message}");
+            }
         }
 
         string missionPath = Path.Combine(serverPath, "mpmissions", mapName);
@@ -267,7 +325,7 @@ public sealed partial class SaveGameService : ISaveGameService
         CleanStaleRestoreFolders(liveStorage);
 
         string temp = liveStorage + TemporarySuffix + "_" + Guid.NewGuid().ToString("N");
-        string backup = liveStorage + ".old";
+        string backup = liveStorage + OldBackupSuffix;
 
         try
         {
@@ -340,7 +398,8 @@ public sealed partial class SaveGameService : ISaveGameService
             if (metaValid)
             {
                 string nested = Path.Combine(saveFolder, meta.Value!.StorageFolder);
-                if (_fileSystem.DirectoryExists(nested))
+                if (_fileSystem.DirectoryExists(nested)
+                    && !string.Equals(Path.GetFileName(nested), ModTypesSnapshotFolderName, StringComparison.OrdinalIgnoreCase))
                 {
                     return nested;
                 }
@@ -349,11 +408,15 @@ public sealed partial class SaveGameService : ISaveGameService
 
         // A lone sub-folder with no direct world files is treated as nested
         // (covers meta-less and interrupted new-format saves). meta.json itself
-        // does not count as a direct file.
+        // does not count as a direct file. The ModTypes snapshot folder is never
+        // a storage candidate: with the real storage folder missing it must not be
+        // mistaken for the world data.
         IReadOnlyList<string> directFiles = _fileSystem.GetFiles(saveFolder, "*", recursive: false);
         bool hasNonMetaFiles = directFiles.Any(file =>
             !string.Equals(Path.GetFileName(file), MetaFileName, StringComparison.OrdinalIgnoreCase));
-        IReadOnlyList<string> children = _fileSystem.GetDirectories(saveFolder);
+        IReadOnlyList<string> children = _fileSystem.GetDirectories(saveFolder)
+            .Where(name => !string.Equals(name, ModTypesSnapshotFolderName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
         if (children.Count == 1
             && !hasNonMetaFiles
             && _fileSystem.DirectoryExists(Path.Combine(saveFolder, children[0])))

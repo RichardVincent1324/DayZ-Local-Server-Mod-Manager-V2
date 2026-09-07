@@ -1,3 +1,4 @@
+using System.IO;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
 using DayZModManager.Core.Tests.TestDoubles;
@@ -139,6 +140,41 @@ public class ApplyServiceTests
         Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
+    [Fact]
+    public void Apply_BatchWriteThrows_KeepsJunctionsAndConfigOfUnchangedSet()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=ModList/@CF;ModList/@Expansion;\"");
+        var junctions = new FakeJunctionOperations();
+        string modFolder = $@"{ServerPath}\{ModListFolder.Name}";
+        junctions.Create($@"{modFolder}\@CF", $@"{WorkshopPath}\@CF");
+        junctions.Create($@"{modFolder}\@Expansion", $@"{WorkshopPath}\@Expansion");
+
+        var stubBatch = new StubBatchFileService(new BatchFileService(fs)) { ThrowWrite = true };
+        var service = new ApplyService(
+            new SettingsService(fs),
+            new ModOrderStore(fs),
+            stubBatch,
+            new JunctionService(fs, junctions),
+            new ValidationService(fs, new BatchFileService(fs)));
+
+        // Removing @Expansion from the loaded set, but the batch write throws.
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Logs, l => l.Contains("Failed to update the batch file"));
+
+        // The launch batch file was not changed and, crucially, the junction of the
+        // removed mod is still present: a failed Apply must not tear down links the
+        // unchanged batch file still references.
+        Assert.True(junctions.IsJunction($@"{modFolder}\@Expansion"));
+        Assert.True(junctions.IsJunction($@"{modFolder}\@CF"));
+
+        // Nothing is persisted when the batch-file write throws.
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
+    }
+
     private sealed class StubBatchFileService : IBatchFileService
     {
         private readonly IBatchFileService _inner;
@@ -147,11 +183,21 @@ public class ApplyServiceTests
 
         public bool WriteResult { get; set; } = true;
 
+        public bool ThrowWrite { get; set; }
+
         public IReadOnlyList<string> ReadModList(string batFilePath) => _inner.ReadModList(batFilePath);
 
         public bool HasModListLine(string batFilePath) => _inner.HasModListLine(batFilePath);
 
-        public bool WriteModList(string batFilePath, IReadOnlyList<string> modNames) => WriteResult;
+        public bool WriteModList(string batFilePath, IReadOnlyList<string> modNames)
+        {
+            if (ThrowWrite)
+            {
+                throw new IOException("batch file is locked");
+            }
+
+            return WriteResult;
+        }
 
         public bool WriteServerProfile(string batFilePath, string relativeProfile) => _inner.WriteServerProfile(batFilePath, relativeProfile);
     }

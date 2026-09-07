@@ -1,346 +1,189 @@
 # DayZ Local Server Mod Manager V2
 
-> **A Windows mod manager for DayZ local servers, offline play, and single-player PvE.**
+> A Windows desktop manager for heavily modded DayZ **local / offline** servers — mods, load order, junctions, launch batch file, map, `types` configuration, and world-progress saves, all in one app.
 
-**DayZ Local Server Mod Manager V2** is a Windows desktop application designed to make heavily modded DayZ local servers easier to manage.
+**DayZ Local Server Mod Manager V2** is the successor to the original [DayZ Local Server Mod Manager](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager), rebuilt from scratch with **C# / .NET 8 and WPF (MVVM)**.
 
-It provides a graphical interface for managing your installed DayZ mods, load order, server configuration, map and `types.xml` settings, batch files, and mod directory structure — without having to repeatedly edit configuration files by hand.
+Everything a modded local DayZ server needs — discovering Workshop mods, choosing which to load and in what order, wiring them into the server, switching maps, configuring per-mod `types.xml` files, and snapshotting world progress — is done through a graphical interface instead of Explorer and text editors.
 
-V2 is the successor to the original [DayZ Local Server Mod Manager](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager), completely rebuilt with **C# / .NET 8 and WPF**.
-
----
-
-## ⬇️ Download
-
-### [Download DayZ Local Server Mod Manager V2](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)
-
-**Latest stable release: v2.0.0**
-
-* Windows x64
-* Self-contained
-* No separate .NET runtime installation required
-* Single executable
-
-> **V2 is designed for local/offline DayZ servers.**
+> V2 is designed for local/offline DayZ servers (the `DayZServer` installation launched with a `.bat`). It is **not** a remote/headless server admin tool.
 
 ---
+
+## Screenshots
 
 <img width="500" alt="Screenshot 2026-08-22 175937" src="https://github.com/user-attachments/assets/9db4af27-ce20-44f4-aa23-732ba9b5ce6e" />
 
-<img width="500" alt="Screenshot 2026-09-05 173150" src="https://github.com/user-attachments/assets/86210604-3814-4fe3-b2f7-04f40611698d" />
-
-
----
-
-## What Is This?
-
-Managing a heavily modded DayZ local server can become surprisingly tedious.
-
-You may need to:
-
-* Keep track of dozens of installed mods.
-* Decide which mods are currently active.
-* Maintain the correct mod load order.
-* Edit server configuration files.
-* Configure your map and `types.xml`.
-* Manage mod directories.
-* Launch the server with the correct parameters.
-* Repeat the process whenever you change your mod setup.
-
-V2 brings these tasks together into one Windows application.
-
-Instead of manually managing everything through Explorer and text editors, you can manage your local DayZ environment through a single graphical interface.
+<img width="500" alt="Screenshot 2026-08-22 175948" src="https://github.com/user-attachments/assets/3247a0fd-8567-499d-b91b-4648432c1105" />
 
 ---
 
 ## Features
 
-### Mod management
+### Mod management (Mods page)
 
-- Discover and list installed DayZ Workshop mods
-- Enable/disable mods and reorder their load order
-- Apply the mod configuration to the server: creates the required mod junctions and rewrites the launch batch file
+- **Discovers** installed DayZ Workshop mods from the configured workshop directory (the folder that contains the `@...` mod folders).
+- Shows **Loaded** vs. **Available** lists, with unified search (double-click or the toggle button to load/unload).
+- **Reorder** the load order by drag-and-drop in the Loaded list.
+- `Remove Missing` unloads mods that are no longer present on disk.
+- An **Apply** persists everything: it validates the environment, updates junctions, and rewrites the launch batch file.
 
-### Junction & batch file handling
+### Server / batch-file integration
 
-- Loaded mods are hosted as junctions in a dedicated `ModList` folder inside the server root, keeping the server directory tidy even with 100+ mods
-- The batch file's `modList` is written 10 entries per line as server-root-relative paths (e.g. `ModList/@CF`), keeping every line a complete valid `cmd` command
-- Existing mods and junctions are reconciled on every Apply; legacy root junctions are left untouched
+- Loaded mods are exposed to the server as **junctions** inside a single `ModList` folder in the server root, so the server directory stays tidy even with 100+ mods. Each mod list entry is server-root-relative, e.g. `-mod=ModList/@CF`.
+- The launch batch file's `modList` is written **10 entries per physical line** using `%modList%` continuation lines, so every `set` line is a complete valid `cmd` command.
+- Legacy junctions created directly in the server root are **left untouched**.
+- Apply is safe by construction: non-destructive junction preparation and batch-file validation happen first, destructive junction cleanup only runs after the batch file and configuration are successfully committed (see [Safety properties](#safety-properties)).
 
-### Map & Types page
+### Map & Types (Map & Types page)
 
-- Discover maps and switch the active map (updates `serverDZ.cfg`, the batch `serverProfile`, `map_profiles`, and economy config)
-- Configure a mod's types by copying its XML files into the mission's `db/ModTypes` folder, with `cfgeconomycore.xml` kept in sync
-- Safe reconfiguration: each mod may have at most one active `types` and one active `spawnabletypes` file, previously configured files are pre-selected, and any change that overwrites or deletes existing type files asks for confirmation first
-- `Remove Selected` and `Clean Invalid` also confirm before deleting files
+- **Discovers** maps from the server's `mpmissions` folder and switches the active map, updating `serverDZ.cfg` (`template`), the batch file `serverProfile`, the matching `map_profiles` folder, and the economy config.
+- **Configures a mod's types**: pick any XML file(s) in a mod whose name contains `type`; they are copied into the mission's `db/ModTypes` folder under the manager's naming scheme, and `cfgeconomycore.xml` is kept in sync (regular types are ordered before `spawnabletypes`, and entries the manager does not own — e.g. base/third-party files — are preserved).
+- Reconfiguring a mod that already has configured files **pre-selects** the active files and asks before overwriting or deleting anything. `Remove Selected` and `Clean Invalid` also confirm first.
+- **Untracked-file detection**: any XML file physically present in `db/ModTypes` that the manager is not tracking is shown as an `(untracked)` row, so orphans can't silently linger. Untracked rows can be removed (file + `cfgeconomycore.xml` entry) or re-adopted through the normal Config XML flow.
 
 ### Progress saves
 
-- Save the current world progress of the active map (the `storage_<instanceId>` folder, where `instanceId` comes from `serverDZ.cfg`, defaulting to 1)
-- Add, load, and delete named saves, and start a fresh game — all stored under the manager's data directory (`Saves\<map>\<saveName>`)
-- Loading a save is staged so an interruption never destroys the current progress; folder operations run off the UI thread
-- Saves follow the data directory when it is relocated (for example when a server path is configured and the data folder moves under the server)
+- Save the current world of the active map (`storage_<instanceId>`, where `instanceId` is read from `serverDZ.cfg`, defaulting to 1).
+- Each save stores a copy of the world data plus a **snapshot of the mission's `db/ModTypes` folder** and a `meta.json` that records the map, save time, the ordered mod list, and the active types files.
+- Add, load, delete, and "new game" operations are available. **Loading is staged** (a temporary copy is promoted only after it fully succeeds), so an interruption never destroys the current progress.
+- Loading a save created under a **different mod/types setup** warns first with context-aware guidance: mod-list differences point to the save's `meta.json` (`ModList`) for alignment; missing types files point to the stored `ModTypes` snapshot for investigation/restore.
 
-### Other
+### Settings & data directory
 
-- Data/config files (`settings.json`, `mod_order.json`, `types_config.json`, saves) live in a data directory that is derived automatically: `%LOCALAPPDATA%\DayZ-Mod-Manager-V2` until a server path is configured, then `<serverPath>\DayZ-Mod-Manager-V2`
-
----
-
-# ⚠️ Important: Local / Offline Servers Only
-
-V2 is intentionally focused on **offline and local-server use**.
-
-It is **not** designed to be a complete public DayZ server administration platform, and it does **not** provide Bikey management.
-
-### Bikey / Signature Management
-
-V2 does **not** manage:
-
-* `.bikey` files
-* `.bisign` files
-* server-side signature verification
-* automated Bikey deployment
-
-Therefore, the intended V2 configuration requires:
-
-```cpp
-verifySignatures = 0;
-```
-
-in your DayZ server configuration.
-
-### Example
-
-```cpp
-hostname = "My Local DayZ Server";
-verifySignatures = 0;
-```
-
-Without this setting, mods that rely on signature verification may not work correctly with the V2 workflow.
-
-> **Do not treat V2 as a public-server security or signature-management solution.**
->
-> For public or shared dedicated servers that require proper signature verification and Bikey management, use a dedicated server-management solution designed for that purpose.
+- All configuration is stored as JSON in a **data directory** that follows the setup automatically:
+  - `%LOCALAPPDATA%\DayZ-Mod-Manager-V2` until a server path is configured;
+  - then `<serverPath>\DayZ-Mod-Manager-V2`.
+- When the location changes, the data directory (including progress saves) is **relocated** to the new location.
+- Optional **auto-cleanup of old server logs** (`.RPT` and script logs) on start, after Apply, and before starting the server.
 
 ---
 
-# Who Is V2 For?
+## Quick start
 
-V2 is primarily intended for players who:
+1. **Install / update DayZ + DayZ Server** and run the DayZ server once so it generates `serverDZ.cfg`, `mpmissions`, and the default map folders.
+2. **Prepare a launch batch file** (an example ships as `LocalServer.example.bat`). It must contain a `modList` line — the manager owns and rewrites that block from then on.
+3. **Open the app.** On the Settings tab set:
+   - **Workshop path** — the folder containing your installed `@...` mod folders (e.g. `<Steam>\steamapps\common\DayZ\!Workshop`);
+   - **Server path** — the folder containing `DayZServer_x64.exe` and `serverDZ.cfg`;
+   - **Batch file** — your launch `.bat` (a bare name resolves inside the server folder).
+4. **Mods tab**: load the mods you want and arrange their order, then **Apply** (or just switch tabs — pending changes are applied automatically).
+5. **Map & Types tab**: pick your map; it is applied immediately (template + profile + economy).
+6. **Config XML** per mod to bring its `types`/`spawnabletypes` into the mission.
+7. **Start Server** from the main window. Test in the DayZ client with `-connect=127.0.0.1` as usual for local play.
 
-* Play DayZ offline or through a local server.
-* Prefer single-player PvE.
-* Run large mod collections.
-* Frequently change their mod setup.
-* Want a graphical alternative to manually editing server files.
-* Enjoy experimenting with different maps, mods, and server configurations.
-
-It is especially useful for players who have built their own heavily modded DayZ survival environment and want a cleaner way to maintain it.
+> Stop the DayZ server before operations that change the world or the active mission (save/load/new game, map switch, types configuration). Save/load/new-game are refused automatically while the server process is running.
 
 ---
 
-# Getting Started
-
-## 1. Download V2
-
-Download the latest release from:
-
-**[GitHub Releases](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)**
-
-Download the Windows x64 executable.
-
-## 2. Prepare Your DayZ Local Server
-
-Make sure your DayZ local/dedicated server is already installed and working.
-
-V2 is a management tool; it does not replace the DayZ server itself.
-
-## 3. Disable Signature Verification
-
-Open your server configuration and make sure:
-
-```cpp
-verifySignatures = 0;
-```
-
-is configured.
-
-## 4. Open V2
-
-Launch:
+## Data layout
 
 ```text
-DayZModManagerV2.exe
+<serverPath>\
+├─ DayZ-Mod-Manager-V2\                 # data directory (once a server path is set)
+│  ├─ settings.json                     # workshop/server/batch paths, toggles
+│  ├─ mod_order.json                    # ordered loaded-mod list
+│  ├─ types_config.json                 # per-map types configuration (mods -> db/ModTypes files)
+│  └─ Progress_Saves\
+│     └─ <mapName>\
+│        └─ <saveName>\
+│           ├─ storage_<id>\            # copy of the world data
+│           ├─ meta.json                # map, saved-at, mod list, active types files
+│           └─ ModTypes\                # snapshot of the mission's db/ModTypes
+├─ ModList\                             # junction per loaded mod (@mod -> workshop/@mod)
+├─ mpmissions\
+│  └─ <mapName>\db\ModTypes\            # generated types files the server loads
+└─ map_profiles\<mapName>\              # profile/log folder (mirrors the mission)
 ```
 
-and configure your local server environment.
-
-## 5. Configure Your Mods
-
-Use the application to select, organize, and configure the mods you want to use.
-
-## 6. Start Your Server
-
-Launch the local DayZ server using your configured server or batch-file setup.
+`%LOCALAPPDATA%\DayZ-Mod-Manager-V2` holds a pointer (`data_directory.txt`) to the active data directory before/after it is relocated.
 
 ---
 
-# Requirements
+## Safety properties
 
-### For Users
+These invariants are enforced by the design and covered by unit tests:
 
-* Windows
-* 64-bit Windows system
-* DayZ Standalone
-* A working DayZ local/dedicated server installation
-
-The released application is published as a **self-contained Windows x64 application**, so users do not need to install the .NET runtime separately.
-
-### For Developers
-
-To build V2 from source:
-
-* Windows
-* .NET 8 SDK
-* Visual Studio 2022 or another compatible .NET development environment
+- **Apply** validates first, prepares junctions non-destructively, writes the batch file, and only then commits configuration and performs destructive junction cleanup. A failed or aborted batch write never deletes junctions that the (unchanged) launch batch still references, and an undeletable leftover junction degrades to a warning instead of blocking future Applies.
+- **Save / Load / New game** are refused while the DayZ server is running. Loading is staged and rolled back safely if anything fails; `.restore` staging folders are swept on the next load.
+- **Types configuration** asks before overwriting or deleting anything, keeps `cfgeconomycore.xml` and `db/ModTypes` consistent, and never touches entries it doesn't own.
+- **Map/template writes** only ever change the manager-owned lines (`template`, `serverProfile`, `modList`); the rest of `serverDZ.cfg` and the batch file are left alone.
 
 ---
 
-# V1 → V2
+## Architecture
 
-V2 is more than a visual redesign of the original project.
-
-The original V1 was built around a PowerShell-based implementation. V2 was redesigned as a proper Windows application using **C# / .NET 8 and WPF**.
-
-### Major improvements
-
-| V1                                     | V2                                  |
-| -------------------------------------- | ----------------------------------- |
-| PowerShell                             | C# / .NET 8                         |
-| PowerShell GUI                         | WPF                                 |
-| Script-oriented architecture           | Structured application architecture |
-| More fragmented configuration workflow | More integrated management workflow |
-| Complex state/checking logic           | Cleaner state-driven design         |
-| Limited testability                    | Dedicated test projects             |
-| Monolithic script                      | Separated Core and App layers       |
-
-The V2 solution currently separates:
-
-```text
+```
 src/
-├── DayZModManager.Core
-└── DayZModManager.App
-
+  DayZModManager.Core/      business logic (no UI)
+    Services/               Apply, Junction, Batch, Settings, Types, EconomyCore,
+                            Map, SaveGame, ModOrder, Discovery, Validation, ...
+    Models/                 Settings, TypesConfig, SaveMetaData, ModState, ...
+    Abstractions/ + IO/     IFileSystem / PhysicalFileSystem, IJunctionOperations
+  DayZModManager.App/       WPF shell
+    ViewModels/             MVVM view models + commands
+    MainWindow.xaml(.cs)    views & tab orchestration
+    Behaviors/              drag-drop reorder, selection sync, auto-scroll
+    Dialogs/                confirm/warning, text prompt, types-file picker
+    Services/               dialog service, process launcher
 tests/
-├── DayZModManager.Core.Tests
-└── DayZModManager.App.Tests
+  DayZModManager.Core.Tests/   xUnit unit tests (services, models)
+  DayZModManager.App.Tests/    xUnit unit tests (view models)
 ```
 
-The Core layer contains the domain logic and services, while the App layer contains the WPF user interface and application-specific components.
+Key ideas:
+
+- **MVVM everywhere.** View models expose commands and observable collections; the window code-behind stays thin.
+- **`IFileSystem` abstraction.** Every service that touches disk goes through it, so tests use an in-memory `FakeFileSystem` (and fault-injecting wrappers) instead of real I/O. `JunctionOperations`/`IJunctionOperations` similarly abstracts Win32 junction creation for testability.
+- **Single source of truth for mod paths.** `ModListFolder` produces the same server-root-relative entry used for both the junction layout and the batch `modList`.
+- **Dependency injection** wires the composition root in `App.xaml.cs`.
+
+### Data flow
+
+```text
+Mods page (Loaded/Available/order)
+   │  Apply
+   ▼
+Validate → prepare ModList junctions → rewrite batch modList → save settings.json/mod_order.json → finalize junctions → verify
+   │
+   ├─ Map & Types: discover maps → switch map (serverDZ.cfg template + serverProfile) → config types XML into db/ModTypes + cfgeconomycore.xml
+   └─ Progress saves: copy storage_<id> + db/ModTypes + meta.json → Progress_Saves\<map>\<save>
+```
 
 ---
 
-# Build From Source
+## Development
 
-Clone the repository:
+### Requirements
 
-```bash
-git clone https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2.git
-cd DayZ-Local-Server-Mod-Manager-V2
-```
+- Windows (the app targets `net8.0-windows` and uses WPF).
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
-Build:
+### Build & test
 
 ```bash
 dotnet build DayZModManagerV2.sln
+dotnet test  DayZModManagerV2.sln
 ```
 
-Run:
+The solution builds three projects plus two test projects:
 
-```bash
-dotnet run --project src/DayZModManager.App
-```
+| Project | Kind | Purpose |
+| --- | --- | --- |
+| `DayZModManager.Core` | class library | platform-agnostic business logic |
+| `DayZModManager.App` | WPF (`net8.0-windows`) | UI shell + view models |
+| `DayZModManager.Core.Tests` | xUnit | service/model unit tests |
+| `DayZModManager.App.Tests` | xUnit (`net8.0-windows`) | view-model unit tests |
 
-Run tests:
+### Conventions
 
-```bash
-dotnet test
-```
-
-### Publish a Windows x64 build
-
-```powershell
-dotnet publish src/DayZModManager.App `
-  -c Release `
-  -r win-x64 `
-  --self-contained true `
-  -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true `
-  -p:EnableCompressionInSingleFile=true `
-  -p:DebugType=None `
-  -p:DebugSymbols=false
-```
+- No UI logic in `Core`; `Core` talks to disk only through `IFileSystem` / `IJunctionOperations`.
+- Filesystem and configuration writes are UTF-8 without BOM.
+- Unit tests prefer in-memory fakes and assert on observable state (config files written, junctions present, economy XML content) rather than on mock call sequences.
+- Add a regression test alongside any bug fix (the suite currently runs **280 tests**).
 
 ---
 
-# Releases
+## License
 
-Stable builds are distributed through GitHub Releases.
-
-### Current Release
-
-**[v2.0.0 — First Stable Release](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/tag/v2.0.0)**
-
-Released **August 22, 2026**.
-
----
-
-# Project Direction
-
-The purpose of V2 is not to compete with large multiplayer server-management platforms.
-
-Instead, it focuses on a specific use case:
-
-> **Making heavily modded DayZ local and single-player PvE environments easier to build and maintain.**
-
-The project will continue to prioritize usability, reliability, and the needs of local-server players.
-
----
-
-# Contributing
-
-Bug reports, suggestions, and improvements are welcome.
-
-When reporting a problem, please include:
-
-* What you were trying to do.
-* What you expected to happen.
-* What actually happened.
-* Relevant error messages or screenshots.
-* Your DayZ/server configuration when appropriate.
-
----
-
-# License
-
-This project is licensed under the [MIT License](LICENSE).
-
----
-
-# Disclaimer
-
-This project is an independent community tool.
-
-**DayZ** is a trademark of **Bohemia Interactive**.
-
-This project is not affiliated with or endorsed by Bohemia Interactive.
-
----
-
-## Links
-
-* **[Download Latest Release](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)**
-* **[View Releases](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases)**
-* **[V2 Repository](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2)**
-* **[V1 Repository](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager)**
+See the project repository for licensing details.

@@ -202,17 +202,40 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void MoveTo_DoesNotThrow_WhenMigrationCopyFails()
+    public void MoveTo_Throws_WhenTypesConfigMigrationFails_AndKeepsSource()
     {
         var fs = new FailingFileSystem { ThrowOnCopyFile = true };
         fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig), "{}");
+        string legacyTypes = Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.TypesConfig);
+        fs.AddFile(legacyTypes, "{}");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
-        provider.MoveTo(@"D:\new", new Settings());
+        Assert.Throws<IOException>(() => provider.MoveTo(@"D:\new", new Settings()));
 
-        Assert.Equal(@"D:\new", provider.Current);
+        // The pointer and current directory stay on the source so the types
+        // configuration is not orphaned.
+        Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
+        Assert.True(fs.FileExists(legacyTypes));
+        Assert.False(fs.FileExists(PointerPath()));
+    }
+
+    [Fact]
+    public void MoveTo_Throws_WhenSavesMigrationFails_AndKeepsSource()
+    {
+        var fs = new FailingFileSystem { ThrowOnCopyDirectory = true };
+        fs.AddFile(SettingsPath(), "{}");
+        string legacySaves = Path.Combine(AppPaths.LegacyDirectory(), SaveGameService.SavesRootName);
+        fs.AddDirectory(legacySaves);
+        fs.AddFile(Path.Combine(legacySaves, "players.db"), "data");
+        var provider = new DataDirectoryProvider(fs);
+        provider.Initialize();
+
+        Assert.Throws<IOException>(() => provider.MoveTo(@"D:\new", new Settings()));
+
+        Assert.Equal(AppPaths.LegacyDirectory(), provider.Current);
+        Assert.True(fs.FileExists(Path.Combine(legacySaves, "players.db")));
+        Assert.False(fs.FileExists(PointerPath()));
     }
 
     /// <summary>Wraps <see cref="FakeFileSystem"/> and can fail writes/copies on demand.</summary>
@@ -222,6 +245,7 @@ public class DataDirectoryProviderTests
 
         public bool ThrowOnWriteAllText { get; set; }
         public bool ThrowOnCopyFile { get; set; }
+        public bool ThrowOnCopyDirectory { get; set; }
 
         public bool DirectoryExists(string path) => _inner.DirectoryExists(path);
 
@@ -258,8 +282,15 @@ public class DataDirectoryProviderTests
 
         public void CreateDirectory(string path) => _inner.CreateDirectory(path);
 
-        public void CopyDirectory(string sourcePath, string destinationPath) =>
+        public void CopyDirectory(string sourcePath, string destinationPath)
+        {
+            if (ThrowOnCopyDirectory)
+            {
+                throw new IOException("copy directory failed");
+            }
+
             _inner.CopyDirectory(sourcePath, destinationPath);
+        }
 
         public void DeleteDirectory(string path, bool recursive) =>
             _inner.DeleteDirectory(path, recursive);

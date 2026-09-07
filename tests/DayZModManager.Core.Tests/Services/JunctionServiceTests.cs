@@ -159,4 +159,64 @@ public class JunctionServiceTests
 
         Assert.Equal(new[] { "@Ghost" }, orphans);
     }
+
+    [Fact]
+    public void PrepareLoaded_DoesNotRemoveOrphansOrRetargetStaleLinks()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(WorkshopPath, "@CF", "@Expansion");
+        fs.AddDirectory(ServerPath);
+        fs.AddDirectory(ModFolder, "@CF", "@Expansion", "@OldMod");
+        junctions.Create(Path.Combine(ModFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
+        junctions.Create(Path.Combine(ModFolder, "@Expansion"), @"D:\OldWorkshop\@Expansion"); // stale target
+        junctions.Create(Path.Combine(ModFolder, "@OldMod"), Path.Combine(WorkshopPath, "@OldMod")); // orphan
+
+        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, new[] { "@CF" });
+
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(0, result.Removed);
+
+        // Nothing destructive happened during preparation.
+        Assert.True(junctions.IsJunction(Path.Combine(ModFolder, "@Expansion")));
+        Assert.Equal(@"D:\OldWorkshop\@Expansion", junctions.Targets[Path.Combine(ModFolder, "@Expansion")]);
+        Assert.True(junctions.IsJunction(Path.Combine(ModFolder, "@OldMod")));
+    }
+
+    [Fact]
+    public void Finalize_RetargetsLoadedMods_AndRemovesOrphans()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(WorkshopPath, "@CF", "@Expansion");
+        fs.AddDirectory(ServerPath);
+        fs.AddDirectory(ModFolder, "@CF", "@Expansion", "@OldMod");
+        junctions.Create(Path.Combine(ModFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
+        junctions.Create(Path.Combine(ModFolder, "@Expansion"), @"D:\OldWorkshop\@Expansion"); // stale, still loaded
+        junctions.Create(Path.Combine(ModFolder, "@OldMod"), Path.Combine(WorkshopPath, "@OldMod")); // orphan
+
+        JunctionSyncResult result = service.Finalize(ServerPath, WorkshopPath, new[] { "@CF", "@Expansion" });
+
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(1, result.Removed);
+        Assert.False(junctions.IsJunction(Path.Combine(ModFolder, "@OldMod")));
+        Assert.Equal(Path.Combine(WorkshopPath, "@Expansion"), junctions.Targets[Path.Combine(ModFolder, "@Expansion")]);
+    }
+
+    [Fact]
+    public void PrepareLoaded_KeepsWorkingJunction_WhenNewTargetMissing()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(ServerPath);
+        string link = Path.Combine(ModFolder, "@CF");
+        junctions.Create(link, @"D:\OldWorkshop\@CF");
+
+        // Workshop path changed and @CF is not present in the new location yet.
+        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, new[] { "@CF" });
+
+        Assert.Equal(1, result.Failed);
+        Assert.Contains(result.Messages, m => m.Contains("Mod not found in workshop", StringComparison.OrdinalIgnoreCase));
+
+        // The previously-working junction must be left intact for a failed/aborted Apply.
+        Assert.True(junctions.IsJunction(link));
+        Assert.Equal(@"D:\OldWorkshop\@CF", junctions.Targets[link]);
+    }
 }

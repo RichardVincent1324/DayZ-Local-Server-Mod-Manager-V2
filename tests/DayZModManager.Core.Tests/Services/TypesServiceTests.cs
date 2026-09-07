@@ -309,4 +309,144 @@ public class TypesServiceTests
 
         Assert.Null(leaf);
     }
+
+    [Fact]
+    public void RemoveUntrackedFiles_DeletesFileAndDropsEconomyReference()
+    {
+        FakeFileSystem fs = Seed();
+        fs.AddDirectory($@"{MissionPath}\db", "ModTypes");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\CF_types.xml", "<types/>");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\Orphan_types.xml", "<types/>");
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/ModTypes">
+            		<file name="CF_types.xml" type="types" />
+            		<file name="Orphan_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        TypesConfig config = ConfigWith(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        TypesService service = CreateService(fs);
+
+        TypesOperationResult result = service.RemoveUntrackedFiles(
+            config, MapName, MissionPath, new HashSet<string> { "Orphan_types.xml" });
+
+        Assert.True(result.Success);
+        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\Orphan_types.xml"));
+        Assert.True(fs.FileExists($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
+        Assert.DoesNotContain("Orphan_types.xml", economy);
+        Assert.Contains("CF_types.xml", economy);
+        Assert.Contains(result.Messages, m => m.Contains("Orphan_types.xml"));
+    }
+
+    [Fact]
+    public void RemoveUntrackedFiles_NeverTouchesTrackedFiles()
+    {
+        FakeFileSystem fs = Seed();
+        fs.AddDirectory($@"{MissionPath}\db", "ModTypes");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\CF_types.xml", "<types/>");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\Orphan_types.xml", "<types/>");
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/ModTypes">
+            		<file name="CF_types.xml" type="types" />
+            		<file name="Orphan_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        TypesConfig config = ConfigWith(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        TypesService service = CreateService(fs);
+
+        // Requesting a tracked file must be ignored; only the orphan is removed.
+        TypesOperationResult result = service.RemoveUntrackedFiles(
+            config, MapName, MissionPath, new HashSet<string> { "CF_types.xml", "Orphan_types.xml" });
+
+        Assert.True(result.Success);
+        Assert.True(fs.FileExists($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\Orphan_types.xml"));
+        string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
+        Assert.Contains("CF_types.xml", economy);
+        Assert.DoesNotContain("Orphan_types.xml", economy);
+    }
+
+    [Fact]
+    public void RemoveUntrackedFiles_ReturnsFailure_WhenEconomyCoreMalformed()
+    {
+        FakeFileSystem fs = Seed();
+        fs.AddDirectory($@"{MissionPath}\db", "ModTypes");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\Orphan_types.xml", "<types/>");
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
+        TypesConfig config = ConfigWith();
+        TypesService service = CreateService(fs);
+
+        TypesOperationResult result = service.RemoveUntrackedFiles(
+            config, MapName, MissionPath, new HashSet<string> { "Orphan_types.xml" });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
+        // The physical file is only deleted after the economy update succeeds.
+        Assert.True(fs.FileExists($@"{MissionPath}\db\ModTypes\Orphan_types.xml"));
+    }
+
+    [Fact]
+    public void ConfigureMod_EconomyMissing_FailsWithoutLeavingFilesOrConfig()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddDirectory($@"{WorkshopPath}\@CF");
+        fs.AddFile($@"{WorkshopPath}\@CF\types.xml", "<types/>");
+        var config = new TypesConfig();
+        TypesService service = CreateService(fs);
+
+        TypesOperationResult result = service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[] { $@"{WorkshopPath}\@CF\types.xml" }, Loaded("@CF"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
+        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        Assert.Empty(config.Maps[MapName].Mods);
+    }
+
+    [Fact]
+    public void RemoveFiles_EconomyUnreadable_FailsWithoutDeletingFilesOrConfig()
+    {
+        FakeFileSystem fs = Seed();
+        var config = new TypesConfig();
+        var service = CreateService(fs);
+        service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[] { $@"{WorkshopPath}\@CF\types.xml" }, Loaded("@CF"));
+
+        // Corrupt the economy file so the rewrite that would follow reports failure.
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
+        TypesOperationResult result = service.RemoveFiles(config, MapName, MissionPath, "@CF",
+            new HashSet<string> { "CF_types.xml" }, Loaded("@CF"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        Assert.Single(config.Maps[MapName].Mods.Single().GeneratedFiles);
+    }
+
+    [Fact]
+    public void CleanInvalid_EconomyUnreadable_FailsWithoutDeletingFilesOrConfig()
+    {
+        FakeFileSystem fs = Seed();
+        var config = new TypesConfig();
+        var service = CreateService(fs);
+        service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[] { $@"{WorkshopPath}\@CF\types.xml" }, Loaded("@CF"));
+
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
+        TypesOperationResult result = service.CleanInvalid(config, MapName, MissionPath,
+            new HashSet<string> { "@OtherMod" }, Loaded("@CF"));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        Assert.Single(config.Maps[MapName].Mods);
+    }
 }

@@ -13,6 +13,9 @@ namespace DayZModManager.App.ViewModels;
 /// </summary>
 public sealed class MapTypesViewModel : ViewModelBase
 {
+    /// <summary>Mod-name label shown for files in db\ModTypes that are not tracked by the config.</summary>
+    private const string UntrackedLabel = "(untracked)";
+
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
     private readonly ISaveGameService _saveGameService;
@@ -146,6 +149,15 @@ public sealed class MapTypesViewModel : ViewModelBase
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>
+    /// True while a map switch or a types operation (configure/remove/clean) is in
+    /// flight. Mainly used by the Start Server action so it never launches the
+    /// server while the launch batch / mission files are being rewritten.
+    /// </summary>
+    public bool IsBusy => _isSwitching || _typesBusy;
+
+    private void NotifyBusyChanged() => OnPropertyChanged(nameof(IsBusy));
+
+    /// <summary>
     /// Invoked before configuring types. Returns true when the current in-memory
     /// state is persisted (either already or just applied), false if Apply failed.
     /// </summary>
@@ -213,8 +225,14 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string defaultMap = _discoveredMaps[0].Name;
+        if (!ApplyMapCore(defaultMap))
+        {
+            // Refused (server running) or the server files could not be written;
+            // leave the current map empty so a later reconcile retries.
+            return;
+        }
+
         SetRestoringSelection(defaultMap);
-        ApplyMapCore(defaultMap);
     }
 
     /// <summary>Rebuilds the map dropdown from discovered maps plus any maps already configured.</summary>
@@ -403,6 +421,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     {
         _isSwitching = true;
         _typesBusy = true;
+        NotifyBusyChanged();
         try
         {
             string? missionPath = ResolveMapPathForName(mapName);
@@ -420,7 +439,14 @@ public sealed class MapTypesViewModel : ViewModelBase
                 return;
             }
 
-            ApplyMapCore(mapName);
+            if (!ApplyMapCore(mapName))
+            {
+                // Refused (server running) or the server files could not be
+                // updated; keep the dropdown on the actually-applied map.
+                SetRestoringSelection(_typesConfig.CurrentMap);
+                return;
+            }
+
             SetRestoringSelection(mapName);
         }
         catch (Exception ex)
@@ -431,6 +457,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             _isSwitching = false;
             _typesBusy = false;
+            NotifyBusyChanged();
             string? next = _pendingMap;
             _pendingMap = null;
 
@@ -453,10 +480,15 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         _typesBusy = true;
+        NotifyBusyChanged();
         return true;
     }
 
-    private void EndTypesOperation() => _typesBusy = false;
+    private void EndTypesOperation()
+    {
+        _typesBusy = false;
+        NotifyBusyChanged();
+    }
 
     /// <summary>
     /// Applies a map selection that was queued while a types operation held the
@@ -496,14 +528,27 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
-    private void ApplyMapCore(string mapName)
+    /// <summary>
+    /// Applies <paramref name="mapName"/> to the server and commits it as the
+    /// current map. The server template and batch serverProfile are written and
+    /// validated FIRST so a failure never leaves the app believing a map was
+    /// applied while the server still runs the previous mission; CurrentMap is
+    /// only persisted once those succeed. Returns false when the switch was
+    /// refused (server running) or the server files could not be updated.
+    /// </summary>
+    private bool ApplyMapCore(string mapName)
     {
-        _typesConfig.CurrentMap = mapName;
-        _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+        if (RefuseWhileServerRunning("switching maps"))
+        {
+            return false;
+        }
+
+        string previousMap = _typesConfig.CurrentMap;
 
         if (!_serverConfig.UpdateTemplate(_serverPath, mapName))
         {
-            _log.Warning("Failed to update the server template (serverDZ.cfg).");
+            _log.Error("Failed to update the server template (serverDZ.cfg); the map was not switched.");
+            return false;
         }
 
         // The map profile folder mirrors the mpmissions mission folder exactly
@@ -511,7 +556,24 @@ public sealed class MapTypesViewModel : ViewModelBase
         // up 1:1 with the mission the tool runs.
         if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{mapName}"))
         {
-            _log.Warning("Failed to update the batch file serverProfile.");
+            // Roll the template back so the server files stay on the previous map.
+            RollbackMapFiles(previousMap, mapName);
+            _log.Error("Failed to update the batch file serverProfile; the map was not switched.");
+            return false;
+        }
+
+        // Commit: only after the server files were updated successfully.
+        _typesConfig.CurrentMap = mapName;
+        try
+        {
+            _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+        }
+        catch (Exception ex)
+        {
+            _typesConfig.CurrentMap = previousMap;
+            RollbackMapFiles(previousMap, mapName);
+            _log.Error($"Failed to persist the applied map; the map was not switched: {ex.Message}");
+            return false;
         }
 
         // Pre-create the profile folder the batch serverProfile points at. DayZ
@@ -531,10 +593,40 @@ public sealed class MapTypesViewModel : ViewModelBase
         SyncEconomyCore();
         RefreshSaves();
         _log.Success($"Map switched to: {mapName}");
+        return true;
+    }
+
+    /// <summary>
+    /// Best-effort revert of the server template and batch serverProfile to
+    /// <paramref name="previousMap"/> after a mid-switch failure. A failure to
+    /// roll back is only logged; the caller has already reported the switch error.
+    /// </summary>
+    private void RollbackMapFiles(string previousMap, string currentMap)
+    {
+        if (string.IsNullOrWhiteSpace(previousMap)
+            || string.Equals(previousMap, currentMap, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!_serverConfig.UpdateTemplate(_serverPath, previousMap))
+        {
+            _log.Warning("Failed to restore the previous server template after the map switch was aborted.");
+        }
+
+        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{previousMap}"))
+        {
+            _log.Warning("Failed to restore the previous batch serverProfile after the map switch was aborted.");
+        }
     }
 
     private async void ConfigureMod()
     {
+        if (RefuseWhileServerRunning("configuring types files"))
+        {
+            return;
+        }
+
         if (!TryBeginTypesOperation())
         {
             _log.Warning("Another types or map operation is already in progress; please retry.");
@@ -622,6 +714,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void RemoveSelected()
     {
+        if (RefuseWhileServerRunning("removing types files"))
+        {
+            return;
+        }
+
         if (!TryBeginTypesOperation())
         {
             _log.Warning("Another types or map operation is already in progress; please retry.");
@@ -643,9 +740,18 @@ public sealed class MapTypesViewModel : ViewModelBase
                 return;
             }
 
-            if (!_dialogs.Confirm(
-                $"Delete the selected {rows.Count} type file(s) from db/ModTypes?\n\nThis permanently removes the file(s) from the mission folder. Continue?",
-                "Remove type files"))
+            List<TypesRowViewModel> trackedRows = rows.Where(r => !r.IsUntracked).ToList();
+            var untrackedLeaves = new HashSet<string>(
+                rows.Where(r => r.IsUntracked).Select(r => r.FileName), StringComparer.Ordinal);
+
+            string confirm = $"Delete the selected {rows.Count} type file(s) from db/ModTypes?";
+            if (untrackedLeaves.Count > 0)
+            {
+                confirm += $"\n\n{untrackedLeaves.Count} of them are untracked (present in db/ModTypes but not managed by this app). Removing them also deletes their entries from cfgeconomycore.xml.";
+            }
+
+            confirm += "\n\nThis permanently removes the file(s) from the mission folder. Continue?";
+            if (!_dialogs.Confirm(confirm, "Remove type files"))
             {
                 _log.Info("Removal cancelled.");
                 return;
@@ -658,11 +764,22 @@ public sealed class MapTypesViewModel : ViewModelBase
 
             bool success = true;
             var messages = new List<string>();
-            foreach (IGrouping<string, TypesRowViewModel> group in rows.GroupBy(r => r.ModName, StringComparer.Ordinal))
+            foreach (IGrouping<string, TypesRowViewModel> group in trackedRows.GroupBy(r => r.ModName, StringComparer.Ordinal))
             {
                 var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
                 TypesOperationResult result = _typesService.RemoveFiles(
                     _typesConfig, _typesConfig.CurrentMap, missionPath, group.Key, leaves, LoadedSet());
+                messages.AddRange(result.Messages);
+                if (!result.Success)
+                {
+                    success = false;
+                }
+            }
+
+            if (untrackedLeaves.Count > 0)
+            {
+                TypesOperationResult result = _typesService.RemoveUntrackedFiles(
+                    _typesConfig, _typesConfig.CurrentMap, missionPath, untrackedLeaves);
                 messages.AddRange(result.Messages);
                 if (!result.Success)
                 {
@@ -677,7 +794,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
             if (success)
             {
-                _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                if (trackedRows.Count > 0)
+                {
+                    _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                }
+
                 _log.Success("Removed selected types files.");
                 RebuildRows();
             }
@@ -699,6 +820,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void CleanInvalid()
     {
+        if (RefuseWhileServerRunning("cleaning up invalid types configurations"))
+        {
+            return;
+        }
+
         if (!TryBeginTypesOperation())
         {
             _log.Warning("Another types or map operation is already in progress; please retry.");
@@ -791,19 +917,19 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string dataDirectory = _dataDirectoryProvider.Current;
-        string warning = BuildLoadCompatibilityWarning(mapName, dataDirectory, saveName);
+        LoadCompatibilityReport report = BuildLoadCompatibilityReport(mapName, dataDirectory, saveName);
         string message =
             $"Load save \"{saveName}\" for map {mapName}?\n\nThis will REPLACE the current progress in {StorageLabel(mapName)} with the stored copy. The current progress will be lost.";
 
         bool confirmed;
-        if (string.IsNullOrWhiteSpace(warning))
+        if (!report.HasWarning)
         {
             confirmed = _dialogs.Confirm(message, "Load Save");
         }
         else
         {
-            string note = "For investigation, go to:\n" + _saveGameService.GetSaveFolderPath(dataDirectory, mapName, saveName);
-            confirmed = _dialogs.ConfirmWithWarning(message, "Load Save", warning, note);
+            string note = BuildLoadSaveNote(report, dataDirectory, mapName, saveName);
+            confirmed = _dialogs.ConfirmWithWarning(message, "Load Save", report.Message, note);
         }
 
         if (!confirmed)
@@ -1036,10 +1162,10 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     /// <summary>
     /// Describes how a stored save's configuration snapshot differs from the
-    /// current setup, for display in the Load Save confirmation. An empty result
-    /// means the configurations match.
+    /// current setup, for the Load Save confirmation. <see cref="Message"/> is the
+    /// prominent warning text; the flags let a tailored "note" be chosen below.
     /// </summary>
-    private string BuildLoadCompatibilityWarning(string mapName, string dataDirectory, string saveName)
+    private LoadCompatibilityReport BuildLoadCompatibilityReport(string mapName, string dataDirectory, string saveName)
     {
         ConfigLoadResult<SaveMetaData> stored;
         try
@@ -1048,25 +1174,26 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
         catch (Exception)
         {
-            return "This save's configuration snapshot could not be read, so compatibility with the current mod/type setup cannot be verified.";
+            return new LoadCompatibilityReport("This save's configuration snapshot could not be read, so compatibility with the current mod/type setup cannot be verified.", false, false);
         }
 
         if (stored.Status == ConfigLoadStatus.Missing)
         {
-            return "This save has no configuration snapshot (created by an older version), so compatibility with the current mod/type setup cannot be verified.";
+            return new LoadCompatibilityReport("This save has no configuration snapshot (created by an older version), so compatibility with the current mod/type setup cannot be verified.", false, false);
         }
 
         if (stored.Status == ConfigLoadStatus.Corrupt)
         {
-            return "This save's configuration snapshot is unreadable, so compatibility with the current mod/type setup cannot be verified.";
+            return new LoadCompatibilityReport("This save's configuration snapshot is unreadable, so compatibility with the current mod/type setup cannot be verified.", false, false);
         }
 
         SaveMetaData saved = stored.Value!;
         SaveMetaData current = BuildSaveSnapshot(mapName);
 
         var lines = new List<string>();
+        bool modsDiffer = !saved.ModList.SequenceEqual(current.ModList, StringComparer.OrdinalIgnoreCase);
 
-        if (!saved.ModList.SequenceEqual(current.ModList, StringComparer.OrdinalIgnoreCase))
+        if (modsDiffer)
         {
             List<string> onlyInSave = saved.ModList
                 .Where(mod => !current.ModList.Contains(mod, StringComparer.OrdinalIgnoreCase))
@@ -1094,9 +1221,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         var savedTypes = saved.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var currentTypes = current.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        List<string> removed = saved.TypesFiles.Where(file => !currentTypes.Contains(file)).ToList();
+        bool saveHasTypesNotActive = removed.Count > 0;
+
         if (!savedTypes.SetEquals(currentTypes))
         {
-            List<string> removed = saved.TypesFiles.Where(file => !currentTypes.Contains(file)).ToList();
             List<string> added = current.TypesFiles.Where(file => !savedTypes.Contains(file)).ToList();
 
             lines.Add($"This save was created with different active type files ({saved.TypesFiles.Count} then vs {current.TypesFiles.Count} now).");
@@ -1111,7 +1240,58 @@ public sealed class MapTypesViewModel : ViewModelBase
             }
         }
 
-        return string.Join("\n", lines);
+        return new LoadCompatibilityReport(string.Join("\n", lines), modsDiffer, saveHasTypesNotActive);
+    }
+
+    /// <summary>
+    /// Builds the "note" line shown under the Load Save warning, tailored to the
+    /// kind of mismatch. A mod-list difference points at the save's meta.json
+    /// (ModList); missing type files point at the stored ModTypes snapshot for
+    /// investigation/restore. Other mismatches (older saves, unreadable snapshots,
+    /// extra type files) get no note - the red warning text is self-explanatory.
+    /// </summary>
+    private string BuildLoadSaveNote(LoadCompatibilityReport report, string dataDirectory, string mapName, string saveName)
+    {
+        var notes = new List<string>();
+
+        if (report.ModsDiffer)
+        {
+            string meta = Path.Combine(_saveGameService.GetSaveFolderPath(dataDirectory, mapName, saveName), "meta.json");
+            notes.Add("This save expects the mod list stored in its meta.json (ModList). Align (add/remove/re-order) your loaded mods with that list:\n" + meta);
+        }
+
+        if (report.SaveHasTypesNotActive)
+        {
+            string snapshot = _saveGameService.GetModTypesSnapshotPath(dataDirectory, mapName, saveName);
+            if (_fileSystem.DirectoryExists(snapshot))
+            {
+                string restore = "For investigation or restoring the types files, go to:\n" + snapshot;
+                string liveModTypes = LiveModTypesFolderPath(mapName);
+                if (!string.IsNullOrWhiteSpace(liveModTypes))
+                {
+                    restore += "\n\nRestore by copying these files back into the map's db\\ModTypes folder:\n" + liveModTypes;
+                }
+
+                notes.Add(restore);
+            }
+        }
+
+        return string.Join("\n\n", notes);
+    }
+
+    /// <summary>Returns the live mission's <c>db\ModTypes</c> folder for a map, or empty when it cannot be resolved.</summary>
+    private string LiveModTypesFolderPath(string mapName)
+    {
+        try
+        {
+            string liveStorage = _saveGameService.GetStorageFolderPath(_serverPath, mapName);
+            string? mission = Path.GetDirectoryName(liveStorage);
+            return string.IsNullOrWhiteSpace(mission) ? string.Empty : Path.Combine(mission, "db", "ModTypes");
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 
     private void LogSaveResult(SaveGameResult result)
@@ -1191,21 +1371,67 @@ public sealed class MapTypesViewModel : ViewModelBase
     private void RebuildRows()
     {
         TypesRows.Clear();
-        if (string.IsNullOrEmpty(_typesConfig.CurrentMap) ||
-            !_typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map))
+        if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
         {
             return;
         }
 
-        var valid = new HashSet<string>(_allMods, StringComparer.Ordinal);
-        var loaded = LoadedSet();
-        foreach (ModTypesEntry entry in map.Mods)
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map))
         {
-            bool inactive = !valid.Contains(entry.ModName) || !loaded.Contains(entry.ModName);
-            foreach (string generated in entry.GeneratedFiles)
+            var valid = new HashSet<string>(_allMods, StringComparer.Ordinal);
+            var loaded = LoadedSet();
+            foreach (ModTypesEntry entry in map.Mods)
             {
-                TypesRows.Add(new TypesRowViewModel(entry.ModName, Path.GetFileName(generated), inactive));
+                bool inactive = !valid.Contains(entry.ModName) || !loaded.Contains(entry.ModName);
+                foreach (string generated in entry.GeneratedFiles)
+                {
+                    string leaf = Path.GetFileName(generated);
+                    if (string.IsNullOrWhiteSpace(leaf))
+                    {
+                        continue;
+                    }
+
+                    owned.Add(leaf);
+                    TypesRows.Add(new TypesRowViewModel(entry.ModName, leaf, inactive));
+                }
             }
+        }
+
+        AddUntrackedRows(owned);
+    }
+
+    /// <summary>
+    /// Appends rows for XML files that physically exist in the mission's
+    /// <c>db\ModTypes</c> folder but are not tracked by the types configuration,
+    /// so orphaned files cannot silently linger. File system failures are ignored
+    /// so they never break the grid.
+    /// </summary>
+    private void AddUntrackedRows(IReadOnlySet<string> ownedLeaves)
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(_typesConfig.CurrentMap))
+        {
+            return;
+        }
+
+        try
+        {
+            string missionPath = Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap);
+            string typesFolder = Path.Combine(missionPath, "db", "ModTypes");
+            foreach (string file in _fileSystem.GetFiles(typesFolder, "*.xml", recursive: false))
+            {
+                string leaf = Path.GetFileName(file);
+                if (string.IsNullOrWhiteSpace(leaf) || ownedLeaves.Contains(leaf))
+                {
+                    continue;
+                }
+
+                TypesRows.Add(new TypesRowViewModel(UntrackedLabel, leaf, isInactive: false, isUntracked: true));
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: a locked/missing folder must not break the row grid.
         }
     }
 
@@ -1223,6 +1449,17 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Result of comparing a stored save's snapshot with the current setup.
+    /// <see cref="ModsDiffer"/> is true for any mod-list difference (selection or
+    /// order); <see cref="SaveHasTypesNotActive"/> is true when the save lists type
+    /// files that are not active now. These flags drive the tailored Load Save note.
+    /// </summary>
+    private sealed record LoadCompatibilityReport(string Message, bool ModsDiffer, bool SaveHasTypesNotActive)
+    {
+        public bool HasWarning => !string.IsNullOrWhiteSpace(Message);
     }
 
     private static bool ContainsIgnoreCase(ObservableCollection<string> items, string value) =>

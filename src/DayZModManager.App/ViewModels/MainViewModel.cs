@@ -20,6 +20,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
     private readonly IServerLogCleanupService _logCleanup;
     private readonly IDialogService _dialogs;
+    private readonly IDayZServerProcessState _serverProcess;
 
     private Settings _settings = new();
     private bool _isDirty;
@@ -52,6 +53,7 @@ public sealed class MainViewModel : ViewModelBase
         _logCleanup = logCleanup;
         _dataDirectoryProvider = dataDirectoryProvider;
         _dialogs = dialogs;
+        _serverProcess = serverProcessState;
 
         Log = new LogViewModel();
         ModState = new ModState();
@@ -374,7 +376,34 @@ public sealed class MainViewModel : ViewModelBase
 
     private async Task StartServerAsync()
     {
+        if (RefuseLaunchWhileServerRunning())
+        {
+            return;
+        }
+
+        // Never launch while a map switch or types operation is in flight: it may
+        // be rewriting the launch batch file / mission files under us. Wait for it
+        // to settle (bounded) before proceeding.
+        if (!await WaitUntilMapTypesIdleAsync())
+        {
+            ShowLaunchBlocked("A map or types operation is still in progress.");
+            return;
+        }
+
         if (IsDirty && !await ApplyAsync())
+        {
+            return;
+        }
+
+        // An Apply can itself trigger a first-time map switch (ReconcileAppliedMap);
+        // let any in-flight operation finish writing the batch file before launch.
+        if (!await WaitUntilMapTypesIdleAsync())
+        {
+            ShowLaunchBlocked("A map or types operation is still in progress.");
+            return;
+        }
+
+        if (RefuseLaunchWhileServerRunning())
         {
             return;
         }
@@ -390,6 +419,45 @@ public sealed class MainViewModel : ViewModelBase
         {
             Log.Error($"Failed to launch server: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Returns true (and tells the user) when the DayZ server is already running,
+    /// preventing a second instance from being launched against the same profile.
+    /// </summary>
+    private bool RefuseLaunchWhileServerRunning()
+    {
+        if (!_serverProcess.IsDayZServerRunning())
+        {
+            return false;
+        }
+
+        string message = "The DayZ server appears to be already running. Stop it before starting another instance.";
+        Log.Error(message);
+        _dialogs.ShowMessage(message, "DayZ Server running", isError: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Waits (bounded) until no map-switch / types operation is in flight so the
+    /// launch batch and mission files are stable before the server is started.
+    /// Returns false when the wait timed out.
+    /// </summary>
+    private async Task<bool> WaitUntilMapTypesIdleAsync(int timeoutMs = 30000)
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (MapTypes.IsBusy && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
+
+        return !MapTypes.IsBusy;
+    }
+
+    private void ShowLaunchBlocked(string reason)
+    {
+        Log.Error($"{reason} Server launch was cancelled; try again once it completes.");
+        _dialogs.ShowMessage($"{reason} Try starting the server again once it completes.", "Start Server", isError: true);
     }
 
     /// <summary>

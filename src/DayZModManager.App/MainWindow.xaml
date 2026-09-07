@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayZModManager.App.ViewModels"
         xmlns:beh="clr-namespace:DayZModManager.App.Behaviors"
-        Title="DayZ Local Server Mod Manager"
+        Title="DayZ Mod Manager v2.0.1"
         Icon="Resources/app.ico"
         Height="700" Width="1020"
         MinHeight="520" MinWidth="760"
@@ -300,6 +300,10 @@
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsInactive}" Value="True">
                                             <Setter Property="Foreground" Value="Gray" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsUntracked}" Value="True">
+                                            <Setter Property="Foreground" Value="#FFD84315" />
+                                            <Setter Property="FontWeight" Value="SemiBold" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>

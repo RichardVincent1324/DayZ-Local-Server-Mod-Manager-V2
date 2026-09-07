@@ -61,6 +61,18 @@ public interface ITypesService
         IReadOnlySet<string> loadedModNames);
 
     /// <summary>
+    /// Deletes files (by leaf name) that physically exist in the mission's
+    /// <c>db\ModTypes</c> but are not tracked by the config, and removes their
+    /// references from <c>cfgeconomycore.xml</c>. Files the manager still tracks
+    /// are never touched. Used to clean up orphaned type files.
+    /// </summary>
+    TypesOperationResult RemoveUntrackedFiles(
+        TypesConfig config,
+        string mapName,
+        string missionPath,
+        IReadOnlySet<string> fileLeaves);
+
+    /// <summary>
     /// Regenerates cfgeconomycore.xml referencing only the types of the mods in
     /// <paramref name="loadedModNames"/>. Returns false if the file is missing or malformed.
     /// </summary>
@@ -172,32 +184,59 @@ public sealed class TypesService : ITypesService
             messages.Add($"Copied {destinationName}");
         }
 
-        // Commit: replace the previous configuration only after every copy succeeded.
+        // Commit the configuration in memory first so the economy rewrite below
+        // reflects the final state. If cfgeconomycore.xml cannot be updated, the
+        // in-memory change is rolled back and the newly copied files are removed
+        // again - no partial configuration is ever left behind.
         var newGenerated = new HashSet<string>(generated.Select(g => Path.Combine(missionPath, g)), StringComparer.OrdinalIgnoreCase);
         ModTypesEntry? previous = map.Mods.FirstOrDefault(entry => string.Equals(entry.ModName, modName, StringComparison.OrdinalIgnoreCase));
-        if (previous is not null)
-        {
-            foreach (string generatedFile in previous.GeneratedFiles)
-            {
-                if (newGenerated.Contains(Path.Combine(missionPath, generatedFile)))
-                {
-                    continue;
-                }
+        int previousIndex = previous is null ? -1 : map.Mods.IndexOf(previous);
 
-                DeleteGenerated(missionPath, generatedFile, messages);
-            }
-
-            map.Mods.Remove(previous);
-        }
-
-        map.Mods.Add(new ModTypesEntry
+        var newEntry = new ModTypesEntry
         {
             ModName = modName,
             SourceFiles = sourceRelative,
             GeneratedFiles = generated,
-        });
+        };
 
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
+        if (previous is not null)
+        {
+            map.Mods.Remove(previous);
+        }
+
+        map.Mods.Add(newEntry);
+
+        if (!TryRegenerateEconomy(missionPath, map, messages, loadedModNames, ownedBefore).Success)
+        {
+            map.Mods.Remove(newEntry);
+            if (previous is not null)
+            {
+                map.Mods.Insert(Math.Min(previousIndex, map.Mods.Count), previous);
+            }
+
+            foreach (string fullPath in copied)
+            {
+                TryDeleteQuiet(fullPath);
+            }
+
+            return new TypesOperationResult { Success = false, Messages = messages };
+        }
+
+        // Economy now references the new files; superseded files are removed only
+        // after the update succeeded (best-effort so a locked file cannot abort an
+        // otherwise-committed configuration).
+        if (previous is not null)
+        {
+            foreach (string generatedFile in previous.GeneratedFiles)
+            {
+                if (!newGenerated.Contains(Path.Combine(missionPath, generatedFile)))
+                {
+                    DeleteGenerated(missionPath, generatedFile, messages);
+                }
+            }
+        }
+
+        return new TypesOperationResult { Success = true, Messages = messages };
     }
 
     public TypesOperationResult RemoveFiles(
@@ -219,6 +258,9 @@ public sealed class TypesService : ITypesService
         // Snapshot before removal so the removed files are still recognized as
         // owned when cfgeconomycore.xml is regenerated.
         IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
+        int entryIndex = map.Mods.IndexOf(entry);
+        List<string> originalGenerated = new(entry.GeneratedFiles);
+        var removedGenerated = new List<string>();
 
         foreach (string leaf in fileLeaves)
         {
@@ -228,17 +270,47 @@ public sealed class TypesService : ITypesService
                 continue;
             }
 
-            DeleteGenerated(missionPath, generated, messages);
             entry.GeneratedFiles.Remove(generated);
+            removedGenerated.Add(generated);
         }
 
+        if (removedGenerated.Count == 0)
+        {
+            return new TypesOperationResult { Success = true, Messages = messages };
+        }
+
+        // Commit in memory first (an entry whose last file is removed disappears),
+        // then rewrite cfgeconomycore.xml. On failure the config is rolled back and
+        // no physical file has been deleted yet.
+        bool entryRemoved = false;
         if (entry.GeneratedFiles.Count == 0)
         {
             map.Mods.Remove(entry);
+            entryRemoved = true;
+        }
+
+        if (!TryRegenerateEconomy(missionPath, map, messages, loadedModNames, ownedBefore).Success)
+        {
+            if (entryRemoved)
+            {
+                map.Mods.Insert(Math.Min(entryIndex, map.Mods.Count), entry);
+            }
+
+            entry.GeneratedFiles = originalGenerated;
+            return new TypesOperationResult { Success = false, Messages = messages };
+        }
+
+        if (entryRemoved)
+        {
             messages.Add($"Removed {modName} types config (no files remaining)");
         }
 
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
+        foreach (string generated in removedGenerated)
+        {
+            DeleteGenerated(missionPath, generated, messages);
+        }
+
+        return new TypesOperationResult { Success = true, Messages = messages };
     }
 
     public TypesOperationResult CleanInvalid(
@@ -254,7 +326,7 @@ public sealed class TypesService : ITypesService
         if (map is null)
         {
             messages.Add("No types configuration present.");
-            return RegenerateEconomyCore(missionPath, null, messages, loadedModNames,
+            return TryRegenerateEconomy(missionPath, null, messages, loadedModNames,
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         }
 
@@ -266,6 +338,32 @@ public sealed class TypesService : ITypesService
             .Where(entry => !validModNames.Contains(entry.ModName))
             .ToList();
 
+        if (invalid.Count == 0)
+        {
+            messages.Add("No invalid types configurations found.");
+            return new TypesOperationResult { Success = true, Messages = messages };
+        }
+
+        // Remove the invalid entries in memory first so the economy rewrite below
+        // reflects the final state. The entries are restored if that rewrite
+        // fails; the physical files are only deleted after it succeeded.
+        var removedIndexes = new Dictionary<ModTypesEntry, int>();
+        foreach (ModTypesEntry entry in invalid)
+        {
+            removedIndexes[entry] = map.Mods.IndexOf(entry);
+            map.Mods.Remove(entry);
+        }
+
+        if (!TryRegenerateEconomy(missionPath, map, messages, loadedModNames, ownedBefore).Success)
+        {
+            foreach (ModTypesEntry entry in invalid)
+            {
+                map.Mods.Insert(Math.Min(removedIndexes[entry], map.Mods.Count), entry);
+            }
+
+            return new TypesOperationResult { Success = false, Messages = messages };
+        }
+
         foreach (ModTypesEntry entry in invalid)
         {
             foreach (string generated in entry.GeneratedFiles)
@@ -273,16 +371,10 @@ public sealed class TypesService : ITypesService
                 DeleteGenerated(missionPath, generated, messages);
             }
 
-            map.Mods.Remove(entry);
             messages.Add($"Cleaned up types config for {entry.ModName} (mod is no longer active)");
         }
 
-        if (invalid.Count == 0)
-        {
-            messages.Add("No invalid types configurations found.");
-        }
-
-        return RegenerateEconomyCore(missionPath, map, messages, loadedModNames, ownedBefore);
+        return new TypesOperationResult { Success = true, Messages = messages };
     }
 
     public bool SyncEconomyCore(
@@ -299,7 +391,61 @@ public sealed class TypesService : ITypesService
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : GetAllOwnedFileNames(map);
 
-        return _economyCore.UpdateModTypes(missionPath, fileNames, owned);
+        try
+        {
+            return _economyCore.UpdateModTypes(missionPath, fileNames, owned);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public TypesOperationResult RemoveUntrackedFiles(
+        TypesConfig config,
+        string mapName,
+        string missionPath,
+        IReadOnlySet<string> fileLeaves)
+    {
+        var messages = new List<string>();
+
+        // Never touch files the manager still tracks for this map.
+        MapTypesConfig? map = GetMap(config, mapName);
+        IReadOnlySet<string> owned = map is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : GetAllOwnedFileNames(map);
+
+        var removed = new List<string>();
+        foreach (string leaf in fileLeaves)
+        {
+            if (string.IsNullOrWhiteSpace(leaf) || owned.Contains(leaf))
+            {
+                continue;
+            }
+
+            removed.Add(leaf);
+        }
+
+        if (removed.Count == 0)
+        {
+            return new TypesOperationResult { Success = true, Messages = messages };
+        }
+
+        // Drop the economy references first; only delete the physical files once
+        // that succeeded so an unreadable/missing cfgeconomycore.xml never leaves
+        // the on-disk references gone but the files still gone (or vice versa).
+        if (!TryRemoveEconomyEntries(missionPath, removed, messages))
+        {
+            return new TypesOperationResult { Success = false, Messages = messages };
+        }
+
+        foreach (string leaf in removed)
+        {
+            DeleteGenerated(missionPath, Path.Combine("db", "ModTypes", leaf), messages);
+        }
+
+        messages.Add($"Removed {removed.Count} untracked type file(s) from db\\ModTypes");
+        return new TypesOperationResult { Success = true, Messages = messages };
     }
 
     public IReadOnlyList<string> GetActiveTypeFileNames(
@@ -311,7 +457,7 @@ public sealed class TypesService : ITypesService
         return map is null ? Array.Empty<string>() : GetAllGeneratedFileNames(map, loadedModNames);
     }
 
-    private TypesOperationResult RegenerateEconomyCore(
+    private TypesOperationResult TryRegenerateEconomy(
         string missionPath,
         MapTypesConfig? map,
         List<string> messages,
@@ -322,13 +468,41 @@ public sealed class TypesService : ITypesService
             ? Array.Empty<string>()
             : GetAllGeneratedFileNames(map, loadedModNames);
 
-        if (!_economyCore.UpdateModTypes(missionPath, fileNames, owned))
+        try
         {
-            messages.Add("Failed to update cfgeconomycore.xml.");
+            if (_economyCore.UpdateModTypes(missionPath, fileNames, owned))
+            {
+                return new TypesOperationResult { Success = true, Messages = messages };
+            }
+        }
+        catch (Exception ex)
+        {
+            messages.Add($"Failed to update cfgeconomycore.xml: {ex.Message}");
             return new TypesOperationResult { Success = false, Messages = messages };
         }
 
-        return new TypesOperationResult { Success = true, Messages = messages };
+        messages.Add("Failed to update cfgeconomycore.xml.");
+        return new TypesOperationResult { Success = false, Messages = messages };
+    }
+
+    private bool TryRemoveEconomyEntries(string missionPath, IReadOnlyList<string> names, List<string> messages)
+    {
+        var targets = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (_economyCore.RemoveModTypesFiles(missionPath, targets))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            messages.Add($"Failed to update cfgeconomycore.xml: {ex.Message}");
+            return false;
+        }
+
+        messages.Add("Failed to update cfgeconomycore.xml.");
+        return false;
     }
 
     private static IReadOnlyList<string> GetAllGeneratedFileNames(
@@ -349,13 +523,40 @@ public sealed class TypesService : ITypesService
             .Select(generated => Path.GetFileName(generated)!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Deletes a generated file, adding a message. Failures are reported
+    /// but never thrown: deletion runs only after the economy file was updated, so
+    /// a locked file degrades to a (re-cleanable) leftover instead of aborting the
+    /// already-committed configuration.</summary>
     private void DeleteGenerated(string missionPath, string relativeFile, List<string> messages)
     {
         string fullPath = Path.Combine(missionPath, relativeFile);
-        if (_fileSystem.FileExists(fullPath))
+        try
         {
-            _fileSystem.DeleteFile(fullPath);
-            messages.Add($"Deleted {Path.GetFileName(fullPath)}");
+            if (_fileSystem.FileExists(fullPath))
+            {
+                _fileSystem.DeleteFile(fullPath);
+                messages.Add($"Deleted {Path.GetFileName(fullPath)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            messages.Add($"Failed to delete {Path.GetFileName(fullPath)}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Deletes a file, ignoring failures (used for rollback cleanup).</summary>
+    private void TryDeleteQuiet(string fullPath)
+    {
+        try
+        {
+            if (_fileSystem.FileExists(fullPath))
+            {
+                _fileSystem.DeleteFile(fullPath);
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: leftover copies are shown as untracked and cleaned later.
         }
     }
 

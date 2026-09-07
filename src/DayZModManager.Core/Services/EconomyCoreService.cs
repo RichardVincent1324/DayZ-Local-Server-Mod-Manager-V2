@@ -21,6 +21,14 @@ public interface IEconomyCoreService
     /// are preserved. Returns false if the file is missing or malformed.
     /// </summary>
     bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames);
+
+    /// <summary>
+    /// Removes the ModTypes references for the given leaf names from
+    /// cfgeconomycore.xml regardless of whether this manager owns them. Used to
+    /// clean up orphaned files the manager does not track. Other references are
+    /// preserved. Returns false if the file is missing or malformed.
+    /// </summary>
+    bool RemoveModTypesFiles(string missionPath, IReadOnlySet<string> fileNames);
 }
 
 public sealed class EconomyCoreService : IEconomyCoreService
@@ -36,24 +44,8 @@ public sealed class EconomyCoreService : IEconomyCoreService
 
     public bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames)
     {
-        string configPath = Path.Combine(missionPath, "cfgeconomycore.xml");
-        if (!_fileSystem.FileExists(configPath))
-        {
-            return false;
-        }
-
-        XDocument doc;
-        try
-        {
-            doc = XDocument.Parse(_fileSystem.ReadAllText(configPath), LoadOptions.PreserveWhitespace);
-        }
-        catch (XmlException)
-        {
-            return false;
-        }
-
-        XElement? root = doc.Root;
-        if (root is null)
+        XDocument? doc = LoadEconomyCore(missionPath);
+        if (doc?.Root is null)
         {
             return false;
         }
@@ -70,14 +62,118 @@ public sealed class EconomyCoreService : IEconomyCoreService
             ownedFileNames.Where(name => !desiredSet.Contains(name)),
             StringComparer.OrdinalIgnoreCase);
 
-        bool changed = false;
+        bool changed = RemoveFileEntries(doc, stale);
 
-        // Remove only the entries this manager owns that are no longer desired;
-        // keep the map's own entries and entries added by other tools/mods.
-        foreach (XElement ce in root.Descendants("ce").Where(IsModTypesCe).ToList())
+        if (desired.Count > 0)
+        {
+            XElement? existing = doc.Root.Descendants("ce").FirstOrDefault(IsModTypesCe);
+            if (existing is not null)
+            {
+                (string newline, string indent) = DetectFormatting(doc.Root.Descendants("classes").FirstOrDefault());
+                string fileIndent = indent + indent;
+
+                // Entries this manager does not own (base/third-party) must survive
+                // the rewrite; keep them in their original relative order.
+                List<XElement> preserved = existing.Elements("file")
+                    .Where(f => !desiredSet.Contains((string?)f.Attribute("name") ?? string.Empty))
+                    .ToList();
+
+                // Rewrite only when a desired entry is missing or the desired
+                // entries already present are not in the exact order requested
+                // (regular types before spawnabletypes, mod load order, ...).
+                List<string> presentDesired = existing.Elements("file")
+                    .Select(f => (string?)f.Attribute("name") ?? string.Empty)
+                    .Where(desiredSet.Contains)
+                    .ToList();
+
+                if (!presentDesired.SequenceEqual(desired, StringComparer.OrdinalIgnoreCase))
+                {
+                    existing.RemoveNodes();
+                    foreach (string name in desired)
+                    {
+                        existing.Add(new XText(newline + fileIndent));
+                        existing.Add(new XElement("file",
+                            new XAttribute("name", name),
+                            new XAttribute("type", GetFileType(name))));
+                    }
+
+                    foreach (XElement keep in preserved)
+                    {
+                        existing.Add(new XText(newline + fileIndent));
+                        existing.Add(keep);
+                    }
+
+                    existing.Add(new XText(newline + indent));
+                    changed = true;
+                }
+            }
+            else
+            {
+                XElement? classes = doc.Root.Descendants("classes").FirstOrDefault();
+                (string newline, string indent) = DetectFormatting(classes);
+                XElement ce = BuildCe(desired, newline, indent);
+
+                if (classes is not null)
+                {
+                    if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+                    {
+                        classes.AddBeforeSelf(ce);
+                        classes.AddBeforeSelf(new XText(whitespace.Value));
+                    }
+                    else
+                    {
+                        classes.AddBeforeSelf(ce);
+                        classes.AddBeforeSelf(new XText(newline + indent));
+                    }
+                }
+                else
+                {
+                    doc.Root.Add(new XText(newline + indent));
+                    doc.Root.Add(ce);
+                }
+
+                changed = true;
+            }
+        }
+
+        return !changed || SaveEconomyCore(missionPath, doc);
+    }
+
+    public bool RemoveModTypesFiles(string missionPath, IReadOnlySet<string> fileNames)
+    {
+        if (fileNames.Count == 0)
+        {
+            return true;
+        }
+
+        XDocument? doc = LoadEconomyCore(missionPath);
+        if (doc?.Root is null)
+        {
+            return false;
+        }
+
+        var targets = new HashSet<string>(fileNames.Where(name => !string.IsNullOrWhiteSpace(name)), StringComparer.OrdinalIgnoreCase);
+        return !RemoveFileEntries(doc, targets) || SaveEconomyCore(missionPath, doc);
+    }
+
+    /// <summary>
+    /// Removes the <c>&lt;file&gt;</c> entries whose leaf name is in
+    /// <paramref name="names"/> from every ModTypes <c>ce</c> block, dropping a
+    /// block (and its surrounding whitespace) once empty. Returns whether the
+    /// document changed.
+    /// </summary>
+    private static bool RemoveFileEntries(XDocument doc, IReadOnlySet<string> names)
+    {
+        if (doc.Root is null)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        foreach (XElement ce in doc.Root.Descendants("ce").Where(IsModTypesCe).ToList())
         {
             foreach (XElement file in ce.Elements("file")
-                         .Where(f => stale.Contains((string?)f.Attribute("name") ?? string.Empty))
+                         .Where(f => names.Contains((string?)f.Attribute("name") ?? string.Empty))
                          .ToList())
             {
                 file.Remove();
@@ -97,68 +193,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
             }
         }
 
-        if (desired.Count > 0)
-        {
-            XElement? existing = root.Descendants("ce").FirstOrDefault(IsModTypesCe);
-            if (existing is not null)
-            {
-                (string newline, string indent) = DetectFormatting(root.Descendants("classes").FirstOrDefault());
-                string fileIndent = indent + indent;
-                bool added = false;
-
-                foreach (string name in desired)
-                {
-                    if (existing.Elements("file")
-                        .Any(f => string.Equals((string?)f.Attribute("name"), name, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        continue;
-                    }
-
-                    existing.Add(new XText(newline + fileIndent));
-                    existing.Add(new XElement("file",
-                        new XAttribute("name", name),
-                        new XAttribute("type", GetFileType(name))));
-                    added = true;
-                }
-
-                changed |= added;
-            }
-            else
-            {
-                XElement? classes = root.Descendants("classes").FirstOrDefault();
-                (string newline, string indent) = DetectFormatting(classes);
-                XElement ce = BuildCe(desired, newline, indent);
-
-                if (classes is not null)
-                {
-                    if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
-                    {
-                        classes.AddBeforeSelf(ce);
-                        classes.AddBeforeSelf(new XText(whitespace.Value));
-                    }
-                    else
-                    {
-                        classes.AddBeforeSelf(ce);
-                        classes.AddBeforeSelf(new XText(newline + indent));
-                    }
-                }
-                else
-                {
-                    root.Add(new XText(newline + indent));
-                    root.Add(ce);
-                }
-
-                changed = true;
-            }
-        }
-
-        if (!changed)
-        {
-            return true;
-        }
-
-        _fileSystem.WriteAllText(configPath, Serialize(doc));
-        return true;
+        return changed;
     }
 
     private static bool IsModTypesCe(XElement ce)
@@ -173,6 +208,31 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return normalized.Equals("./db/ModTypes", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase)
             || normalized.Equals("ModTypes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Reads and parses cfgeconomycore.xml, or null when missing/malformed.</summary>
+    private XDocument? LoadEconomyCore(string missionPath)
+    {
+        string configPath = Path.Combine(missionPath, "cfgeconomycore.xml");
+        if (!_fileSystem.FileExists(configPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return XDocument.Parse(_fileSystem.ReadAllText(configPath), LoadOptions.PreserveWhitespace);
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+    }
+
+    private bool SaveEconomyCore(string missionPath, XDocument doc)
+    {
+        _fileSystem.WriteAllText(Path.Combine(missionPath, "cfgeconomycore.xml"), Serialize(doc));
+        return true;
     }
 
     private static (string Newline, string Indent) DetectFormatting(XElement? classes)

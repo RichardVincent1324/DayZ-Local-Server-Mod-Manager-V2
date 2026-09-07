@@ -38,6 +38,12 @@ public class SaveGameServiceTests
         fs.AddFile($@"{MissionPath}\{folderName}\players.db", "live-data");
     }
 
+    private static void SeedLiveModTypes(FakeFileSystem fs, string fileName = "CF_types.xml", string contents = "types-data")
+    {
+        fs.AddDirectory($@"{MissionPath}\db", "ModTypes");
+        fs.AddFile($@"{MissionPath}\db\ModTypes\{fileName}", contents);
+    }
+
     private static void SeedStoredSave(FakeFileSystem fs, string saveName, string contents = "saved-data")
     {
         string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
@@ -157,6 +163,115 @@ public class SaveGameServiceTests
     }
 
     [Fact]
+    public void AddSave_CopiesLiveModTypesIntoLibrary_WhenPresent()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+        SeedLiveModTypes(fs);
+        var meta = new SaveMetaData
+        {
+            Map = MapName,
+            StorageFolder = "storage_1",
+            ModList = new List<string> { "@CF" },
+            TypesFiles = new List<string> { "CF_types.xml" },
+        };
+
+        SaveGameResult result = CreateService(fs).AddSave(ServerPath, MapName, DataDirectory, "Alpha", overwrite: false, meta: meta);
+
+        Assert.True(result.Success);
+        Assert.Equal("types-data", fs.TryGetFileContents($@"{LibraryPath("Alpha")}\ModTypes\CF_types.xml"));
+        Assert.Equal("live-data", fs.TryGetFileContents($@"{LibraryPath("Alpha")}\storage_1\players.db"));
+        Assert.NotNull(fs.TryGetFileContents($@"{LibraryPath("Alpha")}\meta.json"));
+    }
+
+    [Fact]
+    public void AddSave_SkipsTypesSnapshot_WhenLiveModTypesAbsent()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+
+        SaveGameResult result = CreateService(fs).AddSave(ServerPath, MapName, DataDirectory, "Alpha", overwrite: false, meta: new SaveMetaData());
+
+        Assert.True(result.Success);
+        Assert.False(fs.DirectoryExists($@"{LibraryPath("Alpha")}\ModTypes"));
+        Assert.Equal("live-data", fs.TryGetFileContents($@"{LibraryPath("Alpha")}\storage_1\players.db"));
+    }
+
+    [Fact]
+    public void AddSave_ModTypesCopyFailure_FailsAndPreservesExistingSave()
+    {
+        var inner = new FakeFileSystem();
+        SeedLiveStorage(inner);
+        SeedLiveModTypes(inner);
+        SeedStoredSave(inner, "Alpha", "old-world");
+        var fs = new FaultyFileSystem(inner)
+        {
+            CopyDirectoryThrowsWhen = path => path.Equals($@"{MissionPath}\db\ModTypes", StringComparison.OrdinalIgnoreCase),
+        };
+
+        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
+            .AddSave(ServerPath, MapName, DataDirectory, "Alpha", overwrite: true, meta: new SaveMetaData());
+
+        Assert.False(result.Success);
+        Assert.Equal("old-world", fs.TryGetFileContents($@"{LibraryPath("Alpha")}\players.db"));
+        Assert.Empty(fs.GetDirectories($@"{DataDirectory}\{SaveGameService.SavesRootName}").Where(n => n.StartsWith(".save_", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void LoadSave_DoesNotRestoreModTypesSnapshot_IntoLiveMission()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+        SeedLiveModTypes(fs, fileName: "live_types.xml", contents: "live-types");
+
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        fs.AddDirectory(library, "Alpha");
+        fs.AddDirectory($@"{library}\Alpha", "storage_1", "ModTypes");
+        fs.AddFile($@"{library}\Alpha\storage_1\players.db", "new-world");
+        fs.AddFile($@"{library}\Alpha\ModTypes\stored_types.xml", "stored-types");
+        fs.AddFile($@"{library}\Alpha\meta.json", MetaJsonStorage1);
+
+        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, DataDirectory, "Alpha");
+
+        Assert.True(result.Success);
+        Assert.Equal("new-world", fs.TryGetFileContents($@"{MissionPath}\storage_1\players.db"));
+        Assert.Equal("live-types", fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\live_types.xml"));
+        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\stored_types.xml"));
+        Assert.Equal("stored-types", fs.TryGetFileContents($@"{library}\Alpha\ModTypes\stored_types.xml"));
+    }
+
+    [Fact]
+    public void LoadSave_Fails_WhenStorageMissing_ButModTypesSnapshotPresent()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+        SeedLiveModTypes(fs, fileName: "live_types.xml", contents: "live-types");
+
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        fs.AddDirectory(library, "Alpha");
+        fs.AddDirectory($@"{library}\Alpha", "ModTypes"); // storage_1 intentionally absent
+        fs.AddFile($@"{library}\Alpha\ModTypes\stored_types.xml", "<types/>");
+        fs.AddFile($@"{library}\Alpha\meta.json", MetaJsonStorage1); // references storage_1
+
+        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, DataDirectory, "Alpha");
+
+        // The ModTypes snapshot must never be mistaken for the world data: the
+        // load fails cleanly and the live world stays untouched.
+        Assert.False(result.Success);
+        Assert.Equal("live-data", fs.TryGetFileContents($@"{MissionPath}\storage_1\players.db"));
+        Assert.Equal("live-types", fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\live_types.xml"));
+        Assert.False(fs.FileExists($@"{MissionPath}\storage_1\stored_types.xml"));
+    }
+
+    [Fact]
+    public void GetModTypesSnapshotPath_ReturnsSnapshotFolderInsideSave()
+    {
+        string path = CreateService(new FakeFileSystem()).GetModTypesSnapshotPath(DataDirectory, MapName, "Alpha");
+
+        Assert.Equal($@"{LibraryPath("Alpha")}\ModTypes", path);
+    }
+
+    [Fact]
     public void GetMeta_ReturnsMissing_WhenSaveHasNoMeta()
     {
         var fs = new FakeFileSystem();
@@ -235,6 +350,39 @@ public class SaveGameServiceTests
         IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
 
         Assert.Equal(new[] { "Alpha", "Beta" }, saves);
+    }
+
+    [Fact]
+    public void ListSaves_IgnoresPromotionBackupFolders()
+    {
+        var fs = new FakeFileSystem();
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        fs.AddDirectory(library, "Alpha", "Alpha.old", "Beta");
+        fs.AddFile($@"{library}\Alpha\players.db", "a");
+        fs.AddFile($@"{library}\Alpha.old\players.db", "old");
+        fs.AddFile($@"{library}\Beta\players.db", "b");
+
+        IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
+
+        Assert.Equal(new[] { "Alpha", "Beta" }, saves);
+    }
+
+    [Fact]
+    public void LoadSave_RecoversInterruptedPromotion_FromDotOldBackup()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        // Interrupted AddSave overwrite: only the previous copy remains as .old.
+        fs.AddDirectory(library, "Alpha.old");
+        fs.AddFile($@"{library}\Alpha.old\players.db", "old-world");
+
+        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, DataDirectory, "Alpha");
+
+        Assert.True(result.Success);
+        Assert.Equal("old-world", fs.TryGetFileContents($@"{MissionPath}\storage_1\players.db"));
+        Assert.True(fs.DirectoryExists($@"{library}\Alpha"));
+        Assert.False(fs.DirectoryExists($@"{library}\Alpha.old"));
     }
 
     [Fact]

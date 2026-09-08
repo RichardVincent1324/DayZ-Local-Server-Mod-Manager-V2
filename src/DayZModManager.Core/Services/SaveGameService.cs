@@ -152,8 +152,40 @@ public sealed partial class SaveGameService : ISaveGameService
             // Promotion backups (e.g. "Alpha.old" left by an interrupted AddSave)
             // are internal bookkeeping, never loadable saves.
             .Where(name => !name.EndsWith(OldBackupSuffix, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => (Name: name, SavedAtUtc: TryGetSavedAtUtc(dataDirectory, mapName, name)))
+            .OrderByDescending(save => save.SavedAtUtc.HasValue)
+            .ThenBy(save => save.SavedAtUtc.GetValueOrDefault())
+            .ThenBy(save => save.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(save => save.Name)
             .ToList();
+    }
+
+    /// <summary>
+    /// Returns the <c>savedAtUtc</c> recorded in a save's <c>meta.json</c>, or
+    /// null when the save has no meta.json (older-format save), its snapshot is
+    /// unreadable/corrupt, or it records no usable timestamp. Never throws so a
+    /// single unreadable save cannot break listing the others.
+    /// </summary>
+    private DateTime? TryGetSavedAtUtc(string dataDirectory, string mapName, string saveName)
+    {
+        try
+        {
+            ConfigLoadResult<SaveMetaData> meta = GetMeta(dataDirectory, mapName, saveName);
+            if (meta.Status == ConfigLoadStatus.Success)
+            {
+                DateTime savedAt = meta.Value!.SavedAtUtc;
+                if (savedAt != default)
+                {
+                    return savedAt;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Fall back to name ordering for the unreadable save.
+        }
+
+        return null;
     }
 
     public string GetSaveFolderPath(string dataDirectory, string mapName, string saveName) =>

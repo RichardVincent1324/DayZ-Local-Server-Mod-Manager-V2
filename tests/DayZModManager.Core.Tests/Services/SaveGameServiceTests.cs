@@ -67,6 +67,18 @@ public class SaveGameServiceTests
         }
     }
 
+    private static string MetaJsonSavedAt(string savedAtUtc) =>
+        $"{{\"version\":1,\"map\":\"dayzOffline.chernarusplus\",\"storageFolder\":\"storage_1\",\"savedAtUtc\":\"{savedAtUtc}\",\"modList\":[\"@CF\"],\"typesFiles\":[]}}";
+
+    private static void SeedStoredSaveWithMeta(FakeFileSystem fs, string saveName, string metaJson, string contents = "saved-data")
+    {
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        fs.AddDirectory(library, saveName);
+        fs.AddDirectory($@"{library}\{saveName}", "storage_1");
+        fs.AddFile($@"{library}\{saveName}\storage_1\players.db", contents);
+        fs.AddFile($@"{library}\{saveName}\meta.json", metaJson);
+    }
+
     private static string LibraryPath(string saveName) =>
         $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}\{saveName}";
 
@@ -365,6 +377,44 @@ public class SaveGameServiceTests
         IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
 
         Assert.Equal(new[] { "Alpha", "Beta" }, saves);
+    }
+
+    [Fact]
+    public void ListSaves_OrdersBySavedAtUtc_OldestFirst()
+    {
+        var fs = new FakeFileSystem();
+        SeedStoredSaveWithMeta(fs, "Alpha", MetaJsonSavedAt("2026-01-01T00:00:00Z"));
+        SeedStoredSaveWithMeta(fs, "Gamma", MetaJsonSavedAt("2026-01-03T00:00:00Z"));
+        SeedStoredSaveWithMeta(fs, "Beta", MetaJsonSavedAt("2026-01-02T00:00:00Z"));
+
+        IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
+
+        Assert.Equal(new[] { "Alpha", "Beta", "Gamma" }, saves);
+    }
+
+    [Fact]
+    public void ListSaves_PlacesSavesWithoutMeta_AfterTimestampedOnes()
+    {
+        var fs = new FakeFileSystem();
+        SeedStoredSaveWithMeta(fs, "Zulu", MetaJsonSavedAt("2026-01-02T00:00:00Z"));
+        SeedStoredSave(fs, "Alpha");
+        SeedStoredSave(fs, "Beta");
+
+        IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
+
+        Assert.Equal(new[] { "Zulu", "Alpha", "Beta" }, saves);
+    }
+
+    [Fact]
+    public void ListSaves_TreatsCorruptMeta_AsSaveWithoutTimestamp()
+    {
+        var fs = new FakeFileSystem();
+        SeedStoredSaveWithMeta(fs, "Zulu", MetaJsonSavedAt("2026-01-02T00:00:00Z"));
+        SeedStoredSaveWithMeta(fs, "Gamma", "{not-json");
+
+        IReadOnlyList<string> saves = CreateService(fs).ListSaves(DataDirectory, MapName);
+
+        Assert.Equal(new[] { "Zulu", "Gamma" }, saves);
     }
 
     [Fact]

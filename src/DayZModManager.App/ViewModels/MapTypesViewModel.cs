@@ -1265,7 +1265,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             string snapshot = _saveGameService.GetModTypesSnapshotPath(dataDirectory, mapName, saveName);
             if (_fileSystem.DirectoryExists(snapshot))
             {
-                string restore = "For investigation or restoring the types files, go to:\n" + snapshot;
+                string restore = "To restore the missing types files, go to:\n" + snapshot;
                 string liveModTypes = LiveModTypesFolderPath(mapName);
                 if (!string.IsNullOrWhiteSpace(liveModTypes))
                 {

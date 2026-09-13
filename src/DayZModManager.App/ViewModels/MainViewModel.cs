@@ -88,6 +88,7 @@ public sealed class MainViewModel : ViewModelBase
             mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState);
         MapTypes.EnsureApplied = EnsureApplied;
+        MapTypes.RestoreModOrder = RestoreModOrderAsync;
         Settings = new SettingsViewModel(dialogs);
         Settings.ApplyRequested += async () => await ApplyAsync();
 
@@ -157,7 +158,7 @@ public sealed class MainViewModel : ViewModelBase
     private static bool SettingsChanged(Settings before, Settings after) =>
         !string.Equals(before.WorkshopPath, after.WorkshopPath, StringComparison.OrdinalIgnoreCase)
         || !string.Equals(before.ServerPath, after.ServerPath, StringComparison.OrdinalIgnoreCase)
-        || !string.Equals(before.BatFileName, after.BatFileName, StringComparison.OrdinalIgnoreCase);
+        || !string.Equals(before.BatchFile, after.BatchFile, StringComparison.OrdinalIgnoreCase);
 
     public LogViewModel Log { get; }
 
@@ -196,7 +197,16 @@ public sealed class MainViewModel : ViewModelBase
 
         if (result.Status == ConfigLoadStatus.Success)
         {
-            return result.Value!;
+            Settings loaded = result.Value!;
+            // A leftover settings.json from an earlier install may hold only empty
+            // defaults; treat it the same as a missing file so the user is
+            // reminded to configure the paths.
+            if (HasNoConfiguredPaths(loaded))
+            {
+                Log.Warning("No configuration found. Set the server and workshop paths in the Settings tab.");
+            }
+
+            return loaded;
         }
 
         if (result.Status == ConfigLoadStatus.Corrupt)
@@ -218,6 +228,10 @@ public sealed class MainViewModel : ViewModelBase
         _settingsService.Save(dataDirectory, fresh);
         return fresh;
     }
+
+    /// <summary>True when the settings hold no usable paths yet (nothing configured).</summary>
+    private static bool HasNoConfiguredPaths(Settings settings) =>
+        string.IsNullOrWhiteSpace(settings.WorkshopPath) && string.IsNullOrWhiteSpace(settings.ServerPath);
 
     private void ApplyLoadedTypes(TypesConfig loaded)
     {
@@ -254,7 +268,7 @@ public sealed class MainViewModel : ViewModelBase
 
             bool pathsChanged = newSettings.WorkshopPath != _settings.WorkshopPath
                 || newSettings.ServerPath != _settings.ServerPath
-                || newSettings.BatFileName != _settings.BatFileName;
+                || newSettings.BatchFile != _settings.BatchFile;
             bool modsChanged = Mods.IsDirty;
 
             // A change limited to Settings feature toggles (e.g. the log-cleanup
@@ -274,14 +288,22 @@ public sealed class MainViewModel : ViewModelBase
                 DataDirectory = dataDirectory,
             }));
 
-            foreach (string line in result.Logs)
+            if (result.Success)
             {
-                Log.Info(line);
+                foreach (string line in result.Logs)
+                {
+                    Log.Info(line);
+                }
             }
-
-            if (!result.Success)
+            else
             {
-                Log.Error("Apply failed.");
+                // Log the failure reason itself so it stands out (e.g. the
+                // "Validation failed:" header and each missing-setting reason).
+                foreach (string line in result.Logs)
+                {
+                    Log.Error(line);
+                }
+
                 return false;
             }
 
@@ -324,7 +346,6 @@ public sealed class MainViewModel : ViewModelBase
                 Log.Error($"Apply succeeded, but refreshing the UI failed: {ex.Message}");
             }
 
-            await CleanupOldLogsIfEnabledAsync(_settings);
             UpdateDirty();
             return true;
         }
@@ -356,7 +377,6 @@ public sealed class MainViewModel : ViewModelBase
         Settings.MarkApplied(newSettings);
         LogCleanupStateChange(cleanupWasEnabled, newSettings.AutoCleanServerLogs);
 
-        await CleanupOldLogsIfEnabledAsync(newSettings);
         UpdateDirty();
         return true;
     }
@@ -377,6 +397,13 @@ public sealed class MainViewModel : ViewModelBase
     private async Task StartServerAsync()
     {
         if (RefuseLaunchWhileServerRunning())
+        {
+            return;
+        }
+
+        // Never launch before the workshop/server/batch paths are explicitly
+        // configured: there is no implicit batch file to fall back on.
+        if (RefuseLaunchWhenNotConfigured())
         {
             return;
         }
@@ -408,8 +435,6 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
-        await CleanupOldLogsIfEnabledAsync(_settings);
-
         try
         {
             _launcher.Launch(_settings.BatFilePath, _settings.ServerPath);
@@ -439,6 +464,37 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Returns true (and tells the user) when a required setting is missing, so
+    /// Start Server never launches an implicit or wrong target — in particular a
+    /// batch file the user never explicitly chose.
+    /// </summary>
+    private bool RefuseLaunchWhenNotConfigured()
+    {
+        string? missing;
+        if (string.IsNullOrWhiteSpace(_settings.WorkshopPath))
+        {
+            missing = "the Workshop path";
+        }
+        else if (string.IsNullOrWhiteSpace(_settings.ServerPath))
+        {
+            missing = "the DayZ Server path";
+        }
+        else if (string.IsNullOrWhiteSpace(_settings.BatchFile))
+        {
+            missing = "the launch batch file";
+        }
+        else
+        {
+            return false;
+        }
+
+        string message = $"Set {missing} in the Settings tab first.";
+        Log.Error(message);
+        _dialogs.ShowMessage(message, "Start Server", isError: true);
+        return true;
+    }
+
+    /// <summary>
     /// Waits (bounded) until no map-switch / types operation is in flight so the
     /// launch batch and mission files are stable before the server is started.
     /// Returns false when the wait timed out.
@@ -461,9 +517,9 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Prunes old DayZ log files in the active map profile folder when the
-    /// "auto-clean" feature is enabled. Uses the settings snapshot so it reacts
-    /// to the most recent Apply even while the folder relocation is in flight.
+    /// Deletes old DayZ log files in the active map profile folder when the
+    /// "auto-clean" feature is enabled. Runs once, on app start, against the
+    /// current settings.
     /// </summary>
     private async Task CleanupOldLogsIfEnabledAsync(Settings settings)
     {
@@ -487,7 +543,7 @@ public sealed class MainViewModel : ViewModelBase
 
         // The profile folder mirrors the mpmissions mission folder (e.g.
         // map_profiles\dayzOffline.chernarusplus), which is where DayZ writes the
-        // .RPT/script logs.
+        // .RPT/script/crash/warning logs.
         string folder = Path.Combine(settings.ServerPath, "map_profiles", mapName);
 
         ServerLogCleanupResult result = await Task.Run(() => _logCleanup.Cleanup(folder));
@@ -499,12 +555,12 @@ public sealed class MainViewModel : ViewModelBase
 
         // Stay silent when nothing needed deleting so opening the app does not
         // spam the log on every normal run.
-        if (result.RptRemoved == 0 && result.ScriptRemoved == 0)
+        if (result.FilesRemoved == 0)
         {
             return;
         }
 
-        Log.Info($"Log cleanup: removed {result.RptRemoved} .RPT and {result.ScriptRemoved} script log file(s).");
+        Log.Info($"Log cleanup: removed {result.FilesRemoved} log files.");
     }
 
     private void UpdateDirty()
@@ -515,4 +571,21 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     private Task<bool> EnsureApplied() => !IsDirty ? Task.FromResult(true) : ApplyAsync();
+
+    /// <summary>
+    /// Replaces the loaded-mod order with <paramref name="orderedMods"/> and
+    /// persists it (batch file + mod_order.json) so a progress save can be loaded
+    /// under the order it was created with. Waits for any in-flight Apply first so
+    /// the new order is not overwritten by a stale one.
+    /// </summary>
+    private async Task<bool> RestoreModOrderAsync(IReadOnlyList<string> orderedMods)
+    {
+        if (_pendingApply is not null)
+        {
+            await _pendingApply;
+        }
+
+        Mods.ApplyOrder(orderedMods);
+        return await ApplyAsync();
+    }
 }

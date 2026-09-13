@@ -26,6 +26,13 @@ public sealed class UiDialogService : IDialogService
         return window.ShowDialog() == true;
     }
 
+    public LoadSaveConfirmation ConfirmLoadSave(
+        string message, string title, string warning, string note, bool offerTypesRestore)
+    {
+        var window = new WarningConfirmWindow(message, title, warning, note, offerTypesRestore);
+        return new LoadSaveConfirmation(window.ShowDialog() == true, window.RestoreTypes);
+    }
+
     public string? AskText(string title, string prompt, string defaultValue = "")
     {
         var window = new TextPromptWindow(title, prompt, defaultValue);

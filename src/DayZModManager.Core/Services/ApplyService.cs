@@ -72,10 +72,9 @@ public sealed class ApplyService : IApplyService
 
         if (errors.Count > 0)
         {
-            logs.Add("Validation failed:");
             foreach (string error in errors)
             {
-                logs.Add($"  {error}");
+                logs.Add($"Validation failed: {error}");
             }
 
             return new ApplyResult { Success = false, Logs = logs };

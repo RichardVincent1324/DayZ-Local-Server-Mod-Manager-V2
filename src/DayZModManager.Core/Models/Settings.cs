@@ -1,35 +1,38 @@
 namespace DayZModManager.Core.Models;
 
-/// <summary>
-/// Persistent application settings, with a schema version to support migrations.
-/// </summary>
+using System.Text.Json.Serialization;
+
+/// <summary>Persistent application settings.</summary>
 public sealed record Settings
 {
-    public const int CurrentSchemaVersion = 3;
-
     public string WorkshopPath { get; init; } = string.Empty;
 
     public string ServerPath { get; init; } = string.Empty;
 
     /// <summary>
-    /// The launch batch file. A bare file name is resolved relative to
-    /// <see cref="ServerPath"/>; a rooted path is used as-is.
+    /// The launch batch file, explicitly chosen by the user. Empty until one is
+    /// picked: the app must never fall back to an implicit default file name. A
+    /// bare file name is resolved relative to <see cref="ServerPath"/>; a rooted
+    /// path is used as-is.
     /// </summary>
-    public string BatFileName { get; init; } = "LocalServer.example.bat";
+    public string BatchFile { get; init; } = string.Empty;
 
     /// <summary>
-    /// When enabled, old DayZ server log files (the DayZServer_x64_*.RPT and
-    /// script_*.log files in the active map's profile folder) are pruned to the
-    /// three most recent of each. Cleanup runs on app start, after an Apply, and
-    /// before starting the server.
+    /// When enabled, the DayZ server log files in the active map's profile folder
+    /// (the DayZServer_x64_*.RPT, script_*.log, crash_*.log and warning_*.log files)
+    /// are all deleted once 10+ DayZServer_x64_*.RPT and 10+ script_*.log files have
+    /// accumulated. Cleanup runs once on app start.
     /// </summary>
     public bool AutoCleanServerLogs { get; init; }
 
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
-
     /// <summary>
-    /// Full path to the launch batch file. A rooted <see cref="BatFileName"/> is
-    /// used directly; otherwise it is combined with <see cref="ServerPath"/>.
+    /// Full path to the launch batch file. A rooted <see cref="BatchFile"/> is
+    /// used directly; otherwise it is combined with <see cref="ServerPath"/>. Empty
+    /// while no batch file has been chosen. Derived, so it is not persisted.
     /// </summary>
-        public string BatFilePath => Path.IsPathRooted(BatFileName) ? BatFileName : Path.Combine(ServerPath, BatFileName);
+    [JsonIgnore]
+    public string BatFilePath =>
+        string.IsNullOrWhiteSpace(BatchFile)
+            ? string.Empty
+            : Path.IsPathRooted(BatchFile) ? BatchFile : Path.Combine(ServerPath, BatchFile);
 }

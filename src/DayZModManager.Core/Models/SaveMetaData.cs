@@ -8,10 +8,6 @@ namespace DayZModManager.Core.Models;
 /// </summary>
 public sealed class SaveMetaData
 {
-    public const int CurrentSchemaVersion = 1;
-
-    public int Version { get; set; } = CurrentSchemaVersion;
-
     /// <summary>Mission folder name the save belongs to (e.g. "dayzOffline.chernarusplus").</summary>
     public string Map { get; set; } = string.Empty;
 
@@ -30,4 +26,13 @@ public sealed class SaveMetaData
     /// compatibility comparisons treat this as a set.
     /// </summary>
     public List<string> TypesFiles { get; set; } = new();
+
+    /// <summary>
+    /// The map's types configuration (which mod owns which generated file) at save
+    /// time. Restoring it alongside the physical snapshot keeps the manager's
+    /// tracking config and cfgeconomycore.xml consistent with the restored files.
+    /// Null for saves created before this snapshot existed (legacy saves), whose
+    /// ModTypes files cannot be restored automatically.
+    /// </summary>
+    public MapTypesConfig? Types { get; set; }
 }

@@ -78,6 +78,19 @@ public class ModsViewModelTests
     }
 
     [Fact]
+    public void ApplyOrder_ReplacesLoadedOrder_AndMarksDirty()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.ApplyOrder(new[] { "@C", "@A", "@B" });
+
+        Assert.Equal(new[] { "@C", "@A", "@B" }, Names(vm.LoadedItems));
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
     public void RemoveMissing_UnloadsModsNoLongerInWorkshop()
     {
         ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" });

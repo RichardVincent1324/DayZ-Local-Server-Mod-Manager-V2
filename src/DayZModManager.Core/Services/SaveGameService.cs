@@ -19,7 +19,6 @@ public sealed record SaveGameResult
 /// <c>&lt;dataDirectory&gt;\Progress_Saves\&lt;mapName&gt;\&lt;saveName&gt;</c>
 /// and holds a nested copy of the storage folder, a snapshot of the mission's
 /// <c>db\ModTypes</c> folder, and a <c>meta.json</c> configuration snapshot.
-/// Saves created before meta.json existed (flat folder layout) are still loadable.
 /// </summary>
 public interface ISaveGameService
 {
@@ -43,34 +42,45 @@ public interface ISaveGameService
 
     /// <summary>
     /// Returns the folder inside a stored save where the mission's <c>db\ModTypes</c>
-    /// contents were snapshot at save time. The folder may not exist for saves that
-    /// predate this feature or had no types configured.
+    /// contents were snapshot at save time. The folder may not exist when no types
+    /// were configured at save time.
     /// </summary>
     string GetModTypesSnapshotPath(string dataDirectory, string mapName, string saveName);
 
     /// <summary>
     /// Copies the live storage folder into the save library (nested under the
-    /// save folder). When <paramref name="meta"/> is supplied it is written to
-    /// <c>meta.json</c> next to the copied folder, and the mission's
-    /// <c>db\ModTypes</c> folder is snapshot into the save as well.
+    /// save folder), writes <c>meta.json</c> next to it, and snapshots the
+    /// mission's <c>db\ModTypes</c> folder into the save as well.
     /// </summary>
     SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
-        SaveMetaData? meta = null);
+        SaveMetaData meta);
 
     /// <summary>
     /// Replaces the live storage folder with a stored save. The replacement is
     /// staged to a temporary folder first so the current progress is not lost if
-    /// the copy fails. Supports the current nested layout as well as the legacy
-    /// flat layout used before configuration snapshots existed.
+    /// the copy fails.
     /// </summary>
     SaveGameResult LoadSave(string serverPath, string mapName, string dataDirectory, string saveName);
 
     /// <summary>
-    /// Reads the configuration snapshot of a stored save. Missing when the save
-    /// has no <c>meta.json</c> (older-format save).
+    /// Replaces the live mission's <c>db\ModTypes</c> folder with the snapshot
+    /// stored in a save. The live folder is staged to a temporary folder first so
+    /// a failed copy never destroys the current files. Mirrors the snapshot
+    /// exactly: files not present in the snapshot are removed.
+    /// </summary>
+    SaveGameResult RestoreModTypes(string serverPath, string mapName, string dataDirectory, string saveName);
+
+    /// <summary>
+    /// Reads the configuration snapshot of a stored save.
     /// </summary>
     ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName);
+
+    /// <summary>
+    /// Rewrites a stored save's <c>meta.json</c> (e.g. to record extra loaded mods
+    /// accepted when loading it).
+    /// </summary>
+    SaveGameResult UpdateMeta(string dataDirectory, string mapName, string saveName, SaveMetaData meta);
 
     /// <summary>Deletes the live storage folder so the map starts fresh.</summary>
     SaveGameResult NewGame(string serverPath, string mapName);
@@ -162,9 +172,9 @@ public sealed partial class SaveGameService : ISaveGameService
 
     /// <summary>
     /// Returns the <c>savedAtUtc</c> recorded in a save's <c>meta.json</c>, or
-    /// null when the save has no meta.json (older-format save), its snapshot is
-    /// unreadable/corrupt, or it records no usable timestamp. Never throws so a
-    /// single unreadable save cannot break listing the others.
+    /// null when the snapshot is unreadable/corrupt or records no usable
+    /// timestamp. Never throws so a single unreadable save cannot break listing
+    /// the others.
     /// </summary>
     private DateTime? TryGetSavedAtUtc(string dataDirectory, string mapName, string saveName)
     {
@@ -196,7 +206,7 @@ public sealed partial class SaveGameService : ISaveGameService
 
     public SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
-        SaveMetaData? meta = null)
+        SaveMetaData meta)
     {
         if (_processState.IsDayZServerRunning())
         {
@@ -239,7 +249,7 @@ public sealed partial class SaveGameService : ISaveGameService
             // beside it without mixing into the world data.
             _fileSystem.CopyDirectory(liveStorage, Path.Combine(staging, Path.GetFileName(liveStorage)));
 
-            if (meta is not null && _fileSystem.DirectoryExists(liveModTypes))
+            if (_fileSystem.DirectoryExists(liveModTypes))
             {
                 _fileSystem.CopyDirectory(liveModTypes, Path.Combine(staging, ModTypesSnapshotFolderName));
             }
@@ -250,21 +260,18 @@ public sealed partial class SaveGameService : ISaveGameService
             return Failure($"Failed to save progress: {ex.Message}");
         }
 
-        if (meta is not null)
-        {
-            meta.Map = string.IsNullOrWhiteSpace(meta.Map) ? mapName : meta.Map;
-            meta.StorageFolder = Path.GetFileName(liveStorage);
+        meta.Map = string.IsNullOrWhiteSpace(meta.Map) ? mapName : meta.Map;
+        meta.StorageFolder = Path.GetFileName(liveStorage);
 
-            try
-            {
-                ConfigJson.Write(_fileSystem, Path.Combine(staging, MetaFileName), meta);
-            }
-            catch (Exception ex)
-            {
-                // Do not leave a save that cannot be verified against its config.
-                TryDeleteDirectory(staging);
-                return Failure($"Failed to save configuration snapshot: {ex.Message}");
-            }
+        try
+        {
+            ConfigJson.Write(_fileSystem, Path.Combine(staging, MetaFileName), meta);
+        }
+        catch (Exception ex)
+        {
+            // Do not leave a save that cannot be verified against its config.
+            TryDeleteDirectory(staging);
+            return Failure($"Failed to save configuration snapshot: {ex.Message}");
         }
 
         // Promote the staged save into place.
@@ -298,12 +305,7 @@ public sealed partial class SaveGameService : ISaveGameService
 
         TryDeleteDirectory(backup);
 
-        if (meta is not null)
-        {
-            return Success($"Saved current progress as \"{name}\" ({meta.ModList.Count} mod(s), {meta.TypesFiles.Count} type file(s)).");
-        }
-
-        return Success($"Saved current progress as \"{name}\".");
+        return Success($"Saved current progress as \"{name}\" ({meta.ModList.Count} mod(s), {meta.TypesFiles.Count} type file(s)).");
     }
 
     public SaveGameResult LoadSave(string serverPath, string mapName, string dataDirectory, string saveName)
@@ -404,63 +406,130 @@ public sealed partial class SaveGameService : ISaveGameService
         return Success($"Loaded save \"{name}\" into {Path.GetFileName(liveStorage)}.");
     }
 
+    public SaveGameResult RestoreModTypes(string serverPath, string mapName, string dataDirectory, string saveName)
+    {
+        if (_processState.IsDayZServerRunning())
+        {
+            return Failure("The DayZ server is running. Stop it before restoring types files so the mission folder is not corrupted.");
+        }
+
+        string? name = NormalizeSaveName(saveName);
+        if (name is null)
+        {
+            return Failure("Invalid save name.");
+        }
+
+        string saveFolder = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
+        if (!_fileSystem.DirectoryExists(saveFolder))
+        {
+            return Failure($"Save \"{name}\" was not found.");
+        }
+
+        string snapshot = GetModTypesSnapshotPath(dataDirectory, mapName, name);
+        if (!_fileSystem.DirectoryExists(snapshot))
+        {
+            return Failure($"Save \"{name}\" has no snapshot of the types files.");
+        }
+
+        string missionPath = Path.Combine(serverPath, "mpmissions", mapName);
+        if (!_fileSystem.DirectoryExists(missionPath))
+        {
+            return Failure($"Mission folder not found: {missionPath}");
+        }
+
+        string liveModTypes = Path.Combine(missionPath, "db", "ModTypes");
+        int count = _fileSystem.GetFiles(snapshot, "*.xml", recursive: true).Count;
+
+        CleanStaleRestoreFolders(liveModTypes);
+
+        string temp = liveModTypes + TemporarySuffix + "_" + Guid.NewGuid().ToString("N");
+        string backup = liveModTypes + OldBackupSuffix;
+
+        try
+        {
+            // Build the replacement folder beside the live one first; until the
+            // copy succeeds the live files stay intact.
+            _fileSystem.CopyDirectory(snapshot, temp);
+
+            if (_fileSystem.DirectoryExists(liveModTypes))
+            {
+                TryDeleteDirectory(backup);
+                _fileSystem.MoveDirectory(liveModTypes, backup);
+            }
+
+            try
+            {
+                _fileSystem.MoveDirectory(temp, liveModTypes);
+            }
+            catch
+            {
+                // Roll the previous files back if promotion fails.
+                if (!_fileSystem.DirectoryExists(liveModTypes) && _fileSystem.DirectoryExists(backup))
+                {
+                    _fileSystem.MoveDirectory(backup, liveModTypes);
+                }
+
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDirectory(temp);
+            return Failure($"Failed to restore types files from \"{name}\": {ex.Message}");
+        }
+
+        // Success: leftover folders are only removed best-effort.
+        TryDeleteDirectory(backup);
+        TryDeleteDirectory(liveModTypes + TemporarySuffix);
+
+        return Success($"Restored {count} type file(s) into db\\ModTypes.");
+    }
+
     public ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName)
     {
         string metaPath = Path.Combine(SavesLibrary(dataDirectory, mapName), saveName, MetaFileName);
         return ConfigJson.Read<SaveMetaData>(_fileSystem, metaPath);
     }
 
+    public SaveGameResult UpdateMeta(string dataDirectory, string mapName, string saveName, SaveMetaData meta)
+    {
+        string saveFolder = Path.Combine(SavesLibrary(dataDirectory, mapName), saveName);
+        if (!_fileSystem.DirectoryExists(saveFolder))
+        {
+            return Failure($"Save \"{saveName}\" was not found.");
+        }
+
+        try
+        {
+            ConfigJson.Write(_fileSystem, Path.Combine(saveFolder, MetaFileName), meta);
+            return Success($"Updated the configuration snapshot for \"{saveName}\".");
+        }
+        catch (Exception ex)
+        {
+            return Failure($"Failed to update the configuration snapshot for \"{saveName}\": {ex.Message}");
+        }
+    }
+
     /// <summary>
     /// Resolves the folder whose contents represent a stored save's world data.
-    /// Prefers the nested layout (the storage folder recorded in meta.json, or a
-    /// lone sub-folder of a meta-less save). The legacy flat layout is only used
-    /// for saves without meta.json; when a meta.json exists but no usable storage
-    /// folder can be resolved, null is returned so the save is reported as corrupt
-    /// rather than copying meta.json or stray files into the live world.
+    /// A save always records the storage folder in its <c>meta.json</c>; when the
+    /// snapshot is unreadable or its storage folder is absent, null is returned so
+    /// the save is reported as corrupt rather than copying meta.json or stray
+    /// files into the live world.
     /// </summary>
     private string? ResolveSavedContentRoot(string saveFolder)
     {
         string metaPath = Path.Combine(saveFolder, MetaFileName);
-        bool hasMeta = _fileSystem.FileExists(metaPath);
-        bool metaValid = false;
-        if (hasMeta)
+        ConfigLoadResult<SaveMetaData> meta = ConfigJson.Read<SaveMetaData>(_fileSystem, metaPath);
+        if (meta.Status == ConfigLoadStatus.Success
+            && !string.IsNullOrWhiteSpace(meta.Value!.StorageFolder))
         {
-            ConfigLoadResult<SaveMetaData> meta = ConfigJson.Read<SaveMetaData>(_fileSystem, metaPath);
-            metaValid = meta.Status == ConfigLoadStatus.Success && !string.IsNullOrWhiteSpace(meta.Value!.StorageFolder);
-            if (metaValid)
+            string nested = Path.Combine(saveFolder, meta.Value!.StorageFolder);
+            if (_fileSystem.DirectoryExists(nested)
+                && !string.Equals(Path.GetFileName(nested), ModTypesSnapshotFolderName, StringComparison.OrdinalIgnoreCase))
             {
-                string nested = Path.Combine(saveFolder, meta.Value!.StorageFolder);
-                if (_fileSystem.DirectoryExists(nested)
-                    && !string.Equals(Path.GetFileName(nested), ModTypesSnapshotFolderName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return nested;
-                }
+                return nested;
             }
-        }
-
-        // A lone sub-folder with no direct world files is treated as nested
-        // (covers meta-less and interrupted new-format saves). meta.json itself
-        // does not count as a direct file. The ModTypes snapshot folder is never
-        // a storage candidate: with the real storage folder missing it must not be
-        // mistaken for the world data.
-        IReadOnlyList<string> directFiles = _fileSystem.GetFiles(saveFolder, "*", recursive: false);
-        bool hasNonMetaFiles = directFiles.Any(file =>
-            !string.Equals(Path.GetFileName(file), MetaFileName, StringComparison.OrdinalIgnoreCase));
-        IReadOnlyList<string> children = _fileSystem.GetDirectories(saveFolder)
-            .Where(name => !string.Equals(name, ModTypesSnapshotFolderName, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (children.Count == 1
-            && !hasNonMetaFiles
-            && _fileSystem.DirectoryExists(Path.Combine(saveFolder, children[0])))
-        {
-            return Path.Combine(saveFolder, children[0]);
-        }
-
-        // Legacy layout: the storage contents were copied directly into the save
-        // folder. Only applies to saves without a snapshot.
-        if (!hasMeta && hasNonMetaFiles)
-        {
-            return saveFolder;
         }
 
         // No clean storage data could be resolved.
@@ -581,11 +650,11 @@ public sealed partial class SaveGameService : ISaveGameService
     /// Removes stale <c>storage_&lt;id&gt;.restore*</c> staging folders left behind
     /// in the mission folder by interrupted loads. Never throws.
     /// </summary>
-    private void CleanStaleRestoreFolders(string liveStorage)
+    private void CleanStaleRestoreFolders(string liveFolder)
     {
-        string? missionPath = Path.GetDirectoryName(liveStorage);
-        string leaf = Path.GetFileName(liveStorage);
-        if (string.IsNullOrWhiteSpace(missionPath) || string.IsNullOrWhiteSpace(leaf))
+        string? parentPath = Path.GetDirectoryName(liveFolder);
+        string leaf = Path.GetFileName(liveFolder);
+        if (string.IsNullOrWhiteSpace(parentPath) || string.IsNullOrWhiteSpace(leaf))
         {
             return;
         }
@@ -593,22 +662,22 @@ public sealed partial class SaveGameService : ISaveGameService
         string prefix = leaf + TemporarySuffix;
         try
         {
-            if (!_fileSystem.DirectoryExists(missionPath))
+            if (!_fileSystem.DirectoryExists(parentPath))
             {
                 return;
             }
 
-            foreach (string name in _fileSystem.GetDirectories(missionPath))
+            foreach (string name in _fileSystem.GetDirectories(parentPath))
             {
                 if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    TryDeleteDirectory(Path.Combine(missionPath, name));
+                    TryDeleteDirectory(Path.Combine(parentPath, name));
                 }
             }
         }
         catch (Exception)
         {
-            // Best effort cleanup must never fail the load.
+            // Best effort cleanup must never fail the operation.
         }
     }
 

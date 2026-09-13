@@ -1,5 +1,11 @@
 namespace DayZModManager.App.Services;
 
+/// <summary>
+/// Outcome of the Load Save confirmation. <see cref="RestoreTypes"/> is true when
+/// the user opted in to restoring the save's types files.
+/// </summary>
+public readonly record struct LoadSaveConfirmation(bool Confirmed, bool RestoreTypes);
+
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
 public interface IDialogService
 {
@@ -14,6 +20,15 @@ public interface IDialogService
     /// text below the warning.
     /// </summary>
     bool ConfirmWithWarning(string message, string title, string warning, string note = "");
+
+    /// <summary>
+    /// Load Save confirmation that also offers an "also restore the saved types
+    /// files" checkbox when <paramref name="offerTypesRestore"/> is true. The
+    /// warning (when non-empty) is rendered prominently as in
+    /// <see cref="ConfirmWithWarning"/>.
+    /// </summary>
+    LoadSaveConfirmation ConfirmLoadSave(
+        string message, string title, string warning, string note, bool offerTypesRestore);
 
     /// <summary>Opens a folder picker. Returns the chosen path, or null if cancelled.</summary>
     string? PickFolder(string title = "Select a folder");

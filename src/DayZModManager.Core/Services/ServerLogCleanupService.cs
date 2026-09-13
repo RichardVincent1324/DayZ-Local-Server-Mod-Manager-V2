@@ -3,37 +3,38 @@ using DayZModManager.Core.Abstractions;
 namespace DayZModManager.Core.Services;
 
 /// <summary>Outcome of a log-cleanup pass.</summary>
-public sealed record ServerLogCleanupResult(bool FolderExists, int RptRemoved, int ScriptRemoved);
+public sealed record ServerLogCleanupResult(bool FolderExists, int FilesRemoved);
 
 /// <summary>
-/// Prunes old DayZ server log files inside a map profile folder
-/// (<c>map_profiles\&lt;map&gt;</c>). Each file type (the <c>DayZServer_x64_*.RPT</c>
-/// files and the <c>script_*.log</c> files) is trimmed independently and only when
-/// more than <see cref="ServerLogCleanupService.PruneThreshold"/> files of that type
-/// exist, keeping the three most recent. Everything else in the folder is untouched.
+/// Wipes DayZ server log files inside a map profile folder
+/// (<c>map_profiles\&lt;map&gt;</c>). Once both the <c>DayZServer_x64_*.RPT</c> and
+/// <c>script_*.log</c> groups each hold at least
+/// <see cref="ServerLogCleanupService.WipeThresholdPerType"/> files, all four log
+/// groups — <c>DayZServer_x64_*.RPT</c>, <c>script_*.log</c>, <c>crash_*.log</c>
+/// and <c>warning_*.log</c> — are deleted outright. Below that nothing is touched.
+/// Everything else in the folder is untouched.
 /// </summary>
 public interface IServerLogCleanupService
 {
     /// <summary>
-    /// Trims each log type down to the newest <see cref="ServerLogCleanupService.RetainedPerGroup"/>
-    /// files, but only when that type has more than <see cref="ServerLogCleanupService.PruneThreshold"/>
-    /// files. Never throws when a file cannot be deleted (for example because the
-    /// server is still writing it); such files are skipped and retried on the next run.
+    /// Deletes all DayZ log files when both the <c>DayZServer_x64_*.RPT</c> and
+    /// <c>script_*.log</c> groups contain at least
+    /// <see cref="ServerLogCleanupService.WipeThresholdPerType"/> files each; otherwise
+    /// no files are deleted. Never throws when a file cannot be deleted (for example
+    /// because the server is still writing it); such files are skipped and retried on
+    /// the next run. Returns the number of files actually removed.
     /// </summary>
     ServerLogCleanupResult Cleanup(string profileFolderPath);
 }
 
 public sealed class ServerLogCleanupService : IServerLogCleanupService
 {
-    /// <summary>Number of most recent files retained per log type when a prune runs.</summary>
-    public const int RetainedPerGroup = 3;
-
     /// <summary>
-    /// A log type is only pruned when it has more than this many files; at or below
-    /// the threshold no files are deleted. This keeps cleanup infrequent so an app
-    /// open does not constantly churn the log folder.
+    /// The wipe only runs when both the <c>DayZServer_x64_*.RPT</c> and the
+    /// <c>script_*.log</c> groups each contain at least this many files. This keeps
+    /// cleanup infrequent so an app open does not constantly churn the log folder.
     /// </summary>
-    public const int PruneThreshold = 10;
+    public const int WipeThresholdPerType = 10;
 
     private readonly IFileSystem _fileSystem;
 
@@ -46,43 +47,29 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
     {
         if (string.IsNullOrWhiteSpace(profileFolderPath) || !_fileSystem.DirectoryExists(profileFolderPath))
         {
-            return new ServerLogCleanupResult(FolderExists: false, RptRemoved: 0, ScriptRemoved: 0);
+            return new ServerLogCleanupResult(FolderExists: false, FilesRemoved: 0);
         }
 
         IReadOnlyList<string> files = _fileSystem.GetFiles(profileFolderPath, "*", recursive: false);
 
-        int rptRemoved = PruneGroup(files, "DayZServer_x64_", ".rpt");
-        int scriptRemoved = PruneGroup(files, "script_", ".log");
-
-        return new ServerLogCleanupResult(FolderExists: true, rptRemoved, scriptRemoved);
-    }
-
-    /// <summary>
-    /// For files whose name starts with <paramref name="namePrefix"/> and ends with
-    /// <paramref name="extension"/>, keeps the newest <see cref="RetainedPerGroup"/> and
-    /// deletes the rest — but only when more than <see cref="PruneThreshold"/> such files
-    /// exist. Returns the number deleted. Newest is decided by file name: DayZ names
-    /// these files with a fixed-width <c>yyyy-MM-dd_HH-mm-ss</c> timestamp, so descending
-    /// ordinal order equals newest-first.
-    /// </summary>
-    private int PruneGroup(IReadOnlyList<string> files, string namePrefix, string extension)
-    {
-        var matches = files
-            .Where(f => MatchesGroup(f, namePrefix, extension))
-            .OrderByDescending(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (matches.Count <= PruneThreshold)
+        bool rptAtThreshold = CountGroup(files, "DayZServer_x64_", ".rpt") >= WipeThresholdPerType;
+        bool scriptAtThreshold = CountGroup(files, "script_", ".log") >= WipeThresholdPerType;
+        if (!rptAtThreshold || !scriptAtThreshold)
         {
-            return 0;
+            return new ServerLogCleanupResult(FolderExists: true, FilesRemoved: 0);
         }
 
         int removed = 0;
-        for (int i = RetainedPerGroup; i < matches.Count; i++)
+        foreach (string file in files)
         {
+            if (!IsServerLogFile(file))
+            {
+                continue;
+            }
+
             try
             {
-                _fileSystem.DeleteFile(matches[i]);
+                _fileSystem.DeleteFile(file);
                 removed++;
             }
             catch (Exception)
@@ -91,8 +78,22 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
             }
         }
 
-        return removed;
+        return new ServerLogCleanupResult(FolderExists: true, removed);
     }
+
+    private static int CountGroup(IReadOnlyList<string> files, string namePrefix, string extension) =>
+        files.Count(f => MatchesGroup(f, namePrefix, extension));
+
+    /// <summary>
+    /// True for the four DayZ log groups the cleanup owns: the <c>DayZServer_x64_*.RPT</c>
+    /// crash dumps, the <c>script_*.log</c>, <c>crash_*.log</c> and <c>warning_*.log</c>
+    /// files. Everything else (e.g. <c>settings.cfg</c>) is left alone.
+    /// </summary>
+    private static bool IsServerLogFile(string fullPath) =>
+        MatchesGroup(fullPath, "DayZServer_x64_", ".rpt")
+        || MatchesGroup(fullPath, "script_", ".log")
+        || MatchesGroup(fullPath, "crash_", ".log")
+        || MatchesGroup(fullPath, "warning_", ".log");
 
     private static bool MatchesGroup(string fullPath, string namePrefix, string extension)
     {

@@ -18,7 +18,7 @@ public class ApplyServiceTests
             {
                 WorkshopPath = WorkshopPath,
                 ServerPath = ServerPath,
-                BatFileName = "LocalServer.example.bat",
+                BatchFile = "LocalServer.example.bat",
             },
             LoadedMods = loadedMods,
             DataDirectory = DataDirectory,
@@ -83,7 +83,10 @@ public class ApplyServiceTests
         ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
 
         Assert.False(result.Success);
-        Assert.Contains(result.Logs, l => l.Contains("Validation failed"));
+        // Each failure is a self-contained line that names the reason, with no
+        // bare "Validation failed:" header and no leading indentation.
+        Assert.Contains(result.Logs, l => l.Contains("Validation failed") && l.Contains("not found"));
+        Assert.DoesNotContain(result.Logs, l => l.Length > 0 && char.IsWhiteSpace(l[0]));
         Assert.Empty(junctions.Targets);
         Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
     }
@@ -184,8 +187,6 @@ public class ApplyServiceTests
         public bool WriteResult { get; set; } = true;
 
         public bool ThrowWrite { get; set; }
-
-        public IReadOnlyList<string> ReadModList(string batFilePath) => _inner.ReadModList(batFilePath);
 
         public bool HasModListLine(string batFilePath) => _inner.HasModListLine(batFilePath);
 

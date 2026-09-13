@@ -118,6 +118,26 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
+    public void MoveTo_SweepsStaleConfig_FromSource()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(SettingsPath(), "{}");
+        fs.AddFile(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder), "[]");
+        var provider = new DataDirectoryProvider(fs);
+        provider.Initialize();
+
+        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
+        provider.MoveTo(target, new Settings());
+
+        // The source keeps its pointer but its re-authored config files are swept.
+        Assert.Equal(target, provider.Current);
+        Assert.True(fs.FileExists(PointerPath()));
+        Assert.False(fs.FileExists(SettingsPath()));
+        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder)));
+        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.Settings)));
+    }
+
+    [Fact]
     public void MoveTo_DoesNotMigrate_WhenSameDirectory()
     {
         var fs = new FakeFileSystem();
@@ -150,6 +170,7 @@ public class DataDirectoryProviderTests
         Assert.Equal(target, provider.Current);
         Assert.Equal("[\"@applied\"]", fs.TryGetFileContents(Path.Combine(target, ConfigFileNames.ModOrder)));
         Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.TypesConfig)));
+        Assert.False(fs.FileExists(Path.Combine(AppPaths.LegacyDirectory(), ConfigFileNames.ModOrder)));
     }
 
     [Fact]

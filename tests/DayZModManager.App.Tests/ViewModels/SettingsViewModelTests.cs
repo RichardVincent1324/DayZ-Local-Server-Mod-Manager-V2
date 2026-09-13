@@ -16,7 +16,7 @@ public class SettingsViewModelTests
         {
             WorkshopPath = @"D:\workshop",
             ServerPath = @"D:\server",
-            BatFileName = "LocalServer.bat",
+            BatchFile = "LocalServer.bat",
             AutoCleanServerLogs = true,
         };
 
@@ -25,7 +25,7 @@ public class SettingsViewModelTests
         Assert.False(vm.IsDirty);
         Assert.Equal(@"D:\workshop", vm.WorkshopPath);
         Assert.Equal(@"D:\server", vm.ServerPath);
-        Assert.Equal("LocalServer.bat", vm.BatFileName);
+        Assert.Equal("LocalServer.bat", vm.BatchFile);
         Assert.True(vm.AutoCleanServerLogs);
     }
 
@@ -82,7 +82,7 @@ public class SettingsViewModelTests
     public void TogglingAutoClean_WithPathsConfigured_RaisesApplyRequested()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server", BatchFile = "b.bat" });
         int raises = 0;
         vm.ApplyRequested += () => raises++;
 
@@ -91,6 +91,20 @@ public class SettingsViewModelTests
 
         vm.AutoCleanServerLogs = false;
         Assert.Equal(2, raises);
+    }
+
+    [Fact]
+    public void TogglingAutoClean_WithoutBatchFile_DoesNotAutoApply()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        int raises = 0;
+        vm.ApplyRequested += () => raises++;
+
+        vm.AutoCleanServerLogs = true;
+
+        Assert.Equal(0, raises);
+        Assert.True(vm.IsDirty);
     }
 
     [Fact]
@@ -112,7 +126,7 @@ public class SettingsViewModelTests
     public void SettingSameAutoCleanValueTwice_RaisesOnlyOnce()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server", BatchFile = "b.bat" });
         int raises = 0;
         vm.ApplyRequested += () => raises++;
 
@@ -126,7 +140,7 @@ public class SettingsViewModelTests
     public void ToSettings_RoundTripsValues()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "b.bat" });
+        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatchFile = "b.bat" });
 
         vm.WorkshopPath = "ws2";
         vm.AutoCleanServerLogs = true;
@@ -135,7 +149,7 @@ public class SettingsViewModelTests
 
         Assert.Equal("ws2", result.WorkshopPath);
         Assert.Equal("srv", result.ServerPath);
-        Assert.Equal("b.bat", result.BatFileName);
+        Assert.Equal("b.bat", result.BatchFile);
         Assert.True(result.AutoCleanServerLogs);
     }
 
@@ -163,7 +177,7 @@ public class SettingsViewModelTests
     public void MarkApplied_ClearsDirtyFlag()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "b.bat" });
+        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatchFile = "b.bat" });
 
         vm.WorkshopPath = "ws2";
         Assert.True(vm.IsDirty);
@@ -188,7 +202,22 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void BrowseWorkshop_RaisesApplyRequested_WhenServerPathSet()
+    public void BrowseWorkshop_RaisesApplyRequested_WhenServerAndBatchSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { ServerPath = @"D:\server", BatchFile = "b.bat" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void BrowseWorkshop_SkipsApply_WhenBatchMissing()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\picked" };
         var vm = new SettingsViewModel(dialogs);
@@ -199,7 +228,7 @@ public class SettingsViewModelTests
         vm.BrowseWorkshopCommand.Execute(null);
 
         Assert.Equal(@"D:\picked", vm.WorkshopPath);
-        Assert.True(raised);
+        Assert.False(raised);
     }
 
     [Fact]
@@ -217,11 +246,11 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void BrowseServer_RaisesApplyRequested_WhenWorkshopPathSet()
+    public void BrowseServer_RaisesApplyRequested_WhenWorkshopAndBatchSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\server" };
         var vm = new SettingsViewModel(dialogs);
-        vm.Load(new Settings { WorkshopPath = @"D:\workshop" });
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", BatchFile = "b.bat" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
@@ -241,8 +270,23 @@ public class SettingsViewModelTests
 
         vm.BrowseBatchFileCommand.Execute(null);
 
-        Assert.Equal(@"D:\start.bat", vm.BatFileName);
+        Assert.Equal(@"D:\start.bat", vm.BatchFile);
         Assert.False(raised);
+    }
+
+    [Fact]
+    public void BrowseBatchFile_RaisesApplyRequested_WhenPathsSet()
+    {
+        var dialogs = new FakeDialogs { File = @"D:\start.bat" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseBatchFileCommand.Execute(null);
+
+        Assert.Equal(@"D:\start.bat", vm.BatchFile);
+        Assert.True(raised);
     }
 
     private sealed class FakeDialogs : IDialogService
@@ -256,6 +300,10 @@ public class SettingsViewModelTests
         public bool Confirm(string message, string title) => true;
 
         public bool ConfirmWithWarning(string message, string title, string warning, string note = "") => true;
+
+        public LoadSaveConfirmation ConfirmLoadSave(
+            string message, string title, string warning, string note, bool offerTypesRestore) =>
+            new(true, false);
 
         public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
 

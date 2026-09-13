@@ -39,10 +39,21 @@ namespace DayZModManager.Core.Services;
         // ApplyService authors settings.json and mod_order.json into the target
         // directory before MoveTo runs (and MoveTo re-authors settings.json), so
         // migrating those two over the freshly-written copies would clobber the
-        // just-applied mod order. Saves are migrated separately.
+        // just-applied mod order. Saves are migrated separately. The stale copies
+        // of settings.json/mod_order.json left in the source are swept afterwards.
         private static readonly string[] DataFileNames =
         {
             ConfigFileNames.TypesConfig,
+        };
+
+        /// <summary>
+        /// Config files that are re-authored at the relocation target and whose
+        /// stale copies in the source directory are swept after a successful move.
+        /// </summary>
+        private static readonly string[] StaleSourceFileNames =
+        {
+            ConfigFileNames.Settings,
+            ConfigFileNames.ModOrder,
         };
 
         private readonly IFileSystem _fileSystem;
@@ -86,23 +97,62 @@ namespace DayZModManager.Core.Services;
 
     public void MoveTo(string directory, Settings settings)
     {
+        string source = _current;
         string target = Normalize(directory);
         _fileSystem.CreateDirectory(target);
 
-        if (!string.Equals(target, _current, StringComparison.OrdinalIgnoreCase))
+        bool relocated = !string.Equals(target, source, StringComparison.OrdinalIgnoreCase);
+        if (relocated)
         {
             // A failed migration must never silently strand user data (the per-map
             // types configuration and the progress saves) in a directory the app
             // stops reading. Abort the relocation before the pointer moves so the
             // caller surfaces the error and the data stays in the source directory.
-            MigrateDataFiles(_current, target);
-            MigrateSavesDirectory(_current, target);
+            MigrateDataFiles(source, target);
+            MigrateSavesDirectory(source, target);
         }
 
         _current = target;
         WritePointer(target);
 
         ConfigJson.Write(_fileSystem, Path.Combine(target, ConfigFileNames.Settings), settings);
+
+        // The authoritative settings.json/mod_order.json now live in the target;
+        // drop their stale copies from the source so it is not left with orphaned
+        // config files next to the pointer. Best effort: a locked leftover must
+        // not fail the move - the pointer already directs reads to the target.
+        if (relocated)
+        {
+            RemoveStaleConfigFiles(source);
+        }
+    }
+
+    /// <summary>
+    /// Deletes the re-authored config files (settings.json, mod_order.json) left in
+    /// the source directory after a successful relocation. Never throws.
+    /// </summary>
+    private void RemoveStaleConfigFiles(string source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return;
+        }
+
+        foreach (string fileName in StaleSourceFileNames)
+        {
+            string path = Path.Combine(source, fileName);
+            try
+            {
+                if (_fileSystem.FileExists(path))
+                {
+                    _fileSystem.DeleteFile(path);
+                }
+            }
+            catch (Exception)
+            {
+                // Best effort: a locked file must not break the relocation.
+            }
+        }
     }
 
     private void MigrateSavesDirectory(string source, string target)

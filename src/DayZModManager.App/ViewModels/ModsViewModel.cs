@@ -146,6 +146,17 @@ public sealed class ModsViewModel : ViewModelBase
         UpdateDirtyFlag();
     }
 
+    /// <summary>
+    /// Replaces the loaded-mod order wholesale (e.g. restoring a progress save's
+    /// load order) and refreshes the list UI. The change stays pending until an
+    /// Apply persists it.
+    /// </summary>
+    public void ApplyOrder(IReadOnlyList<string> orderedMods)
+    {
+        _state.ReplaceLoadedMods(orderedMods);
+        Rebuild();
+    }
+
     private void ApplyDiscovery(IReadOnlyList<string> workshopMods)
     {
         _state.SetWorkshopMods(workshopMods);

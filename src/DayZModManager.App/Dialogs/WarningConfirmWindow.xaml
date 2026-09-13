@@ -20,6 +20,10 @@
                 </Border>
 
                 <TextBlock x:Name="NoteText" Margin="0,12,0,0" TextWrapping="Wrap" />
+
+                <CheckBox x:Name="RestoreTypesCheck" Margin="0,12,0,0"
+                          Content="Also restore the saved types files (db\ModTypes)"
+                          IsChecked="False" />
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

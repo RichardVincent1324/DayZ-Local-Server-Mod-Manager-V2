@@ -9,7 +9,7 @@ namespace DayZModManager.App.Dialogs;
 /// </summary>
 public partial class WarningConfirmWindow : Window
 {
-    public WarningConfirmWindow(string message, string title, string warning, string note = "")
+    public WarningConfirmWindow(string message, string title, string warning, string note = "", bool offerTypesRestore = false)
     {
         InitializeComponent();
         Title = title;
@@ -20,7 +20,20 @@ public partial class WarningConfirmWindow : Window
         {
             NoteText.Visibility = Visibility.Collapsed;
         }
+
+        if (string.IsNullOrWhiteSpace(warning))
+        {
+            WarningPanel.Visibility = Visibility.Collapsed;
+        }
+
+        if (!offerTypesRestore)
+        {
+            RestoreTypesCheck.Visibility = Visibility.Collapsed;
+        }
     }
+
+    /// <summary>True when the user opted in to restoring the save's types files.</summary>
+    public bool RestoreTypes => RestoreTypesCheck.IsChecked == true;
 
     private void Yes_Click(object sender, RoutedEventArgs e) => DialogResult = true;
 

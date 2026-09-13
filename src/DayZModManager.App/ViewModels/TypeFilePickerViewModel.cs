@@ -72,8 +72,8 @@ public sealed class TypeFilePickerViewModel : ViewModelBase
         Options.Where(o => o.IsChecked).Select(o => o.FullPath).ToList();
 
     /// <summary>
-    /// Keeps at most one checked option per role, preserving the earliest. This
-    /// reconciles configurations created before the one-per-role rule existed.
+    /// Keeps at most one checked option per role, preserving the earliest, so a
+    /// duplicate active selection is never left checked on open.
     /// </summary>
     private void EnforceOnePerRole()
     {

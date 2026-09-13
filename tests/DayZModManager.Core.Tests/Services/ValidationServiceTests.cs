@@ -18,7 +18,7 @@ public class ValidationServiceTests
         {
             WorkshopPath = WorkshopPath,
             ServerPath = ServerPath,
-            BatFileName = "LocalServer.example.bat",
+            BatchFile = "LocalServer.example.bat",
         };
         return new ValidationContext { Settings = settings, LoadedMods = loadedMods };
     }

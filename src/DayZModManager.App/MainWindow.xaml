@@ -405,7 +405,21 @@
                         <Button Grid.Row="1" Grid.Column="2" Content="Browse" Command="{Binding BrowseServerCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch file:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding BatFileName}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,8,8">
+                            <TextBlock Text="{Binding BatchFile}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="example D:\DayZServer\LocalServer.bat" Foreground="LightGray" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding BatchFile}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <Button Grid.Row="2" Grid.Column="2" Content="Choose" Command="{Binding BrowseBatchFileCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Data directory:" VerticalAlignment="Center" Margin="0,0,8,8" />
@@ -416,14 +430,18 @@
 
                     <TextBlock Text="Features" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" />
                     <CheckBox x:Name="AutoCleanServerLogsCheckBox"
-                              Content="Auto-clean old server log files (keep the 3 newest)"
+                              Content="Auto-clean old server log files"
                               IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                               Click="AutoCleanServerLogs_Click"
                               Loaded="AutoCleanServerLogsCheckBox_Loaded"
                               VerticalContentAlignment="Center">
                         <CheckBox.ToolTip>
-                            <ToolTip Style="{StaticResource WrappingToolTipStyle}"
-                                     Content="On every app start, Apply and Start Server: when more than 10 DayZServer_x64_*.RPT or script_*.log files have accumulated in map_profiles\&lt;current map&gt;, the oldest are deleted until only the 3 most recent of each remain. Below that no files are touched. Default: off." />
+                            <ToolTip Style="{StaticResource WrappingToolTipStyle}">
+                                <ToolTip.Content>
+                                    On App Start: once 10 or more DayZServer_x64_.RPT and 10 or more script_.log files accumulate in map_profiles\&lt;current map&gt;, all DayZServer_x64_.RPT, script_.log, crash_.log and warning_.log files are deleted.
+                                    &#10;No files are touched below this threshold. Default: off.
+                                </ToolTip.Content>
+                            </ToolTip>
                         </CheckBox.ToolTip>
                     </CheckBox>
                 </StackPanel>

@@ -118,7 +118,9 @@ DayZ Client
 - Add, load, and delete named saves.
 - Start a new game from the manager.
 - Stage save loading so an interrupted operation does not immediately destroy the current world progress.
-- Warn when a save was created with a different mod or types configuration.
+- Automatically restore the save's mod load order when no save mods are missing; extra loaded mods are kept after the save's mods.
+- Note (in normal text, not as a blocking warning) when mods are loaded that the save did not include, and record them in the save's `meta.json` after the load.
+- Warn when the save loads mods that are not currently loaded, or when the active types files differ.
 
 ### Settings and data storage
 

@@ -8,84 +8,73 @@ public class ServerLogCleanupServiceTests
     private const string Folder = @"D:\server\map_profiles\dayzOffline.chernarusplus";
 
     [Fact]
-    public void Cleanup_DoesNothing_WhenAtOrBelowThreshold()
+    public void Cleanup_DoesNothing_WhenAtThreshold()
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
         var service = new ServerLogCleanupService(fs);
 
-        for (int i = 0; i < ServerLogCleanupService.PruneThreshold; i++)
+        // Exactly the threshold: no cleanup happens at or below it.
+        for (int i = 0; i < ServerLogCleanupService.CleanupThreshold; i++)
         {
-            AddRpt(fs, i);
-            AddScript(fs, i);
+            fs.AddFile($@"{Folder}\DayZServer_x64_2026-09-06_00-00-{i:00}.RPT", "rpt");
         }
 
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
         Assert.True(result.FolderExists);
-        Assert.Equal(0, result.RptRemoved);
-        Assert.Equal(0, result.ScriptRemoved);
-        Assert.True(fs.FileExists(RptPath(0)));
-        Assert.True(fs.FileExists(RptPath(ServerLogCleanupService.PruneThreshold - 1)));
+        Assert.Equal(0, result.Removed);
+        Assert.True(fs.FileExists($@"{Folder}\DayZServer_x64_2026-09-06_00-00-00.RPT"));
     }
 
     [Fact]
-    public void Cleanup_RemovesOldest_KeepingNewestThree_WhenMoreThanThreshold()
+    public void Cleanup_DeletesAll_WhenOverThreshold()
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
         var service = new ServerLogCleanupService(fs);
 
-        int count = ServerLogCleanupService.PruneThreshold + 1;
-        for (int i = 0; i < count; i++)
+        // 31 total: 16 rpt + 15 log.
+        for (int i = 0; i < 16; i++)
         {
-            AddRpt(fs, i);
-            AddScript(fs, i);
+            fs.AddFile($@"{Folder}\DayZServer_x64_2026-09-06_00-00-{i:00}.RPT", "rpt");
+        }
+
+        for (int i = 0; i < 15; i++)
+        {
+            fs.AddFile($@"{Folder}\script_2026-09-06_00-00-{i:00}.log", "log");
         }
 
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
-        Assert.Equal(ServerLogCleanupService.PruneThreshold + 1 - ServerLogCleanupService.RetainedPerGroup, result.RptRemoved);
-        Assert.Equal(ServerLogCleanupService.PruneThreshold + 1 - ServerLogCleanupService.RetainedPerGroup, result.ScriptRemoved);
-
-        // The oldest files were removed; the newest three remain.
-        for (int i = 0; i < count - ServerLogCleanupService.RetainedPerGroup; i++)
-        {
-            Assert.False(fs.FileExists(RptPath(i)), $"oldest .RPT {i} should be deleted");
-            Assert.False(fs.FileExists(ScriptPath(i)), $"oldest script log {i} should be deleted");
-        }
-
-        for (int i = count - ServerLogCleanupService.RetainedPerGroup; i < count; i++)
-        {
-            Assert.True(fs.FileExists(RptPath(i)), $"newest .RPT {i} should be kept");
-            Assert.True(fs.FileExists(ScriptPath(i)), $"newest script log {i} should be kept");
-        }
+        Assert.Equal(31, result.Removed);
+        Assert.False(fs.FileExists($@"{Folder}\DayZServer_x64_2026-09-06_00-00-00.RPT"));
+        Assert.False(fs.FileExists($@"{Folder}\DayZServer_x64_2026-09-06_00-00-15.RPT"));
+        Assert.False(fs.FileExists($@"{Folder}\script_2026-09-06_00-00-00.log"));
+        Assert.False(fs.FileExists($@"{Folder}\script_2026-09-06_00-00-14.log"));
     }
 
     [Fact]
-    public void Cleanup_TrimsOnlyTheOverLimitType()
+    public void Cleanup_CountsBothExtensionsTogether()
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
         var service = new ServerLogCleanupService(fs);
 
-        // 12 .RPT files (over the threshold) but only 3 script logs.
-        for (int i = 0; i < 12; i++)
+        // 20 rpt + 11 log = 31, even though neither type alone is over the limit.
+        for (int i = 0; i < 20; i++)
         {
-            AddRpt(fs, i);
+            fs.AddFile($@"{Folder}\crash_{i:00}.rpt", "rpt");
         }
 
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 11; i++)
         {
-            AddScript(fs, i);
+            fs.AddFile($@"{Folder}\server_{i:00}.log", "log");
         }
 
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
-        Assert.Equal(12 - ServerLogCleanupService.RetainedPerGroup, result.RptRemoved);
-        Assert.Equal(0, result.ScriptRemoved);
-        Assert.True(fs.FileExists(ScriptPath(0)));
-        Assert.True(fs.FileExists(ScriptPath(2)));
+        Assert.Equal(31, result.Removed);
     }
 
     [Fact]
@@ -95,20 +84,18 @@ public class ServerLogCleanupServiceTests
         fs.CreateDirectory(Folder);
         var service = new ServerLogCleanupService(fs);
 
-        int count = ServerLogCleanupService.PruneThreshold + 1;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < 31; i++)
         {
-            AddRpt(fs, i);
-            AddScript(fs, i);
+            fs.AddFile($@"{Folder}\log_{i:00}.rpt", "rpt");
         }
 
         fs.AddFile($@"{Folder}\settings.cfg", "unrelated");
-        fs.AddFile($@"{Folder}\DayZServer_x64_config.txt", "unrelated");
+        fs.AddFile($@"{Folder}\notes.txt", "unrelated");
 
         service.Cleanup(Folder);
 
         Assert.True(fs.FileExists($@"{Folder}\settings.cfg"));
-        Assert.True(fs.FileExists($@"{Folder}\DayZServer_x64_config.txt"));
+        Assert.True(fs.FileExists($@"{Folder}\notes.txt"));
     }
 
     [Fact]
@@ -118,15 +105,14 @@ public class ServerLogCleanupServiceTests
         fs.CreateDirectory(Folder);
         var service = new ServerLogCleanupService(fs);
 
-        int count = ServerLogCleanupService.PruneThreshold + 1;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < 31; i++)
         {
             fs.AddFile($@"{Folder}\DayZServer_x64_2026-09-06_00-00-{i:00}.rpt", "x");
         }
 
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
-        Assert.Equal(count - ServerLogCleanupService.RetainedPerGroup, result.RptRemoved);
+        Assert.Equal(31, result.Removed);
     }
 
     [Fact]
@@ -137,19 +123,6 @@ public class ServerLogCleanupServiceTests
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
         Assert.False(result.FolderExists);
-        Assert.Equal(0, result.RptRemoved);
-        Assert.Equal(0, result.ScriptRemoved);
+        Assert.Equal(0, result.Removed);
     }
-
-    private static void AddRpt(FakeFileSystem fs, int index) =>
-        fs.AddFile(RptPath(index), "rpt");
-
-    private static void AddScript(FakeFileSystem fs, int index) =>
-        fs.AddFile(ScriptPath(index), "script");
-
-    private static string RptPath(int index) =>
-        $@"{Folder}\DayZServer_x64_2026-09-06_00-00-{index:00}.RPT";
-
-    private static string ScriptPath(int index) =>
-        $@"{Folder}\script_2026-09-06_00-00-{index:00}.log";
 }

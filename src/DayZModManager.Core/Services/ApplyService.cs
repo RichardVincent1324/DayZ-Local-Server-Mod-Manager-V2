@@ -1,3 +1,4 @@
+using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 
 namespace DayZModManager.Core.Services;
@@ -44,19 +45,22 @@ public sealed class ApplyService : IApplyService
     private readonly IBatchFileService _batchFile;
     private readonly IJunctionService _junctions;
     private readonly IValidationService _validation;
+    private readonly IFileSystem _fileSystem;
 
     public ApplyService(
         ISettingsService settings,
         IModOrderStore modOrder,
         IBatchFileService batchFile,
         IJunctionService junctions,
-        IValidationService validation)
+        IValidationService validation,
+        IFileSystem fileSystem)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _modOrder = modOrder ?? throw new ArgumentNullException(nameof(modOrder));
         _batchFile = batchFile ?? throw new ArgumentNullException(nameof(batchFile));
         _junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
         _validation = validation ?? throw new ArgumentNullException(nameof(validation));
+        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
     public ApplyResult Apply(ApplyContext context)
@@ -72,11 +76,7 @@ public sealed class ApplyService : IApplyService
 
         if (errors.Count > 0)
         {
-            logs.Add("Validation failed:");
-            foreach (string error in errors)
-            {
-                logs.Add($"  {error}");
-            }
+            logs.Add($"Validation failed: {string.Join(" | ", errors)}");
 
             return new ApplyResult { Success = false, Logs = logs };
         }
@@ -107,11 +107,14 @@ public sealed class ApplyService : IApplyService
         //    removing the links of unloaded mods), so the launch batch file and the
         //    junctions the current mod set depends on stay consistent with each
         //    other. Junctions created for newly-loaded mods are harmless and are
-        //    reconciled again on the next Apply.
+        //    reconciled again on the next Apply. The previous contents are kept so
+        //    a later failure can restore the file instead of leaving it diverged.
         IReadOnlyList<string> modPaths = context.LoadedMods.Select(ModListFolder.Entry).ToList();
+        string batchPath = context.Settings.BatFilePath;
+        string? batchSnapshot = ReadFileSnapshot(batchPath);
         try
         {
-            if (!_batchFile.WriteModList(context.Settings.BatFilePath, modPaths))
+            if (!_batchFile.WriteModList(batchPath, modPaths))
             {
                 logs.Add("ERROR: Failed to update the batch file. No changes were made.");
                 return new ApplyResult { Success = false, Logs = logs };
@@ -119,15 +122,28 @@ public sealed class ApplyService : IApplyService
         }
         catch (Exception ex)
         {
+            RestoreFileSnapshot(batchPath, batchSnapshot);
             logs.Add($"ERROR: Failed to update the batch file: {ex.Message}. The launch batch file was not changed.");
             return new ApplyResult { Success = false, Logs = logs };
         }
 
         logs.Add("Batch file updated.");
 
-        // 4. Save configuration
-        _settings.Save(context.DataDirectory, context.Settings);
-        _modOrder.Save(context.DataDirectory, context.LoadedMods);
+        // 4. Save configuration. Persisting can still fail (disk full, permissions,
+        //    locked data directory). If it does, restore the batch file so the
+        //    launcher does not reference a mod list that was never committed.
+        try
+        {
+            _settings.Save(context.DataDirectory, context.Settings);
+            _modOrder.Save(context.DataDirectory, context.LoadedMods);
+        }
+        catch (Exception ex)
+        {
+            RestoreFileSnapshot(batchPath, batchSnapshot);
+            logs.Add($"ERROR: Failed to save the configuration: {ex.Message}. The launch batch file was restored.");
+            return new ApplyResult { Success = false, Logs = logs };
+        }
+
         logs.Add($"Saved configuration: {context.LoadedMods.Count} mod(s) loaded.");
 
         // 5. Destructive junction finalization: re-point stale links and remove the
@@ -159,5 +175,36 @@ public sealed class ApplyService : IApplyService
         logs.Add($"Junctions: {created} created, {removed} removed, {skipped} skipped.");
         logs.Add("Apply complete.");
         return new ApplyResult { Success = true, Logs = logs };
+    }
+
+    /// <summary>Reads a file's contents for later rollback, or null when it cannot be read.</summary>
+    private string? ReadFileSnapshot(string path)
+    {
+        try
+        {
+            return _fileSystem.FileExists(path) ? _fileSystem.ReadAllText(path) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Restores a file from a snapshot, ignoring failures (best effort).</summary>
+    private void RestoreFileSnapshot(string path, string? contents)
+    {
+        if (contents is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _fileSystem.WriteAllText(path, contents);
+        }
+        catch (Exception)
+        {
+            // Best effort: the caller has already reported the Apply failure.
+        }
     }
 }

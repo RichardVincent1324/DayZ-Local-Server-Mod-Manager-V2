@@ -9,7 +9,17 @@ namespace DayZModManager.Core.Models;
 /// </summary>
 public sealed class TypesConfig
 {
-    public Dictionary<string, MapTypesConfig> Maps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, MapTypesConfig> _maps = new(StringComparer.OrdinalIgnoreCase);
+
+    public Dictionary<string, MapTypesConfig> Maps
+    {
+        get => _maps;
+        // System.Text.Json assigns a new dictionary (and a JSON null) directly, so
+        // coerce null and restore the case-insensitive comparer here.
+        set => _maps = value is null
+            ? new Dictionary<string, MapTypesConfig>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, MapTypesConfig>(value, StringComparer.OrdinalIgnoreCase);
+    }
 
     public string CurrentMap { get; set; } = string.Empty;
 }
@@ -17,7 +27,13 @@ public sealed class TypesConfig
 /// <summary>Types configuration for a single map.</summary>
 public sealed class MapTypesConfig
 {
-    public List<ModTypesEntry> Mods { get; set; } = new();
+    private List<ModTypesEntry> _mods = new();
+
+    public List<ModTypesEntry> Mods
+    {
+        get => _mods;
+        set => _mods = value ?? new List<ModTypesEntry>();
+    }
 }
 
 /// <summary>
@@ -29,7 +45,19 @@ public sealed class ModTypesEntry
 {
     public string ModName { get; set; } = string.Empty;
 
-    public List<string> SourceFiles { get; set; } = new();
+    private List<string> _sourceFiles = new();
 
-    public List<string> GeneratedFiles { get; set; } = new();
+    public List<string> SourceFiles
+    {
+        get => _sourceFiles;
+        set => _sourceFiles = value ?? new List<string>();
+    }
+
+    private List<string> _generatedFiles = new();
+
+    public List<string> GeneratedFiles
+    {
+        get => _generatedFiles;
+        set => _generatedFiles = value ?? new List<string>();
+    }
 }

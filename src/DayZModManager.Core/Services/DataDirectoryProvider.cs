@@ -18,7 +18,7 @@ namespace DayZModManager.Core.Services;
         /// <summary>
         /// Resolves the effective data directory for a settings snapshot: a
         /// per-server subfolder under the server path once configured, otherwise
-        /// the legacy bootstrap directory.
+        /// the bootstrap directory.
         /// </summary>
         string Resolve(Settings settings);
 
@@ -58,7 +58,7 @@ namespace DayZModManager.Core.Services;
 
         public void Initialize()
         {
-            string legacy = AppPaths.LegacyDirectory();
+            string bootstrap = AppPaths.BootstrapDirectory();
             string pointerPath = PointerPath();
 
             if (_fileSystem.FileExists(pointerPath))
@@ -76,9 +76,9 @@ namespace DayZModManager.Core.Services;
                 }
             }
 
-            // Bootstrap at the legacy anchor until a server path is configured; the
+            // Bootstrap at the AppData anchor until a server path is configured; the
             // server-path derived default is adopted once an Apply relocates there.
-            _current = legacy;
+            _current = bootstrap;
         }
 
         public string Resolve(Settings settings) =>
@@ -174,8 +174,8 @@ namespace DayZModManager.Core.Services;
     {
         try
         {
-            string legacy = AppPaths.LegacyDirectory();
-            _fileSystem.CreateDirectory(legacy);
+            string bootstrap = AppPaths.BootstrapDirectory();
+            _fileSystem.CreateDirectory(bootstrap);
             _fileSystem.WriteAllText(PointerPath(), directory);
         }
         catch (Exception)
@@ -186,7 +186,7 @@ namespace DayZModManager.Core.Services;
         }
     }
 
-    private static string PointerPath() => Path.Combine(AppPaths.LegacyDirectory(), AppPaths.PointerFileName);
+    private static string PointerPath() => Path.Combine(AppPaths.BootstrapDirectory(), AppPaths.PointerFileName);
 
     private static string Normalize(string path) =>
         Path.TrimEndingDirectorySeparator(path.Trim());

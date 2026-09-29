@@ -139,26 +139,6 @@ public class EconomyCoreServiceTests
     }
 
     [Fact]
-    public void UpdateModTypes_RemovesOwnedStale_FromLegacyFolderForm()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="ModTypes"><file name="old.xml" type="types" /></ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        service.UpdateModTypes(MissionPath, new[] { "CF_types.xml" }, Set("old.xml"));
-
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.DoesNotContain(doc.Descendants("file"), f => (string?)f.Attribute("name") == "old.xml");
-        Assert.Single(doc.Descendants("ce"));
-    }
-
-    [Fact]
     public void UpdateModTypes_MergesIntoExistingBlock_WithoutDuplicating()
     {
         var fs = new FakeFileSystem();

@@ -15,6 +15,13 @@ public interface IDialogService
     /// </summary>
     bool ConfirmWithWarning(string message, string title, string warning, string note = "");
 
+    /// <summary>
+    /// Shows an informational window with the same prominent red warning banner
+    /// as <see cref="ConfirmWithWarning"/>, but with a single OK button. Used to
+    /// report a blocked operation.
+    /// </summary>
+    void ShowWarning(string message, string title, string warning, string note = "");
+
     /// <summary>Opens a folder picker. Returns the chosen path, or null if cancelled.</summary>
     string? PickFolder(string title = "Select a folder");
 

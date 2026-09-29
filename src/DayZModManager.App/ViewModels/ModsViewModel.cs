@@ -146,6 +146,18 @@ public sealed class ModsViewModel : ViewModelBase
         UpdateDirtyFlag();
     }
 
+    /// <summary>
+    /// Replaces the loaded-mod list wholesale (e.g. when restoring the mod list a
+    /// progress save was created with) and refreshes the UI. The new list becomes
+    /// pending until the next Apply.
+    /// </summary>
+    public void ReplaceLoadedMods(IReadOnlyList<string> mods)
+    {
+        _state.ReplaceLoadedMods(mods);
+        Rebuild();
+        UpdateDirtyFlag();
+    }
+
     private void ApplyDiscovery(IReadOnlyList<string> workshopMods)
     {
         _state.SetWorkshopMods(workshopMods);

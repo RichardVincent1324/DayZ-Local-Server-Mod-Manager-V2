@@ -76,11 +76,18 @@ public interface ITypesService
     /// Regenerates cfgeconomycore.xml referencing only the types of the mods in
     /// <paramref name="loadedModNames"/>. Returns false if the file is missing or malformed.
     /// </summary>
+    /// <param name="previouslyOwned">
+    /// Type-file leaf names the manager owned before the current configuration was
+    /// installed (e.g. the config replaced when a save was loaded). They are added
+    /// to the owned set so their now-deleted files are removed from
+    /// cfgeconomycore.xml instead of being preserved as third-party entries.
+    /// </param>
     bool SyncEconomyCore(
         TypesConfig config,
         string mapName,
         string missionPath,
-        IReadOnlySet<string> loadedModNames);
+        IReadOnlySet<string> loadedModNames,
+        IReadOnlySet<string>? previouslyOwned = null);
 
     /// <summary>
     /// Returns the active generated type-file leaf names for a map (in the same
@@ -156,7 +163,7 @@ public sealed class TypesService : ITypesService
         string cleanModName = CleanModName(modName);
         var generated = new List<string>();
         var sourceRelative = new List<string>();
-        var copied = new List<string>();
+        var newlyCreated = new List<string>();
 
         foreach (string source in sourceFiles)
         {
@@ -164,16 +171,24 @@ public sealed class TypesService : ITypesService
             string destinationName = BuildDestinationName(cleanModName, relative);
             string destinationFull = Path.Combine(missionPath, "db", "ModTypes", destinationName);
 
+            // A destination that already exists may belong to the previous
+            // configuration (or another owner). It must never be deleted by the
+            // rollback below, or a restored entry would reference a missing file.
+            bool existedBefore = _fileSystem.FileExists(destinationFull);
+
             try
             {
                 _fileSystem.CopyFile(source, destinationFull);
-                copied.Add(destinationFull);
+                if (!existedBefore)
+                {
+                    newlyCreated.Add(destinationFull);
+                }
             }
             catch (Exception ex)
             {
-                foreach (string alreadyCopied in copied)
+                foreach (string created in newlyCreated)
                 {
-                    _fileSystem.DeleteFile(alreadyCopied);
+                    TryDeleteQuiet(created);
                 }
 
                 return new TypesOperationResult { Success = false, Messages = new[] { $"Failed to copy {source}: {ex.Message}" } };
@@ -186,8 +201,9 @@ public sealed class TypesService : ITypesService
 
         // Commit the configuration in memory first so the economy rewrite below
         // reflects the final state. If cfgeconomycore.xml cannot be updated, the
-        // in-memory change is rolled back and the newly copied files are removed
-        // again - no partial configuration is ever left behind.
+        // in-memory change is rolled back and any files this attempt newly created
+        // are removed - files that pre-existed (still referenced by the restored
+        // entry) are left in place, so no config points at a missing file.
         var newGenerated = new HashSet<string>(generated.Select(g => Path.Combine(missionPath, g)), StringComparer.OrdinalIgnoreCase);
         ModTypesEntry? previous = map.Mods.FirstOrDefault(entry => string.Equals(entry.ModName, modName, StringComparison.OrdinalIgnoreCase));
         int previousIndex = previous is null ? -1 : map.Mods.IndexOf(previous);
@@ -214,7 +230,7 @@ public sealed class TypesService : ITypesService
                 map.Mods.Insert(Math.Min(previousIndex, map.Mods.Count), previous);
             }
 
-            foreach (string fullPath in copied)
+            foreach (string fullPath in newlyCreated)
             {
                 TryDeleteQuiet(fullPath);
             }
@@ -381,15 +397,28 @@ public sealed class TypesService : ITypesService
         TypesConfig config,
         string mapName,
         string missionPath,
-        IReadOnlySet<string> loadedModNames)
+        IReadOnlySet<string> loadedModNames,
+        IReadOnlySet<string>? previouslyOwned = null)
     {
         MapTypesConfig? map = GetMap(config, mapName);
         IReadOnlyList<string> fileNames = map is null
             ? Array.Empty<string>()
             : GetAllGeneratedFileNames(map, loadedModNames);
-        IReadOnlySet<string> owned = map is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : GetAllOwnedFileNames(map);
+
+        // Ownership is the union of the current configuration and any ownership
+        // carried over from the replaced configuration, so entries for files that
+        // were owned before but are not desired now are recognized as stale and
+        // removed (their physical files were already deleted).
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (map is not null)
+        {
+            owned.UnionWith(GetAllOwnedFileNames(map));
+        }
+
+        if (previouslyOwned is not null)
+        {
+            owned.UnionWith(previouslyOwned);
+        }
 
         try
         {

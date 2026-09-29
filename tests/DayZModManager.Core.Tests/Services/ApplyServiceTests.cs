@@ -44,7 +44,8 @@ public class ApplyServiceTests
             new ModOrderStore(fs),
             batchFile,
             new JunctionService(fs, junctions),
-            new ValidationService(fs, batchFile));
+            new ValidationService(fs, batchFile),
+            fs);
         return (service, fs, junctions);
     }
 
@@ -101,7 +102,8 @@ public class ApplyServiceTests
             new ModOrderStore(fs),
             stubBatch,
             new JunctionService(fs, junctions),
-            new ValidationService(fs, realBatch));
+            new ValidationService(fs, realBatch),
+            fs);
 
         ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
 
@@ -156,7 +158,8 @@ public class ApplyServiceTests
             new ModOrderStore(fs),
             stubBatch,
             new JunctionService(fs, junctions),
-            new ValidationService(fs, new BatchFileService(fs)));
+            new ValidationService(fs, new BatchFileService(fs)),
+            fs);
 
         // Removing @Expansion from the loaded set, but the batch write throws.
         ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
@@ -175,6 +178,47 @@ public class ApplyServiceTests
         Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
+    [Fact]
+    public void Apply_WhenConfigSaveFails_RestoresTheBatchFile()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        var junctions = new FakeJunctionOperations();
+        var batchFile = new BatchFileService(fs);
+        string batchPath = $@"{ServerPath}\LocalServer.example.bat";
+        string originalBatch = fs.TryGetFileContents(batchPath)!;
+
+        var service = new ApplyService(
+            new ThrowingSettingsService(new SettingsService(fs)),
+            new ModOrderStore(fs),
+            batchFile,
+            new JunctionService(fs, junctions),
+            new ValidationService(fs, batchFile),
+            fs);
+
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Logs, l => l.Contains("Failed to save the configuration"));
+
+        // The launcher must not reference a mod list that was never committed.
+        Assert.Equal(originalBatch, fs.TryGetFileContents(batchPath));
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+    }
+
+    private sealed class ThrowingSettingsService : ISettingsService
+    {
+        private readonly ISettingsService _inner;
+
+        public ThrowingSettingsService(ISettingsService inner) => _inner = inner;
+
+        public ConfigLoadResult<Settings> Load(string dataDirectory) => _inner.Load(dataDirectory);
+
+        public bool BackupCorrupt(string dataDirectory) => _inner.BackupCorrupt(dataDirectory);
+
+        public void Save(string dataDirectory, Settings settings) =>
+            throw new IOException("data directory is read-only");
+    }
+
     private sealed class StubBatchFileService : IBatchFileService
     {
         private readonly IBatchFileService _inner;
@@ -184,8 +228,6 @@ public class ApplyServiceTests
         public bool WriteResult { get; set; } = true;
 
         public bool ThrowWrite { get; set; }
-
-        public IReadOnlyList<string> ReadModList(string batFilePath) => _inner.ReadModList(batFilePath);
 
         public bool HasModListLine(string batFilePath) => _inner.HasModListLine(batFilePath);
 

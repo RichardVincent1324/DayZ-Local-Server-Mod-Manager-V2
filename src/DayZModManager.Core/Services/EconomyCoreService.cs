@@ -206,8 +206,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
 
         string normalized = folder.Trim().Replace('\\', '/');
         return normalized.Equals("./db/ModTypes", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("ModTypes", StringComparison.OrdinalIgnoreCase);
+            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Reads and parses cfgeconomycore.xml, or null when missing/malformed.</summary>

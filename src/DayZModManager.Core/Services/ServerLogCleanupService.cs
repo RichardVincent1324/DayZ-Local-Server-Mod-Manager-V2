@@ -3,37 +3,33 @@ using DayZModManager.Core.Abstractions;
 namespace DayZModManager.Core.Services;
 
 /// <summary>Outcome of a log-cleanup pass.</summary>
-public sealed record ServerLogCleanupResult(bool FolderExists, int RptRemoved, int ScriptRemoved);
+public sealed record ServerLogCleanupResult(bool FolderExists, int Removed);
 
 /// <summary>
-/// Prunes old DayZ server log files inside a map profile folder
-/// (<c>map_profiles\&lt;map&gt;</c>). Each file type (the <c>DayZServer_x64_*.RPT</c>
-/// files and the <c>script_*.log</c> files) is trimmed independently and only when
-/// more than <see cref="ServerLogCleanupService.PruneThreshold"/> files of that type
-/// exist, keeping the three most recent. Everything else in the folder is untouched.
+/// Clears DayZ server log files inside a map profile folder
+/// (<c>map_profiles\&lt;map&gt;</c>). All <c>.rpt</c> and <c>.log</c> files are
+/// counted together and, when that combined total exceeds
+/// <see cref="ServerLogCleanupService.CleanupThreshold"/>, every one of them is
+/// deleted. Other files are never touched.
 /// </summary>
 public interface IServerLogCleanupService
 {
     /// <summary>
-    /// Trims each log type down to the newest <see cref="ServerLogCleanupService.RetainedPerGroup"/>
-    /// files, but only when that type has more than <see cref="ServerLogCleanupService.PruneThreshold"/>
-    /// files. Never throws when a file cannot be deleted (for example because the
-    /// server is still writing it); such files are skipped and retried on the next run.
+    /// Deletes all <c>.rpt</c>/<c>.log</c> files in <paramref name="profileFolderPath"/>
+    /// when there are more than <see cref="ServerLogCleanupService.CleanupThreshold"/>
+    /// of them. Files that cannot be deleted (for example because the server is
+    /// still writing them) are skipped; the method never throws.
     /// </summary>
     ServerLogCleanupResult Cleanup(string profileFolderPath);
 }
 
 public sealed class ServerLogCleanupService : IServerLogCleanupService
 {
-    /// <summary>Number of most recent files retained per log type when a prune runs.</summary>
-    public const int RetainedPerGroup = 3;
-
     /// <summary>
-    /// A log type is only pruned when it has more than this many files; at or below
-    /// the threshold no files are deleted. This keeps cleanup infrequent so an app
-    /// open does not constantly churn the log folder.
+    /// The combined number of <c>.rpt</c>/<c>.log</c> files is only cleared when it
+    /// exceeds this; at or below the threshold no files are deleted.
     /// </summary>
-    public const int PruneThreshold = 10;
+    public const int CleanupThreshold = 20;
 
     private readonly IFileSystem _fileSystem;
 
@@ -46,58 +42,40 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
     {
         if (string.IsNullOrWhiteSpace(profileFolderPath) || !_fileSystem.DirectoryExists(profileFolderPath))
         {
-            return new ServerLogCleanupResult(FolderExists: false, RptRemoved: 0, ScriptRemoved: 0);
+            return new ServerLogCleanupResult(FolderExists: false, Removed: 0);
         }
 
-        IReadOnlyList<string> files = _fileSystem.GetFiles(profileFolderPath, "*", recursive: false);
-
-        int rptRemoved = PruneGroup(files, "DayZServer_x64_", ".rpt");
-        int scriptRemoved = PruneGroup(files, "script_", ".log");
-
-        return new ServerLogCleanupResult(FolderExists: true, rptRemoved, scriptRemoved);
-    }
-
-    /// <summary>
-    /// For files whose name starts with <paramref name="namePrefix"/> and ends with
-    /// <paramref name="extension"/>, keeps the newest <see cref="RetainedPerGroup"/> and
-    /// deletes the rest — but only when more than <see cref="PruneThreshold"/> such files
-    /// exist. Returns the number deleted. Newest is decided by file name: DayZ names
-    /// these files with a fixed-width <c>yyyy-MM-dd_HH-mm-ss</c> timestamp, so descending
-    /// ordinal order equals newest-first.
-    /// </summary>
-    private int PruneGroup(IReadOnlyList<string> files, string namePrefix, string extension)
-    {
-        var matches = files
-            .Where(f => MatchesGroup(f, namePrefix, extension))
-            .OrderByDescending(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+        List<string> logs = _fileSystem
+            .GetFiles(profileFolderPath, "*", recursive: false)
+            .Where(IsLogFile)
             .ToList();
 
-        if (matches.Count <= PruneThreshold)
+        if (logs.Count <= CleanupThreshold)
         {
-            return 0;
+            return new ServerLogCleanupResult(FolderExists: true, Removed: 0);
         }
 
         int removed = 0;
-        for (int i = RetainedPerGroup; i < matches.Count; i++)
+        foreach (string file in logs)
         {
             try
             {
-                _fileSystem.DeleteFile(matches[i]);
+                _fileSystem.DeleteFile(file);
                 removed++;
             }
             catch (Exception)
             {
-                // The file may be locked by a running server; skip it and retry later.
+                // The file may be locked by a running server; skip it.
             }
         }
 
-        return removed;
+        return new ServerLogCleanupResult(FolderExists: true, Removed: removed);
     }
 
-    private static bool MatchesGroup(string fullPath, string namePrefix, string extension)
+    private static bool IsLogFile(string fullPath)
     {
-        string name = Path.GetFileName(fullPath);
-        return name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase)
-            && name.EndsWith(extension, StringComparison.OrdinalIgnoreCase);
+        string extension = Path.GetExtension(fullPath);
+        return extension.Equals(".rpt", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".log", StringComparison.OrdinalIgnoreCase);
     }
 }

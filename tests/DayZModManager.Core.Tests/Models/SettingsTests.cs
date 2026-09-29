@@ -6,6 +6,22 @@ namespace DayZModManager.Core.Tests.Models;
 public class SettingsTests
 {
     [Fact]
+    public void BatFileName_DefaultsToEmpty_SoUserMustChoose()
+    {
+        var settings = new Settings();
+
+        Assert.Equal(string.Empty, settings.BatFileName);
+    }
+
+    [Fact]
+    public void BatFilePath_EmptyBatFileName_ReturnsEmpty()
+    {
+        var settings = new Settings { ServerPath = @"D:\DayZServer" };
+
+        Assert.Equal(string.Empty, settings.BatFilePath);
+    }
+
+    [Fact]
     public void BatFilePath_UsesBareName_RelativeToServerPath()
     {
         var settings = new Settings { ServerPath = @"D:\DayZServer", BatFileName = "run.bat" };

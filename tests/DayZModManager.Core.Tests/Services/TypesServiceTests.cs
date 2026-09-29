@@ -412,6 +412,31 @@ public class TypesServiceTests
     }
 
     [Fact]
+    public void ConfigureMod_EconomyFailure_KeepsPreviouslyOwnedOverwrittenFile()
+    {
+        FakeFileSystem fs = Seed();
+        var config = new TypesConfig();
+        TypesService service = CreateService(fs);
+
+        // First configuration succeeds and owns CF_types.xml.
+        TypesOperationResult first = service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[] { $@"{WorkshopPath}\@CF\types.xml" }, Loaded("@CF"));
+        Assert.True(first.Success);
+
+        // The economy file becomes unwritable: reconfiguring overwrites the
+        // existing (still-owned) CF_types.xml and then fails the economy rewrite.
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
+        TypesOperationResult result = service.ConfigureMod(config, MapName, MissionPath, WorkshopPath, "@CF",
+            new[] { $@"{WorkshopPath}\@CF\types.xml" }, Loaded("@CF"));
+
+        Assert.False(result.Success);
+        // The rollback must not delete a file that existed before the failed
+        // attempt; the restored entry still references it.
+        Assert.True(fs.FileExists($@"{MissionPath}\db\ModTypes\CF_types.xml"));
+        Assert.Contains(config.Maps[MapName].Mods.Single().GeneratedFiles, f => f.EndsWith("CF_types.xml"));
+    }
+
+    [Fact]
     public void RemoveFiles_EconomyUnreadable_FailsWithoutDeletingFilesOrConfig()
     {
         FakeFileSystem fs = Seed();

@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using DayZModManager.Core.Abstractions;
 
@@ -19,13 +18,6 @@ namespace DayZModManager.Core.Services;
 /// </summary>
 public interface IBatchFileService
 {
-    /// <summary>
-    /// Parses the <c>modList</c> block and returns the ordered mod paths as
-    /// written (e.g. <c>ModList/@CF</c>). Returns an empty list when the file or
-    /// the line is absent.
-    /// </summary>
-    IReadOnlyList<string> ReadModList(string batFilePath);
-
     /// <summary>Returns true if the file contains a <c>modList</c> line.</summary>
     bool HasModListLine(string batFilePath);
 
@@ -52,53 +44,6 @@ public sealed partial class BatchFileService : IBatchFileService
     public BatchFileService(IFileSystem fileSystem)
     {
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
-    }
-
-    public IReadOnlyList<string> ReadModList(string batFilePath)
-    {
-        if (string.IsNullOrWhiteSpace(batFilePath) || !_fileSystem.FileExists(batFilePath))
-        {
-            return Array.Empty<string>();
-        }
-
-        string[] lines = _fileSystem.ReadAllText(batFilePath).Split('\n');
-        int start = FindFirstLine(lines, ModListFirstLineValueRegex());
-        if (start < 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        var value = new StringBuilder();
-        for (int i = start; i < lines.Length; i++)
-        {
-            string line = TrimCarriageReturn(lines[i]);
-
-            if (i == start)
-            {
-                Match first = ModListFirstLineValueRegex().Match(line);
-                if (!first.Success)
-                {
-                    return Array.Empty<string>();
-                }
-
-                value.Append(first.Groups[1].Value);
-                continue;
-            }
-
-            Match append = ModListAppendLineValueRegex().Match(line);
-            if (!append.Success)
-            {
-                break;
-            }
-
-            value.Append(append.Groups[1].Value);
-        }
-
-        return value.ToString()
-            .Split(';')
-            .Select(part => part.Trim())
-            .Where(part => part.Length > 0)
-            .ToList();
     }
 
     public bool HasModListLine(string batFilePath)
@@ -256,14 +201,6 @@ public sealed partial class BatchFileService : IBatchFileService
     /// <summary>Matches a continuation line: <c>set "modList=%modList%...</c>.</summary>
     [GeneratedRegex(@"^\s*set\s+""modList=%modList%", RegexOptions.Multiline)]
     private static partial Regex AppendLineRegex();
-
-    /// <summary>Captures the value of the first modList line (after <c>-mod=</c>).</summary>
-    [GeneratedRegex(@"^\s*set\s+""modList=-mod=(.*)""\s*$")]
-    private static partial Regex ModListFirstLineValueRegex();
-
-    /// <summary>Captures the appended value of a continuation modList line.</summary>
-    [GeneratedRegex(@"^\s*set\s+""modList=%modList%(.*)""\s*$")]
-    private static partial Regex ModListAppendLineValueRegex();
 
     [GeneratedRegex(@"^\s*set\s+""serverProfile=.*""\s*$", RegexOptions.Multiline)]
     private static partial Regex ServerProfileLineRegex();

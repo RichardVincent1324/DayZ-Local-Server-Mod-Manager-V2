@@ -17,7 +17,6 @@ public sealed class SettingsViewModel : ViewModelBase
     private string _savedBatFileName = string.Empty;
     private bool _autoCleanServerLogs;
     private bool _savedAutoCleanServerLogs;
-    private int _schemaVersion = Settings.CurrentSchemaVersion;
 
     public SettingsViewModel(IDialogService dialogs)
     {
@@ -66,8 +65,8 @@ public sealed class SettingsViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// When enabled, old DayZ log files are pruned to the three most recent
-    /// <c>.RPT</c> and <c>script_*.log</c> files in the active map profile folder.
+    /// When enabled, all <c>.rpt</c>/<c>.log</c> files in the active map profile
+    /// folder are cleared on app startup once more than 20 have accumulated.
     /// </summary>
     public bool AutoCleanServerLogs
     {
@@ -77,7 +76,7 @@ public sealed class SettingsViewModel : ViewModelBase
             if (SetField(ref _autoCleanServerLogs, value))
             {
                 OnPropertyChanged(nameof(IsDirty));
-                if (CanAutoApply)
+                if (CanApply)
                 {
                     ApplyRequested?.Invoke();
                 }
@@ -112,7 +111,6 @@ public sealed class SettingsViewModel : ViewModelBase
         _savedServerPath = settings.ServerPath;
         _savedBatFileName = settings.BatFileName;
         _savedAutoCleanServerLogs = settings.AutoCleanServerLogs;
-        _schemaVersion = settings.SchemaVersion;
 
         OnPropertyChanged(nameof(WorkshopPath));
         OnPropertyChanged(nameof(ServerPath));
@@ -129,7 +127,6 @@ public sealed class SettingsViewModel : ViewModelBase
             ServerPath = ServerPath,
             BatFileName = BatFileName,
             AutoCleanServerLogs = AutoCleanServerLogs,
-            SchemaVersion = _schemaVersion,
         };
 
     public void MarkApplied(Settings settings)
@@ -138,13 +135,17 @@ public sealed class SettingsViewModel : ViewModelBase
         _savedServerPath = settings.ServerPath;
         _savedBatFileName = settings.BatFileName;
         _savedAutoCleanServerLogs = settings.AutoCleanServerLogs;
-        _schemaVersion = settings.SchemaVersion;
         OnPropertyChanged(nameof(IsDirty));
     }
 
-    /// <summary>True when both essential paths are set, so a Browse can auto-apply safely.</summary>
-    private bool CanAutoApply =>
-        !string.IsNullOrWhiteSpace(WorkshopPath) && !string.IsNullOrWhiteSpace(ServerPath);
+    /// <summary>
+    /// True when the workshop path, server path and launch batch file are all set,
+    /// so an edit can auto-apply safely.
+    /// </summary>
+    public bool CanApply =>
+        !string.IsNullOrWhiteSpace(WorkshopPath)
+        && !string.IsNullOrWhiteSpace(ServerPath)
+        && !string.IsNullOrWhiteSpace(BatFileName);
 
     private void BrowseWorkshop()
     {
@@ -152,7 +153,7 @@ public sealed class SettingsViewModel : ViewModelBase
         if (folder is not null)
         {
             WorkshopPath = folder;
-            if (CanAutoApply)
+            if (CanApply)
             {
                 ApplyRequested?.Invoke();
             }
@@ -165,7 +166,7 @@ public sealed class SettingsViewModel : ViewModelBase
         if (folder is not null)
         {
             ServerPath = folder;
-            if (CanAutoApply)
+            if (CanApply)
             {
                 ApplyRequested?.Invoke();
             }
@@ -181,7 +182,7 @@ public sealed class SettingsViewModel : ViewModelBase
         if (file is not null)
         {
             BatFileName = file;
-            if (CanAutoApply)
+            if (CanApply)
             {
                 ApplyRequested?.Invoke();
             }

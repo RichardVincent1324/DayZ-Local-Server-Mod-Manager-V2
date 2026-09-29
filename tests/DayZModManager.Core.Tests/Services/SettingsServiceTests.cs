@@ -68,35 +68,16 @@ public class SettingsServiceTests
     }
 
     [Fact]
-    public void Load_MigratesSchemaV1ToCurrentVersion()
+    public void Save_WritesNoSchemaVersion()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile(@"C:\data\settings.json", "{\"workshopPath\":\"D:\\\\ws\",\"schemaVersion\":1}");
         var service = new SettingsService(fs);
+        service.Save(@"C:\data", new Settings { ServerPath = @"D:\srv" });
 
-        ConfigLoadResult<Settings> result = service.Load(@"C:\data");
+        string? json = fs.TryGetFileContents(@"C:\data\settings.json");
 
-        Assert.Equal(ConfigLoadStatus.Success, result.Status);
-        Assert.Equal(Settings.CurrentSchemaVersion, result.Value!.SchemaVersion);
-        Assert.Equal(@"D:\ws", result.Value.WorkshopPath);
-        Assert.False(result.Value.AutoCleanServerLogs);
-    }
-
-    [Fact]
-    public void Load_MigratesSchemaV2_AddingAutoCleanFlagDefaultingToFalse()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile(
-            @"C:\data\settings.json",
-            "{\"serverPath\":\"D:\\\\srv\",\"batFileName\":\"run.bat\",\"schemaVersion\":2}");
-        var service = new SettingsService(fs);
-
-        ConfigLoadResult<Settings> result = service.Load(@"C:\data");
-
-        Assert.Equal(ConfigLoadStatus.Success, result.Status);
-        Assert.Equal(Settings.CurrentSchemaVersion, result.Value!.SchemaVersion);
-        Assert.Equal(@"D:\srv", result.Value.ServerPath);
-        Assert.False(result.Value.AutoCleanServerLogs);
+        Assert.NotNull(json);
+        Assert.DoesNotContain("schemaVersion", json);
     }
 
     [Fact]

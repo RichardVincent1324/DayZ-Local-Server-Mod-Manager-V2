@@ -82,7 +82,12 @@ public class SettingsViewModelTests
     public void TogglingAutoClean_WithPathsConfigured_RaisesApplyRequested()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        vm.Load(new Settings
+        {
+            WorkshopPath = @"D:\workshop",
+            ServerPath = @"D:\server",
+            BatFileName = "run.bat",
+        });
         int raises = 0;
         vm.ApplyRequested += () => raises++;
 
@@ -112,7 +117,12 @@ public class SettingsViewModelTests
     public void SettingSameAutoCleanValueTwice_RaisesOnlyOnce()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
-        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        vm.Load(new Settings
+        {
+            WorkshopPath = @"D:\workshop",
+            ServerPath = @"D:\server",
+            BatFileName = "run.bat",
+        });
         int raises = 0;
         vm.ApplyRequested += () => raises++;
 
@@ -151,12 +161,12 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void EffectiveDataDirectory_WithoutServerPath_UsesLegacyDirectory()
+    public void EffectiveDataDirectory_WithoutServerPath_UsesBootstrapDirectory()
     {
         var vm = new SettingsViewModel(new FakeDialogs());
         vm.Load(new Settings());
 
-        Assert.Equal(AppPaths.LegacyDirectory(), vm.EffectiveDataDirectory);
+        Assert.Equal(AppPaths.BootstrapDirectory(), vm.EffectiveDataDirectory);
     }
 
     [Fact]
@@ -188,7 +198,22 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void BrowseWorkshop_RaisesApplyRequested_WhenServerPathSet()
+    public void BrowseWorkshop_RaisesApplyRequested_WhenServerAndBatchSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { ServerPath = @"D:\server", BatFileName = "run.bat" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenBatchNotSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\picked" };
         var vm = new SettingsViewModel(dialogs);
@@ -199,7 +224,7 @@ public class SettingsViewModelTests
         vm.BrowseWorkshopCommand.Execute(null);
 
         Assert.Equal(@"D:\picked", vm.WorkshopPath);
-        Assert.True(raised);
+        Assert.False(raised, "auto-apply must wait until a batch file is selected");
     }
 
     [Fact]
@@ -217,7 +242,22 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void BrowseServer_RaisesApplyRequested_WhenWorkshopPathSet()
+    public void BrowseServer_RaisesApplyRequested_WhenWorkshopAndBatchSet()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\server" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", BatFileName = "run.bat" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseServerCommand.Execute(null);
+
+        Assert.Equal(@"D:\server", vm.ServerPath);
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void BrowseServer_SetsPath_ButSkipsApply_WhenBatchNotSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\server" };
         var vm = new SettingsViewModel(dialogs);
@@ -228,7 +268,28 @@ public class SettingsViewModelTests
         vm.BrowseServerCommand.Execute(null);
 
         Assert.Equal(@"D:\server", vm.ServerPath);
-        Assert.True(raised);
+        Assert.False(raised, "auto-apply must wait until a batch file is selected");
+    }
+
+    [Fact]
+    public void CanApply_RequiresWorkshopServerAndBatch()
+    {
+        var vm = new SettingsViewModel(new FakeDialogs());
+
+        vm.Load(new Settings());
+        Assert.False(vm.CanApply);
+
+        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv" });
+        Assert.False(vm.CanApply);
+
+        vm.Load(new Settings { WorkshopPath = "ws", BatFileName = "run.bat" });
+        Assert.False(vm.CanApply);
+
+        vm.Load(new Settings { ServerPath = "srv", BatFileName = "run.bat" });
+        Assert.False(vm.CanApply);
+
+        vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "run.bat" });
+        Assert.True(vm.CanApply);
     }
 
     [Fact]
@@ -245,6 +306,21 @@ public class SettingsViewModelTests
         Assert.False(raised);
     }
 
+    [Fact]
+    public void BrowseBatchFile_RaisesApplyRequested_WhenPathsSet()
+    {
+        var dialogs = new FakeDialogs { File = @"D:\start.bat" };
+        var vm = new SettingsViewModel(dialogs);
+        vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseBatchFileCommand.Execute(null);
+
+        Assert.Equal(@"D:\start.bat", vm.BatFileName);
+        Assert.True(raised, "selecting the last of the three paths must auto-apply");
+    }
+
     private sealed class FakeDialogs : IDialogService
     {
         public string? Folder { get; set; }
@@ -256,6 +332,8 @@ public class SettingsViewModelTests
         public bool Confirm(string message, string title) => true;
 
         public bool ConfirmWithWarning(string message, string title, string warning, string note = "") => true;
+
+        public void ShowWarning(string message, string title, string warning, string note = "") { }
 
         public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
 

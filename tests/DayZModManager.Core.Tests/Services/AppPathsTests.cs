@@ -15,24 +15,24 @@ public class AppPathsTests
     [Fact]
     public void Resolve_FallsBackToLegacy_WhenNothingSet()
     {
-        Assert.Equal(AppPaths.LegacyDirectory(), AppPaths.Resolve(null));
+        Assert.Equal(AppPaths.BootstrapDirectory(), AppPaths.Resolve(null));
     }
 
     [Fact]
     public void Resolve_IgnoresBlankServerPath_AndUsesLegacy()
     {
-        Assert.Equal(AppPaths.LegacyDirectory(), AppPaths.Resolve("   "));
+        Assert.Equal(AppPaths.BootstrapDirectory(), AppPaths.Resolve("   "));
     }
 
     [Fact]
-    public void LegacyDirectory_IsNotEmpty()
+    public void BootstrapDirectory_IsNotEmpty()
     {
-        Assert.False(string.IsNullOrWhiteSpace(AppPaths.LegacyDirectory()));
+        Assert.False(string.IsNullOrWhiteSpace(AppPaths.BootstrapDirectory()));
     }
 
     [Fact]
-    public void LegacyDirectory_EndsWithDataDirectoryName()
+    public void BootstrapDirectory_EndsWithDataDirectoryName()
     {
-        Assert.EndsWith(AppPaths.DataDirectoryName, AppPaths.LegacyDirectory());
+        Assert.EndsWith(AppPaths.DataDirectoryName, AppPaths.BootstrapDirectory());
     }
 }

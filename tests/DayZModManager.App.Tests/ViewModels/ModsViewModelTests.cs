@@ -52,6 +52,20 @@ public class ModsViewModelTests
     }
 
     [Fact]
+    public void ReplaceLoadedMods_ReplacesListAndMarksDirty()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.ReplaceLoadedMods(new[] { "@B", "@C" });
+
+        Assert.Equal(new[] { "@B", "@C" }, Names(vm.LoadedItems));
+        Assert.Equal(new[] { "@A" }, Names(vm.AvailableItems));
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
     public void UnloadSelected_RemovesModsFromLoaded()
     {
         ModsViewModel vm = Create(new[] { "@A", "@B" }, new[] { "@A", "@B" });

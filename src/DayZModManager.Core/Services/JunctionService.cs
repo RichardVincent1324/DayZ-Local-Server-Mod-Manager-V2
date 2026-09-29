@@ -22,8 +22,8 @@ public sealed record JunctionSyncResult
 /// non-destructive preparation phase (create missing links, validate targets) and
 /// a destructive finalize phase (re-point stale links, remove orphaned junctions),
 /// so an Apply can abort safely after preparation without tearing down the links a
-/// still-unchanged launch batch file depends on. Junctions created directly in the
-/// server root by older versions are left untouched.
+/// still-unchanged launch batch file depends on. Junctions outside the managed
+/// <see cref="ModListFolder.Name"/> folder are left untouched.
 /// </summary>
 public interface IJunctionService
 {

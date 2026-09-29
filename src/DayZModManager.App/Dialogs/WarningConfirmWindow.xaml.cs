@@ -9,7 +9,7 @@ namespace DayZModManager.App.Dialogs;
 /// </summary>
 public partial class WarningConfirmWindow : Window
 {
-    public WarningConfirmWindow(string message, string title, string warning, string note = "")
+    public WarningConfirmWindow(string message, string title, string warning, string note = "", bool informational = false)
     {
         InitializeComponent();
         Title = title;
@@ -20,9 +20,19 @@ public partial class WarningConfirmWindow : Window
         {
             NoteText.Visibility = Visibility.Collapsed;
         }
+
+        if (informational)
+        {
+            YesButton.Visibility = Visibility.Collapsed;
+            NoButton.Visibility = Visibility.Collapsed;
+            OkButton.Visibility = Visibility.Visible;
+            OkButton.IsCancel = true;
+        }
     }
 
     private void Yes_Click(object sender, RoutedEventArgs e) => DialogResult = true;
 
     private void No_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
+    private void Ok_Click(object sender, RoutedEventArgs e) => DialogResult = true;
 }

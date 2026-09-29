@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayZModManager.App.ViewModels"
         xmlns:beh="clr-namespace:DayZModManager.App.Behaviors"
-        Title="DayZ Mod Manager v2.0.1"
+        Title="DayZ Mod Manager v2.0.2"
         Icon="Resources/app.ico"
         Height="700" Width="1020"
         MinHeight="520" MinWidth="760"
@@ -274,7 +274,43 @@
 						ScrollViewer.CanContentScroll="False"
 						VirtualizingStackPanel.IsVirtualizing="False"
 						MaxDropDownHeight="300" />
-                        <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0" />
+                        <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0"
+                                ToolTip="{Binding TypesLockedMessage}"
+                                ToolTipService.ShowOnDisabled="True"
+                                ToolTipService.IsEnabled="{Binding IsTypesLocked}" />
+                        <Button Command="{Binding OpenModTypesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
+                                ToolTip="{Binding OpenModTypesFolderToolTip}"
+                                ToolTipService.ShowOnDisabled="True"
+                                Background="Transparent"
+                                BorderThickness="0">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Chrome"
+                                            Background="{TemplateBinding Background}"
+                                            CornerRadius="3"
+                                            SnapsToDevicePixels="True">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          TextElement.Foreground="{TemplateBinding Foreground}" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter Property="Foreground"
+                                                    Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                                        </Trigger>
+                                        <MultiTrigger>
+                                            <MultiTrigger.Conditions>
+                                                <Condition Property="IsMouseOver" Value="True" />
+                                                <Condition Property="IsEnabled" Value="True" />
+                                            </MultiTrigger.Conditions>
+                                            <Setter TargetName="Chrome" Property="Background" Value="#14000000" />
+                                        </MultiTrigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                       VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        </Button>
                     </StackPanel>
 
                     <Grid Grid.Row="2">
@@ -405,7 +441,21 @@
                         <Button Grid.Row="1" Grid.Column="2" Content="Browse" Command="{Binding BrowseServerCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch file:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding BatFileName}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,8,8">
+                            <TextBlock Text="{Binding BatFileName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="choose the LocalServer.bat you placed in the server folder" Foreground="LightGray" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding BatFileName}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <Button Grid.Row="2" Grid.Column="2" Content="Choose" Command="{Binding BrowseBatchFileCommand}" Width="80" Margin="0,0,0,8" />
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Data directory:" VerticalAlignment="Center" Margin="0,0,8,8" />
@@ -416,14 +466,14 @@
 
                     <TextBlock Text="Features" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" />
                     <CheckBox x:Name="AutoCleanServerLogsCheckBox"
-                              Content="Auto-clean old server log files (keep the 3 newest)"
+                              Content="Auto-clean server log files on startup"
                               IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                               Click="AutoCleanServerLogs_Click"
                               Loaded="AutoCleanServerLogsCheckBox_Loaded"
                               VerticalContentAlignment="Center">
                         <CheckBox.ToolTip>
                             <ToolTip Style="{StaticResource WrappingToolTipStyle}"
-                                     Content="On every app start, Apply and Start Server: when more than 10 DayZServer_x64_*.RPT or script_*.log files have accumulated in map_profiles\&lt;current map&gt;, the oldest are deleted until only the 3 most recent of each remain. Below that no files are touched. Default: off." />
+                                     Content="On App Startup: when more than 20 .rpt and .log files have accumulated in map_profiles\&lt;current map&gt;, all of them are deleted. At or below 20 no files are touched. Default: OFF	." />
                         </CheckBox.ToolTip>
                     </CheckBox>
                 </StackPanel>

@@ -9,7 +9,7 @@ public static class AppPaths
     public const string DataDirectoryName = "DayZ-Mod-Manager-V2";
 
     /// <summary>
-    /// Small anchor file kept in the legacy AppData directory that records the
+    /// Small anchor file kept in the bootstrap AppData directory that records the
     /// active data directory so it can be rediscovered on startup.
     /// </summary>
     public const string PointerFileName = "data_directory.txt";
@@ -19,7 +19,7 @@ public static class AppPaths
     /// directory when unavailable) and is the default data directory until a
     /// server path is configured.
     /// </summary>
-    public static string LegacyDirectory()
+    public static string BootstrapDirectory()
     {
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return string.IsNullOrWhiteSpace(appData)
@@ -30,7 +30,7 @@ public static class AppPaths
     /// <summary>
     /// Resolves the effective data directory: a per-server subfolder under
     /// <paramref name="serverPath"/> once one is configured, otherwise the
-    /// legacy AppData directory.
+    /// bootstrap AppData directory.
     /// </summary>
     public static string Resolve(string? serverPath)
     {
@@ -39,6 +39,6 @@ public static class AppPaths
             return Path.Combine(serverPath, DataDirectoryName);
         }
 
-        return LegacyDirectory();
+        return BootstrapDirectory();
     }
 }

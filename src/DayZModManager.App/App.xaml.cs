@@ -67,6 +67,7 @@ public partial class App : Application
         services.AddSingleton<IEconomyCoreService, EconomyCoreService>();
         services.AddSingleton<ITypesService, TypesService>();
         services.AddSingleton<ISaveGameService, SaveGameService>();
+        services.AddSingleton<ITypesBackupService, TypesBackupService>();
         services.AddSingleton<IDayZServerProcessState, DayZServerProcessState>();
         services.AddSingleton<IMapService, MapService>();
         services.AddSingleton<IValidationService, ValidationService>();
@@ -84,6 +85,7 @@ public partial class App : Application
             sp.GetRequiredService<IMapService>(),
             sp.GetRequiredService<ITypesService>(),
             sp.GetRequiredService<ISaveGameService>(),
+            sp.GetRequiredService<ITypesBackupService>(),
             sp.GetRequiredService<IServerConfigService>(),
             sp.GetRequiredService<IBatchFileService>(),
             sp.GetRequiredService<IFileSystem>(),

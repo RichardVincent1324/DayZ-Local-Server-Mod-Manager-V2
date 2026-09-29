@@ -19,6 +19,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
     private readonly ISaveGameService _saveGameService;
+    private readonly ITypesBackupService _typesBackup;
     private readonly ITypesConfigStore _typesConfigStore;
     private readonly IServerConfigService _serverConfig;
     private readonly IBatchFileService _batchFile;
@@ -28,6 +29,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly TypesConfig _typesConfig;
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
     private readonly IDayZServerProcessState _serverProcess;
+    private readonly IProcessLauncher _processLauncher;
 
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
@@ -49,6 +51,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         IMapService mapService,
         ITypesService typesService,
         ISaveGameService saveGameService,
+        ITypesBackupService typesBackup,
         ITypesConfigStore typesConfigStore,
         IServerConfigService serverConfig,
         IBatchFileService batchFile,
@@ -57,11 +60,13 @@ public sealed class MapTypesViewModel : ViewModelBase
         LogViewModel log,
         TypesConfig typesConfig,
         IDataDirectoryProvider dataDirectoryProvider,
-        IDayZServerProcessState serverProcess)
+        IDayZServerProcessState serverProcess,
+        IProcessLauncher processLauncher)
     {
         _mapService = mapService;
         _typesService = typesService;
         _saveGameService = saveGameService;
+        _typesBackup = typesBackup;
         _typesConfigStore = typesConfigStore;
         _serverConfig = serverConfig;
         _batchFile = batchFile;
@@ -71,10 +76,12 @@ public sealed class MapTypesViewModel : ViewModelBase
         _typesConfig = typesConfig;
         _dataDirectoryProvider = dataDirectoryProvider;
         _serverProcess = serverProcess;
+        _processLauncher = processLauncher;
 
-        ConfigXmlCommand = new RelayCommand(ConfigureMod);
-        RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => CanRemoveSelected);
-        CleanInvalidCommand = new RelayCommand(CleanInvalid);
+        ConfigXmlCommand = new RelayCommand(ConfigureMod, () => TypesEditingAllowed);
+        OpenModTypesFolderCommand = new RelayCommand(OpenModTypesFolder, () => TypesEditingAllowed);
+        RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => TypesEditingAllowed && CanRemoveSelected);
+        CleanInvalidCommand = new RelayCommand(CleanInvalid, () => TypesEditingAllowed);
         LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is not null && !IsSaveBusy);
         DeleteSaveCommand = new RelayCommand(DeleteSave, () => SelectedSave is not null && !IsSaveBusy);
         AddSaveCommand = new RelayCommand(AddSave, () => !IsSaveBusy);
@@ -135,6 +142,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             if (SetField(ref _isSaveBusy, value))
             {
+                NotifyBusyChanged();
                 LoadSaveCommand.RaiseCanExecuteChanged();
                 DeleteSaveCommand.RaiseCanExecuteChanged();
                 AddSaveCommand.RaiseCanExecuteChanged();
@@ -149,11 +157,63 @@ public sealed class MapTypesViewModel : ViewModelBase
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>
-    /// True while a map switch or a types operation (configure/remove/clean) is in
-    /// flight. Mainly used by the Start Server action so it never launches the
-    /// server while the launch batch / mission files are being rewritten.
+    /// True when types may be configured: a map is applied and no world exists.
+    /// DayZ only reads type files when a new world is created, so once a world
+    /// (storage folder) is present editing is locked until a New Game.
     /// </summary>
-    public bool IsBusy => _isSwitching || _typesBusy;
+    public bool TypesEditingAllowed =>
+        !string.IsNullOrWhiteSpace(_typesConfig.CurrentMap) && !WorldExists(_typesConfig.CurrentMap);
+
+    /// <summary>True when a world exists and types editing is therefore locked.</summary>
+    public bool IsTypesLocked =>
+        !string.IsNullOrWhiteSpace(_typesConfig.CurrentMap) && WorldExists(_typesConfig.CurrentMap);
+
+    /// <summary>Banner shown while types editing is locked; empty when editing is allowed.</summary>
+    public string TypesLockedMessage =>
+        IsTypesLocked
+            ? "Types editing is disabled while a world exists. Start a New Game to reconfigure."
+            : string.Empty;
+
+    /// <summary>
+    /// Tooltip for the ModTypes folder button: an action hint when it is available,
+    /// or the lock reason (same as the Config XML button) when editing is disabled.
+    /// </summary>
+    public string OpenModTypesFolderToolTip =>
+        TypesEditingAllowed ? "Open ModTypes folder in File Explorer" : TypesLockedMessage;
+
+    /// <summary>True when the mission's storage folder exists (a world has been created).</summary>
+    private bool WorldExists(string mapName)
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(mapName))
+        {
+            return false;
+        }
+
+        try
+        {
+            return _fileSystem.DirectoryExists(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private void NotifyTypesEditingChanged()
+    {
+        OnPropertyChanged(nameof(TypesEditingAllowed));
+        OnPropertyChanged(nameof(IsTypesLocked));
+        OnPropertyChanged(nameof(TypesLockedMessage));
+        OnPropertyChanged(nameof(OpenModTypesFolderToolTip));
+    }
+
+    /// <summary>
+    /// True while a map switch, a types operation (configure/remove/clean), or a
+    /// progress-save operation (load/add/delete/new game) is in flight. Used by the
+    /// Start Server action so it never launches the server while the launch batch,
+    /// mission files, or the live storage folder are being rewritten or deleted.
+    /// </summary>
+    public bool IsBusy => _isSwitching || _typesBusy || _isSaveBusy;
 
     private void NotifyBusyChanged() => OnPropertyChanged(nameof(IsBusy));
 
@@ -163,7 +223,39 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// </summary>
     public Func<Task<bool>>? EnsureApplied { get; set; }
 
+    /// <summary>
+    /// Invoked when a progress save is loaded to replace the loaded mod list with
+    /// the save's list and apply it (batch modList, mod_order.json, junctions).
+    /// Returns true on success.
+    /// </summary>
+    public Func<IReadOnlyList<string>, Task<bool>>? RestoreModList { get; set; }
+
+    /// <summary>The save currently loaded for the active map, if any (session only).</summary>
+    private (string MapName, string SaveName)? _activeSave;
+
+    /// <summary>
+    /// After a successful Apply, appends any newly loaded mods to the active
+    /// save's meta.json (append-only union) so the save keeps track of them.
+    /// </summary>
+    public void OnApplied(IReadOnlyList<string> appliedMods)
+    {
+        if (_activeSave is not { } active
+            || !string.Equals(active.MapName, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(_serverPath))
+        {
+            return;
+        }
+
+        SaveGameResult result = _saveGameService.AppendMetaModList(
+            _dataDirectoryProvider.Current, active.MapName, active.SaveName, appliedMods);
+        if (!result.Success)
+        {
+            _log.Warning(result.Message);
+        }
+    }
+
     public RelayCommand ConfigXmlCommand { get; }
+    public RelayCommand OpenModTypesFolderCommand { get; }
     public RelayCommand RemoveSelectedCommand { get; }
     public RelayCommand CleanInvalidCommand { get; }
     public RelayCommand LoadSaveCommand { get; }
@@ -189,6 +281,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         RefreshModNames(loadedMods);
         RebuildRows();
         RefreshSaves();
+        NotifyCommandStates();
     }
 
     /// <summary>
@@ -218,8 +311,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         // Nothing has been applied yet. Auto-apply a default map only when a real
         // mission folder exists on a configured server; before the user sets the
-        // server path there is nothing to switch to and no server file to write.
-        if (string.IsNullOrWhiteSpace(_serverPath) || _discoveredMaps.Count == 0)
+        // server path or selects a launch batch file there is nothing to switch to
+        // and no server file to write.
+        if (string.IsNullOrWhiteSpace(_serverPath)
+            || string.IsNullOrWhiteSpace(_batFileName)
+            || _discoveredMaps.Count == 0)
         {
             return;
         }
@@ -543,6 +639,12 @@ public sealed class MapTypesViewModel : ViewModelBase
             return false;
         }
 
+        if (string.IsNullOrWhiteSpace(_batFileName))
+        {
+            _log.Error("No launch batch file is selected. Choose one in the Settings tab before switching maps.");
+            return false;
+        }
+
         string previousMap = _typesConfig.CurrentMap;
 
         if (!_serverConfig.UpdateTemplate(_serverPath, mapName))
@@ -622,6 +724,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void ConfigureMod()
     {
+        if (GuardTypesEditing("configuring types files"))
+        {
+            return;
+        }
+
         if (RefuseWhileServerRunning("configuring types files"))
         {
             return;
@@ -714,6 +821,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void RemoveSelected()
     {
+        if (GuardTypesEditing("removing types files"))
+        {
+            return;
+        }
+
         if (RefuseWhileServerRunning("removing types files"))
         {
             return;
@@ -799,8 +911,10 @@ public sealed class MapTypesViewModel : ViewModelBase
                     _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
                 }
 
+                CaptureConfiguredTypes();
                 _log.Success("Removed selected types files.");
                 RebuildRows();
+                NotifyCommandStates();
             }
             else
             {
@@ -820,6 +934,11 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private async void CleanInvalid()
     {
+        if (GuardTypesEditing("cleaning up invalid types configurations"))
+        {
+            return;
+        }
+
         if (RefuseWhileServerRunning("cleaning up invalid types configurations"))
         {
             return;
@@ -918,19 +1037,33 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         string dataDirectory = _dataDirectoryProvider.Current;
         LoadCompatibilityReport report = BuildLoadCompatibilityReport(mapName, dataDirectory, saveName);
-        string message =
-            $"Load save \"{saveName}\" for map {mapName}?\n\nThis will REPLACE the current progress in {StorageLabel(mapName)} with the stored copy. The current progress will be lost.";
 
-        bool confirmed;
-        if (!report.HasWarning)
+        // A save whose mods are not all present would fail to load its junctions;
+        // refuse it rather than silently restoring a different mod set.
+        if (report.HasMissingSavedMods)
         {
-            confirmed = _dialogs.Confirm(message, "Load Save");
+            string missing =
+                "This save was created with mod(s) that are missing from the Workshop and cannot be loaded:\n\n  "
+                + string.Join("\n  ", report.MissingSavedMods)
+                + "\n\nInstall/subscribe the missing mod(s) in Steam, then load the save again.";
+            _log.Error($"Load cancelled: mod(s) missing from the Workshop: {string.Join(", ", report.MissingSavedMods)}");
+            _dialogs.ShowWarning(
+                $"Load save \"{saveName}\" for map {mapName}?",
+                "Load Save",
+                missing);
+            return;
         }
-        else
-        {
-            string note = BuildLoadSaveNote(report, dataDirectory, mapName, saveName);
-            confirmed = _dialogs.ConfirmWithWarning(message, "Load Save", report.Message, note);
-        }
+
+		string message =
+			$"Load save \"{saveName}\" (map: {mapName})?\n\n" +
+			$"This will overwrite your current progress in {StorageLabel(mapName)} and replace the mission's type file configuration with the stored copy, " +
+			$"and set the loaded mod list to this save's. " +
+			$"Your configured type settings are preserved for the next New Game. " +
+			$"The current progress will be lost.";
+	
+        bool confirmed = string.IsNullOrWhiteSpace(report.SnapshotWarning)
+            ? _dialogs.Confirm(message, "Load Save")
+            : _dialogs.ConfirmWithWarning(message, "Load Save", report.SnapshotWarning);
 
         if (!confirmed)
         {
@@ -947,8 +1080,45 @@ public sealed class MapTypesViewModel : ViewModelBase
         IsSaveBusy = true;
         try
         {
-            SaveGameResult result = await Task.Run(() => _saveGameService.LoadSave(serverPath, mapName, dataDirectory, saveName));
+            // Preserve the configured types before the loaded world replaces them,
+            // so a later New Game can restore the user's own configuration.
+            _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? configured);
+            TypesBackupResult backup = await Task.Run(
+                () => _typesBackup.EnsureCaptured(serverPath, mapName, dataDirectory, configured));
+            if (!backup.Success)
+            {
+                foreach (string backupMessage in backup.Messages)
+                {
+                    _log.Error(backupMessage);
+                }
+
+                _log.Error("Load cancelled: the configured types could not be preserved.");
+                return;
+            }
+
+            SaveGameResult result = await Task.Run(
+                () => _saveGameService.LoadSave(serverPath, mapName, dataDirectory, saveName));
             LogSaveResult(result);
+
+            if (result.Success)
+            {
+                ApplyRestoredTypesConfig(mapName, dataDirectory, saveName);
+
+                // Replace the loaded mods with the save's and apply them so the
+                // batch file, mod_order.json and junctions match the saved world.
+                if (report.HasSnapshot && RestoreModList is not null)
+                {
+                    _activeSave = (mapName, saveName);
+                    bool modsRestored = await RestoreModList(report.SavedModList);
+                    if (!modsRestored)
+                    {
+                        _log.Error("The save loaded, but its mod list could not be applied. Use Apply to retry.");
+                    }
+                }
+
+                NotifyCommandStates();
+                RebuildRows();
+            }
         }
         catch (Exception ex)
         {
@@ -957,6 +1127,62 @@ public sealed class MapTypesViewModel : ViewModelBase
         finally
         {
             IsSaveBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the loaded save's types mapping into types_config.json and syncs
+    /// cfgeconomycore.xml, so the configuration matches the restored db\ModTypes.
+    /// </summary>
+    private void ApplyRestoredTypesConfig(string mapName, string dataDirectory, string saveName)
+    {
+        SaveMetaData? meta;
+        try
+        {
+            ConfigLoadResult<SaveMetaData> loaded = _saveGameService.GetMeta(dataDirectory, mapName, saveName);
+            meta = loaded.Status == ConfigLoadStatus.Success ? loaded.Value : null;
+        }
+        catch (Exception)
+        {
+            meta = null;
+        }
+
+        if (meta?.TypesConfig is null)
+        {
+            _log.Warning("The save has no types mapping; types_config.json was left unchanged.");
+            return;
+        }
+
+        // Capture what the manager owned before the save's mapping replaces it:
+        // LoadSave has already deleted those files from db\ModTypes, so their
+        // cfgeconomycore entries must be removed even though the new mapping no
+        // longer records them.
+        IReadOnlySet<string> previouslyOwned = _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? replaced)
+            ? replaced.Mods
+                .SelectMany(entry => entry.GeneratedFiles)
+                .Select(generated => Path.GetFileName(generated)!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        _typesConfig.Maps[mapName] = meta.TypesConfig;
+        try
+        {
+            _typesConfigStore.Save(dataDirectory, _typesConfig);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to persist the restored types configuration: {ex.Message}");
+            return;
+        }
+
+        string missionPath = Path.Combine(_serverPath, "mpmissions", mapName);
+        if (!_typesService.SyncEconomyCore(_typesConfig, mapName, missionPath, LoadedSet(), previouslyOwned))
+        {
+            _log.Warning("Restored the types mapping, but cfgeconomycore.xml could not be updated.");
+        }
+        else
+        {
+            _log.Info("Restored the types files and types configuration for the loaded world.");
         }
     }
 
@@ -1053,6 +1279,13 @@ public sealed class MapTypesViewModel : ViewModelBase
             LogSaveResult(result);
             if (result.Success)
             {
+                if (_activeSave is { } active
+                    && string.Equals(active.MapName, mapName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(active.SaveName, saveName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _activeSave = null;
+                }
+
                 RefreshSaves();
             }
         }
@@ -1094,11 +1327,24 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
+        string dataDirectory = _dataDirectoryProvider.Current;
         IsSaveBusy = true;
         try
         {
             SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName));
             LogSaveResult(result);
+            if (result.Success)
+            {
+                if (_activeSave is { } active
+                    && string.Equals(active.MapName, mapName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _activeSave = null;
+                }
+
+                await RestoreConfiguredTypesAsync(mapName, dataDirectory);
+                NotifyCommandStates();
+                RebuildRows();
+            }
         }
         catch (Exception ex)
         {
@@ -1107,6 +1353,52 @@ public sealed class MapTypesViewModel : ViewModelBase
         finally
         {
             IsSaveBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Restores the configured types (files and mapping) saved in the backup
+    /// folder, so a new world starts from the configuration the user set up
+    /// rather than the previously loaded save's types.
+    /// </summary>
+    private async Task RestoreConfiguredTypesAsync(string mapName, string dataDirectory)
+    {
+        string serverPath = _serverPath;
+        TypesBackupResult restore = await Task.Run(
+            () => _typesBackup.Restore(serverPath, mapName, dataDirectory));
+
+        foreach (string message in restore.Messages)
+        {
+            if (restore.Success)
+            {
+                _log.Info(message);
+            }
+            else
+            {
+                _log.Warning(message);
+            }
+        }
+
+        if (!restore.Success || restore.Config is null)
+        {
+            return;
+        }
+
+        _typesConfig.Maps[mapName] = restore.Config;
+        try
+        {
+            _typesConfigStore.Save(dataDirectory, _typesConfig);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to persist the restored types configuration: {ex.Message}");
+            return;
+        }
+
+        string missionPath = Path.Combine(_serverPath, "mpmissions", mapName);
+        if (!_typesService.SyncEconomyCore(_typesConfig, mapName, missionPath, LoadedSet()))
+        {
+            _log.Warning("Restored the configured types mapping, but cfgeconomycore.xml could not be updated.");
         }
     }
 
@@ -1157,13 +1449,33 @@ public sealed class MapTypesViewModel : ViewModelBase
             SavedAtUtc = DateTime.UtcNow,
             ModList = _loadedMods.ToList(),
             TypesFiles = _typesService.GetActiveTypeFileNames(_typesConfig, mapName, LoadedSet()).ToList(),
+            TypesConfig = CloneMapTypes(_typesConfig.Maps.GetValueOrDefault(mapName)),
         };
     }
 
     /// <summary>
-    /// Describes how a stored save's configuration snapshot differs from the
-    /// current setup, for the Load Save confirmation. <see cref="Message"/> is the
-    /// prominent warning text; the flags let a tailored "note" be chosen below.
+    /// Deep-copies a map's types configuration so the persisted save snapshot
+    /// cannot alias (and later drift with) the live in-memory model. A missing
+    /// map config becomes an empty (non-null) mapping so every new save is restorable.
+    /// </summary>
+    private static MapTypesConfig CloneMapTypes(MapTypesConfig? source) =>
+        new()
+        {
+            Mods = source is null
+                ? new List<ModTypesEntry>()
+                : source.Mods.Select(entry => new ModTypesEntry
+                {
+                    ModName = entry.ModName,
+                    SourceFiles = entry.SourceFiles.ToList(),
+                    GeneratedFiles = entry.GeneratedFiles.ToList(),
+                }).ToList(),
+        };
+
+    /// <summary>
+    /// Reads a stored save's configuration snapshot to decide whether its mod
+    /// list and type files can be restored, and whether any saved mod is missing
+    /// from the Workshop. The mismatch details are not surfaced: loading applies
+    /// the save's configuration automatically.
     /// </summary>
     private LoadCompatibilityReport BuildLoadCompatibilityReport(string mapName, string dataDirectory, string saveName)
     {
@@ -1174,135 +1486,51 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
         catch (Exception)
         {
-            return new LoadCompatibilityReport("This save's configuration snapshot could not be read, so compatibility with the current mod/type setup cannot be verified.", false, false);
+            return new LoadCompatibilityReport(
+                false, Array.Empty<string>(), Array.Empty<string>(),
+                "This save's configuration snapshot could not be read, so its mod list and type files will not be restored.");
         }
 
         if (stored.Status == ConfigLoadStatus.Missing)
         {
-            return new LoadCompatibilityReport("This save has no configuration snapshot (created by an older version), so compatibility with the current mod/type setup cannot be verified.", false, false);
+            return new LoadCompatibilityReport(
+                false, Array.Empty<string>(), Array.Empty<string>(),
+                "This save has no configuration snapshot, so its mod list and type files will not be restored.");
         }
 
         if (stored.Status == ConfigLoadStatus.Corrupt)
         {
-            return new LoadCompatibilityReport("This save's configuration snapshot is unreadable, so compatibility with the current mod/type setup cannot be verified.", false, false);
+            return new LoadCompatibilityReport(
+                false, Array.Empty<string>(), Array.Empty<string>(),
+                "This save's configuration snapshot is unreadable, so its mod list and type files will not be restored.");
         }
 
         SaveMetaData saved = stored.Value!;
-        SaveMetaData current = BuildSaveSnapshot(mapName);
+        List<string> missingFromWorkshop = saved.ModList
+            .Where(mod => !_allMods.Contains(mod, StringComparer.OrdinalIgnoreCase))
+            .ToList();
 
-        var lines = new List<string>();
-        bool modsDiffer = !saved.ModList.SequenceEqual(current.ModList, StringComparer.OrdinalIgnoreCase);
-
-        if (modsDiffer)
-        {
-            List<string> onlyInSave = saved.ModList
-                .Where(mod => !current.ModList.Contains(mod, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-            List<string> onlyNow = current.ModList
-                .Where(mod => !saved.ModList.Contains(mod, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-
-            lines.Add($"This save was created with a different mod setup ({saved.ModList.Count} mod(s) then vs {current.ModList.Count} now).");
-            if (onlyInSave.Count > 0)
-            {
-                lines.Add("  In save but not loaded now: " + string.Join(", ", onlyInSave));
-            }
-
-            if (onlyNow.Count > 0)
-            {
-                lines.Add("  Loaded now but not in save: " + string.Join(", ", onlyNow));
-            }
-
-            if (onlyInSave.Count == 0 && onlyNow.Count == 0)
-            {
-                lines.Add("  The mods match but their load order differs.");
-            }
-        }
-
-        var savedTypes = saved.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var currentTypes = current.TypesFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        List<string> removed = saved.TypesFiles.Where(file => !currentTypes.Contains(file)).ToList();
-        bool saveHasTypesNotActive = removed.Count > 0;
-
-        if (!savedTypes.SetEquals(currentTypes))
-        {
-            List<string> added = current.TypesFiles.Where(file => !savedTypes.Contains(file)).ToList();
-
-            lines.Add($"This save was created with different active type files ({saved.TypesFiles.Count} then vs {current.TypesFiles.Count} now).");
-            if (removed.Count > 0)
-            {
-                lines.Add("  Type file(s) in save but not active now: " + string.Join(", ", removed));
-            }
-
-            if (added.Count > 0)
-            {
-                lines.Add("  Active type file(s) now but not in save: " + string.Join(", ", added));
-            }
-        }
-
-        return new LoadCompatibilityReport(string.Join("\n", lines), modsDiffer, saveHasTypesNotActive);
-    }
-
-    /// <summary>
-    /// Builds the "note" line shown under the Load Save warning, tailored to the
-    /// kind of mismatch. A mod-list difference points at the save's meta.json
-    /// (ModList); missing type files point at the stored ModTypes snapshot for
-    /// investigation/restore. Other mismatches (older saves, unreadable snapshots,
-    /// extra type files) get no note - the red warning text is self-explanatory.
-    /// </summary>
-    private string BuildLoadSaveNote(LoadCompatibilityReport report, string dataDirectory, string mapName, string saveName)
-    {
-        var notes = new List<string>();
-
-        if (report.ModsDiffer)
-        {
-            string meta = Path.Combine(_saveGameService.GetSaveFolderPath(dataDirectory, mapName, saveName), "meta.json");
-            notes.Add("This save expects the mod list stored in its meta.json (ModList). Align (add/remove/re-order) your loaded mods with that list:\n" + meta);
-        }
-
-        if (report.SaveHasTypesNotActive)
-        {
-            string snapshot = _saveGameService.GetModTypesSnapshotPath(dataDirectory, mapName, saveName);
-            if (_fileSystem.DirectoryExists(snapshot))
-            {
-                string restore = "To restore the missing types files, go to:\n" + snapshot;
-                string liveModTypes = LiveModTypesFolderPath(mapName);
-                if (!string.IsNullOrWhiteSpace(liveModTypes))
-                {
-                    restore += "\n\nRestore by copying these files back into the map's db\\ModTypes folder:\n" + liveModTypes;
-                }
-
-                notes.Add(restore);
-            }
-        }
-
-        return string.Join("\n\n", notes);
-    }
-
-    /// <summary>Returns the live mission's <c>db\ModTypes</c> folder for a map, or empty when it cannot be resolved.</summary>
-    private string LiveModTypesFolderPath(string mapName)
-    {
-        try
-        {
-            string liveStorage = _saveGameService.GetStorageFolderPath(_serverPath, mapName);
-            string? mission = Path.GetDirectoryName(liveStorage);
-            return string.IsNullOrWhiteSpace(mission) ? string.Empty : Path.Combine(mission, "db", "ModTypes");
-        }
-        catch (Exception)
-        {
-            return string.Empty;
-        }
+        return new LoadCompatibilityReport(true, saved.ModList, missingFromWorkshop, string.Empty);
     }
 
     private void LogSaveResult(SaveGameResult result)
     {
-        if (result.Success)
+        if (result.Informational)
+        {
+            _log.Info(result.Message);
+        }
+        else if (result.Success)
         {
             _log.Success(result.Message);
         }
         else
         {
             _log.Error(result.Message);
+        }
+
+        foreach (string warning in result.Warnings)
+        {
+            _log.Warning(warning);
         }
     }
 
@@ -1359,12 +1587,39 @@ public sealed class MapTypesViewModel : ViewModelBase
         if (result.Success)
         {
             _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+            CaptureConfiguredTypes();
             _log.Success(successMessage);
             RebuildRows();
+            NotifyCommandStates();
         }
         else
         {
             _log.Error("Operation failed.");
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the live types folder and its mapping into the per-map backup so a
+    /// later Load Save preserves the user's configured types for the next New Game.
+    /// Best-effort: a failure is logged but never fails the completed operation.
+    /// </summary>
+    private void CaptureConfiguredTypes()
+    {
+        string mapName = _typesConfig.CurrentMap;
+        if (string.IsNullOrWhiteSpace(mapName) || string.IsNullOrWhiteSpace(_serverPath))
+        {
+            return;
+        }
+
+        _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? configured);
+        TypesBackupResult result = _typesBackup.Capture(
+            _serverPath, mapName, _dataDirectoryProvider.Current, configured ?? new MapTypesConfig());
+        if (!result.Success)
+        {
+            foreach (string message in result.Messages)
+            {
+                _log.Warning(message);
+            }
         }
     }
 
@@ -1437,7 +1692,60 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private void NotifyCommandStates()
     {
+        ConfigXmlCommand.RaiseCanExecuteChanged();
+        OpenModTypesFolderCommand.RaiseCanExecuteChanged();
         RemoveSelectedCommand.RaiseCanExecuteChanged();
+        CleanInvalidCommand.RaiseCanExecuteChanged();
+        NotifyTypesEditingChanged();
+    }
+
+    /// <summary>
+    /// Blocks a types-mutating action while a world exists (DayZ only reads type
+    /// files when a new world is created). Returns true when the action was blocked.
+    /// </summary>
+    private bool GuardTypesEditing(string action)
+    {
+        if (TypesEditingAllowed)
+        {
+            return false;
+        }
+
+        _log.Warning($"Type files can only be configured before a world exists. Start a New Game before {action}.");
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the active map's mission <c>db\ModTypes</c> folder in File Explorer.
+    /// Gated by the same condition as the Config XML button (a map is applied and
+    /// no world exists). The folder is created when missing so Explorer always
+    /// lands on it; failures are logged, never thrown.
+    /// </summary>
+    private void OpenModTypesFolder()
+    {
+        if (!TypesEditingAllowed)
+        {
+            return;
+        }
+
+        string folder = Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap, "db", "ModTypes");
+        try
+        {
+            _fileSystem.CreateDirectory(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the ModTypes folder: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            _processLauncher.OpenFolder(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the ModTypes folder: {ex.Message}");
+        }
     }
 
     private async Task<bool> EnsureAppliedBeforeAsync(string action)
@@ -1452,14 +1760,18 @@ public sealed class MapTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Result of comparing a stored save's snapshot with the current setup.
-    /// <see cref="ModsDiffer"/> is true for any mod-list difference (selection or
-    /// order); <see cref="SaveHasTypesNotActive"/> is true when the save lists type
-    /// files that are not active now. These flags drive the tailored Load Save note.
+    /// What the Load Save flow needs from a stored save: whether it has a
+    /// configuration snapshot (so the mod list and type files can be restored),
+    /// the mod list it was created with, and any saved mods missing from the
+    /// Workshop (which blocks the load).
     /// </summary>
-    private sealed record LoadCompatibilityReport(string Message, bool ModsDiffer, bool SaveHasTypesNotActive)
+    private sealed record LoadCompatibilityReport(
+        bool HasSnapshot,
+        IReadOnlyList<string> SavedModList,
+        IReadOnlyList<string> MissingSavedMods,
+        string SnapshotWarning)
     {
-        public bool HasWarning => !string.IsNullOrWhiteSpace(Message);
+        public bool HasMissingSavedMods => MissingSavedMods.Count > 0;
     }
 
     private static bool ContainsIgnoreCase(ObservableCollection<string> items, string value) =>

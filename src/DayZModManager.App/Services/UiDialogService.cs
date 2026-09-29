@@ -26,6 +26,12 @@ public sealed class UiDialogService : IDialogService
         return window.ShowDialog() == true;
     }
 
+    public void ShowWarning(string message, string title, string warning, string note = "")
+    {
+        var window = new WarningConfirmWindow(message, title, warning, note, informational: true);
+        window.ShowDialog();
+    }
+
     public string? AskText(string title, string prompt, string defaultValue = "")
     {
         var window = new TextPromptWindow(title, prompt, defaultValue);

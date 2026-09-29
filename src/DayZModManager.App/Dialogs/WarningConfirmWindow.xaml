@@ -6,8 +6,9 @@
         ShowInTaskbar="False" ResizeMode="NoResize">
     <DockPanel Margin="16">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
-            <Button Content="Yes" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Yes_Click" />
-            <Button Content="No" Width="80" IsCancel="True" Click="No_Click" />
+            <Button x:Name="YesButton" Content="Yes" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Yes_Click" />
+            <Button x:Name="NoButton" Content="No" Width="80" IsCancel="True" Click="No_Click" />
+            <Button x:Name="OkButton" Content="OK" Width="80" IsDefault="True" Visibility="Collapsed" Click="Ok_Click" />
         </StackPanel>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="380">

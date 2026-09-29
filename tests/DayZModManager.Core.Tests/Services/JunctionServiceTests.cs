@@ -93,17 +93,17 @@ public class JunctionServiceTests
     }
 
     [Fact]
-    public void Sync_LeavesLegacyRootJunctionsUntouched()
+    public void Sync_LeavesRootJunctionsOutsideModListUntouched()
     {
         (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
         fs.AddDirectory(WorkshopPath, "@CF");
         fs.AddDirectory(ServerPath);
-        string legacy = Path.Combine(ServerPath, "@CF");
-        junctions.Create(legacy, Path.Combine(WorkshopPath, "@CF"));
+        string rootJunction = Path.Combine(ServerPath, "@CF");
+        junctions.Create(rootJunction, Path.Combine(WorkshopPath, "@CF"));
 
         JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
 
-        Assert.True(junctions.IsJunction(legacy));
+        Assert.True(junctions.IsJunction(rootJunction));
         Assert.Equal(1, result.Created);
     }
 

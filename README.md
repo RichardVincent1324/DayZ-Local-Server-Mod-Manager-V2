@@ -107,6 +107,7 @@ DayZ Client
 - Detect untracked XML files in `db/ModTypes` so orphaned files are visible instead of silently remaining active.
 - Ask for confirmation before overwriting or deleting configured types files.
 - Support `Remove Selected` and `Clean Invalid` maintenance operations.
+- Lock types editing once a world exists (`storage_<instanceId>` present), because DayZ only reads these files when a new world is created; `New Game` unlocks it.
 
 ### Progress saves
 
@@ -114,11 +115,15 @@ DayZ Client
 - Uses the active `storage_<instanceId>` folder, with the instance ID read from `serverDZ.cfg` and defaulting to `1` when appropriate.
 - Store named saves per map.
 - Save a snapshot of the mission's `db/ModTypes` alongside the world data.
-- Store save metadata in `meta.json`, including map information, save time, mod order, and active types files.
+- Store save metadata in `meta.json`, including map information, save time, mod order, active types files, and the map's types mapping.
 - Add, load, and delete named saves.
 - Start a new game from the manager.
+- Restore the saved `db/ModTypes` files and the matching `types_config.json` mapping when loading a save, and resynchronize `cfgeconomycore.xml`.
+- Restore the loaded mod list to match the save's mod list on load: the launch batch, `mod_order.json` and junctions are updated, and mods not in the save are unloaded (their Workshop folders are never deleted).
+- Block loading a save whose mods are missing from the Workshop, listing them in a red warning.
+- While a save is loaded, mods added afterwards are appended to that save's `meta.json` ModList so the save keeps track of them.
+- Preserve the configured types in a per-map `ModTypes_Backup` folder so `New Game` can restore them (DayZ only applies type files to a new world).
 - Stage save loading so an interrupted operation does not immediately destroy the current world progress.
-- Warn when a save was created with a different mod or types configuration.
 
 ### Settings and data storage
 
@@ -143,6 +148,10 @@ DayZ-Mod-Manager-V2\
 ├─ settings.json
 ├─ mod_order.json
 ├─ types_config.json
+├─ ModTypes_Backup\
+│  └─ <mapName>\
+│     ├─ config.json
+│     └─ ModTypes\
 └─ Progress_Saves\
    └─ <mapName>\
       └─ <saveName>\
@@ -211,7 +220,7 @@ Open V2 and configure:
   ```
 
 - **Server path** — the directory containing `DayZServer_x64.exe` and `serverDZ.cfg`.
-- **Batch file** — the `LocalServer.bat` file you prepared in the previous step.
+- **Batch file** — the `LocalServer.bat` file you prepared in the previous step. Select it manually on first run; V2 does not preselect a default batch file, and the server cannot be started until one is chosen.
 
 ## 5. Configure the local server for this workflow
 
@@ -283,6 +292,7 @@ A configured server may look similar to this:
 │  ├─ settings.json
 │  ├─ mod_order.json
 │  ├─ types_config.json
+│  ├─ ModTypes_Backup\
 │  └─ Progress_Saves\
 ├─ LocalServer.bat
 ├─ ModList\

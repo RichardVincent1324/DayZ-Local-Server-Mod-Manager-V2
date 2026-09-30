@@ -60,4 +60,23 @@ public sealed class ModTypesEntry
         get => _generatedFiles;
         set => _generatedFiles = value ?? new List<string>();
     }
+
+    private Dictionary<string, string> _fileRoles = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The economy role ("types" / "spawnabletypes") each generated file was
+    /// copied under, keyed by generated leaf name. Stored explicitly so a
+    /// keyword in the mod name or a source directory cannot change a file's
+    /// role. Entries written before role storage lack this map and fall back to
+    /// the filename heuristic.
+    /// </summary>
+    public Dictionary<string, string> FileRoles
+    {
+        get => _fileRoles;
+        // System.Text.Json assigns a new dictionary (and a JSON null) directly, so
+        // coerce null and restore the case-insensitive comparer here.
+        set => _fileRoles = value is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
+    }
 }

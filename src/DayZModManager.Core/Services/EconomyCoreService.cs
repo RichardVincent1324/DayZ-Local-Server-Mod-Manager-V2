@@ -18,9 +18,15 @@ public interface IEconomyCoreService
     /// is the set of leaf names this manager has previously generated for the
     /// map, so entries it owns but no longer wants can be removed while entries
     /// it does not own (the map's own files, entries added by other tools/mods)
-    /// are preserved. Returns false if the file is missing or malformed.
+    /// are preserved. <paramref name="fileTypes"/> assigns each desired leaf its
+    /// economy type (keyed case-insensitively); a missing entry is treated as a
+    /// types file. Returns false if the file is missing or malformed.
     /// </summary>
-    bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames);
+    bool UpdateModTypes(
+        string missionPath,
+        IReadOnlyList<string> desiredFileNames,
+        IReadOnlySet<string> ownedFileNames,
+        IReadOnlyDictionary<string, string> fileTypes);
 
     /// <summary>
     /// Removes the ModTypes references for the given leaf names from
@@ -42,7 +48,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames)
+    public bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
         if (doc?.Root is null)
@@ -78,15 +84,23 @@ public sealed class EconomyCoreService : IEconomyCoreService
                     .Where(f => !desiredSet.Contains((string?)f.Attribute("name") ?? string.Empty))
                     .ToList();
 
-                // Rewrite only when a desired entry is missing or the desired
-                // entries already present are not in the exact order requested
-                // (regular types before spawnabletypes, mod load order, ...).
-                List<string> presentDesired = existing.Elements("file")
-                    .Select(f => (string?)f.Attribute("name") ?? string.Empty)
-                    .Where(desiredSet.Contains)
+                // Rewrite when a desired entry is missing, when the desired entries
+                // are not in the exact order requested, or when a desired entry's
+                // "type" no longer matches the role it should have.
+                List<XElement> presentDesired = existing.Elements("file")
+                    .Where(f => desiredSet.Contains((string?)f.Attribute("name") ?? string.Empty))
                     .ToList();
 
-                if (!presentDesired.SequenceEqual(desired, StringComparer.OrdinalIgnoreCase))
+                bool orderAndTypeMatch =
+                    presentDesired.Select(f => (string?)f.Attribute("name") ?? string.Empty)
+                        .SequenceEqual(desired, StringComparer.OrdinalIgnoreCase)
+                    && presentDesired.All(f =>
+                        string.Equals(
+                            (string?)f.Attribute("type") ?? string.Empty,
+                            GetFileType((string?)f.Attribute("name") ?? string.Empty, fileTypes),
+                            StringComparison.OrdinalIgnoreCase));
+
+                if (!orderAndTypeMatch)
                 {
                     existing.RemoveNodes();
                     foreach (string name in desired)
@@ -94,7 +108,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
                         existing.Add(new XText(newline + fileIndent));
                         existing.Add(new XElement("file",
                             new XAttribute("name", name),
-                            new XAttribute("type", GetFileType(name))));
+                            new XAttribute("type", GetFileType(name, fileTypes))));
                     }
 
                     foreach (XElement keep in preserved)
@@ -111,7 +125,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
             {
                 XElement? classes = doc.Root.Descendants("classes").FirstOrDefault();
                 (string newline, string indent) = DetectFormatting(classes);
-                XElement ce = BuildCe(desired, newline, indent);
+                XElement ce = BuildCe(desired, newline, indent, fileTypes);
 
                 if (classes is not null)
                 {
@@ -250,7 +264,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return ("\n", "\t");
     }
 
-    private static XElement BuildCe(IReadOnlyList<string> fileNames, string newline, string indent)
+    private static XElement BuildCe(IReadOnlyList<string> fileNames, string newline, string indent, IReadOnlyDictionary<string, string> fileTypes)
     {
         var ce = new XElement("ce", new XAttribute("folder", ModTypesFolder));
         string fileIndent = indent + indent;
@@ -258,14 +272,17 @@ public sealed class EconomyCoreService : IEconomyCoreService
         foreach (string name in fileNames)
         {
             ce.Add(new XText(newline + fileIndent));
-            ce.Add(new XElement("file", new XAttribute("name", name), new XAttribute("type", GetFileType(name))));
+            ce.Add(new XElement("file", new XAttribute("name", name), new XAttribute("type", GetFileType(name, fileTypes))));
         }
 
         ce.Add(new XText(newline + indent));
         return ce;
     }
 
-    private static string GetFileType(string name) => TypesFileRoles.RoleOf(name);
+    private static string GetFileType(string name, IReadOnlyDictionary<string, string> fileTypes) =>
+        fileTypes.TryGetValue(name, out string? type) && !string.IsNullOrWhiteSpace(type)
+            ? TypesFileRoles.NormalizeEconomyType(type)
+            : TypesFileRoles.Types;
 
     private static string Serialize(XDocument doc)
     {

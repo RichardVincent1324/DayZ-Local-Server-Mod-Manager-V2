@@ -1,3 +1,5 @@
+using DayZModManager.Core.Services;
+
 namespace DayZModManager.App.Services;
 
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
@@ -31,10 +33,18 @@ public interface IDialogService
     /// <summary>
     /// Opens the types-file picker for a mod. <paramref name="activeFiles"/> is the
     /// subset of <paramref name="files"/> that are currently configured for the
-    /// mod; those are pre-selected. Returns the selected full paths, or null if
-    /// the user cancelled.
+    /// mod; those are pre-selected. <paramref name="activeRoles"/> carries the
+    /// role of any pre-selected unrecognized file. <paramref name="modFolderPath"/>
+    /// is the mod's Workshop folder, offered as a shortcut to inspect unrecognized
+    /// files. Returns the selected files and their roles, or null if the user
+    /// cancelled.
     /// </summary>
-    IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null);
+    IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+        string modName,
+        IReadOnlyList<string> files,
+        IReadOnlySet<string>? activeFiles = null,
+        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null,
+        string? modFolderPath = null);
 
     /// <summary>
     /// Prompts for a single line of text. Returns the entered text, or null when

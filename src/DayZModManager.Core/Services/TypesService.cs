@@ -11,6 +11,9 @@ public sealed record TypesOperationResult
     public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
 }
 
+/// <summary>A configured type file: its mod-relative source, generated leaf and role.</summary>
+public sealed record ConfiguredTypeFile(string SourceRelative, string GeneratedLeaf, TypesFileRole Role);
+
 /// <summary>
 /// Manages "types" XML configuration for maps: discovering candidate files in a
 /// mod, copying them into the mission's <c>db\ModTypes</c> folder (tracking
@@ -18,16 +21,11 @@ public sealed record TypesOperationResult
 /// </summary>
 public interface ITypesService
 {
-    /// <summary>Returns the full paths of candidate types XML files in a mod (name contains "type").</summary>
-    IReadOnlyList<string> DiscoverTypeFiles(string workshopPath, string modName);
-
     /// <summary>
-    /// Returns the mission file leaf name the manager would generate for a source
-    /// file (e.g. <c>InediaInfectedAI_Hardcore_types.xml</c>), or null when the
-    /// source file does not live under the mod. Used to preview configuration
-    /// changes before they are applied.
+    /// Returns the full paths of every XML file in a mod. Discovery makes no
+    /// attempt to classify them; the user assigns each file a role.
     /// </summary>
-    string? GetGeneratedFileName(string workshopPath, string modName, string sourceFile);
+    IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName);
 
     /// <summary>
     /// Copies the selected source files for a mod into the mission, replacing any
@@ -40,8 +38,19 @@ public interface ITypesService
         string missionPath,
         string workshopPath,
         string modName,
-        IReadOnlyList<string> sourceFiles,
+        IReadOnlyList<TypeFileSelection> selections,
         IReadOnlySet<string> loadedModNames);
+
+    /// <summary>
+    /// Returns the files a mod currently has configured, pairing each source file
+    /// with the generated leaf name and role it is copied under. Empty when the
+    /// mod is not configured. Used by the picker to pre-select a file by its
+    /// source path, so a numbered generated name is handled transparently.
+    /// </summary>
+    IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(
+        TypesConfig config,
+        string mapName,
+        string modName);
 
     /// <summary>Removes specific generated files (by leaf name) for a mod.</summary>
     TypesOperationResult RemoveFiles(
@@ -111,7 +120,7 @@ public sealed class TypesService : ITypesService
         _economyCore = economyCore ?? throw new ArgumentNullException(nameof(economyCore));
     }
 
-    public IReadOnlyList<string> DiscoverTypeFiles(string workshopPath, string modName)
+    public IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName)
     {
         string modPath = Path.Combine(workshopPath, modName);
         if (!_fileSystem.DirectoryExists(modPath))
@@ -121,16 +130,8 @@ public sealed class TypesService : ITypesService
 
         return _fileSystem
             .GetFiles(modPath, "*.xml", recursive: true)
-            .Where(file => Path.GetFileName(file).Contains("type", StringComparison.OrdinalIgnoreCase))
             .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
             .ToList();
-    }
-
-    public string? GetGeneratedFileName(string workshopPath, string modName, string sourceFile)
-    {
-        string modPath = Path.Combine(workshopPath, modName);
-        string? relative = GetRelativeWithin(modPath, sourceFile);
-        return relative is null ? null : BuildDestinationName(CleanModName(modName), relative);
     }
 
     public TypesOperationResult ConfigureMod(
@@ -139,7 +140,7 @@ public sealed class TypesService : ITypesService
         string missionPath,
         string workshopPath,
         string modName,
-        IReadOnlyList<string> sourceFiles,
+        IReadOnlyList<TypeFileSelection> selections,
         IReadOnlySet<string> loadedModNames)
     {
         var messages = new List<string>();
@@ -156,6 +157,8 @@ public sealed class TypesService : ITypesService
         // any mutation, so entries that are replaced below can still be removed
         // from cfgeconomycore.xml.
         IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
+        ModTypesEntry? previous = map.Mods.FirstOrDefault(entry => string.Equals(entry.ModName, modName, StringComparison.OrdinalIgnoreCase));
+        int previousIndex = previous is null ? -1 : map.Mods.IndexOf(previous);
 
         // Copy the selected files first so a mid-copy failure cannot leave the
         // previous configuration deleted or the config pointing at files that
@@ -163,12 +166,40 @@ public sealed class TypesService : ITypesService
         string cleanModName = CleanModName(modName);
         var generated = new List<string>();
         var sourceRelative = new List<string>();
+        var fileRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var newlyCreated = new List<string>();
 
-        foreach (string source in sourceFiles)
+        // Plan every destination before copying. The generated name is a pure
+        // function of the source path, so the only collision possible is two
+        // selected files that flatten to the same name; reject that rather than
+        // let one copy silently overwrite the other.
+        var planned = new List<(string Source, string Relative, TypesFileRole Role, string DestinationName)>(selections.Count);
+        var destinations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (TypeFileSelection selection in selections)
         {
+            string source = selection.SourceFile;
             string relative = Path.GetRelativePath(modPath, source);
+            TypesFileRole role = TypesFileRoles.EffectiveRole(Path.GetFileName(source), selection.Role);
             string destinationName = BuildDestinationName(cleanModName, relative);
+
+            if (destinations.TryGetValue(destinationName, out string? existing))
+            {
+                return new TypesOperationResult
+                {
+                    Success = false,
+                    Messages = new[]
+                    {
+                        $"Two selected files map to the same generated file \"{destinationName}\": {existing} and {source}. Deselect one of them.",
+                    },
+                };
+            }
+
+            destinations[destinationName] = source;
+            planned.Add((source, relative, role, destinationName));
+        }
+
+        foreach ((string source, string relative, TypesFileRole role, string destinationName) in planned)
+        {
             string destinationFull = Path.Combine(missionPath, "db", "ModTypes", destinationName);
 
             // A destination that already exists may belong to the previous
@@ -196,6 +227,7 @@ public sealed class TypesService : ITypesService
 
             generated.Add(Path.Combine("db", "ModTypes", destinationName));
             sourceRelative.Add(relative);
+            fileRoles[destinationName] = TypesFileRoles.ToEconomyType(role);
             messages.Add($"Copied {destinationName}");
         }
 
@@ -205,14 +237,13 @@ public sealed class TypesService : ITypesService
         // are removed - files that pre-existed (still referenced by the restored
         // entry) are left in place, so no config points at a missing file.
         var newGenerated = new HashSet<string>(generated.Select(g => Path.Combine(missionPath, g)), StringComparer.OrdinalIgnoreCase);
-        ModTypesEntry? previous = map.Mods.FirstOrDefault(entry => string.Equals(entry.ModName, modName, StringComparison.OrdinalIgnoreCase));
-        int previousIndex = previous is null ? -1 : map.Mods.IndexOf(previous);
 
         var newEntry = new ModTypesEntry
         {
             ModName = modName,
             SourceFiles = sourceRelative,
             GeneratedFiles = generated,
+            FileRoles = fileRoles,
         };
 
         if (previous is not null)
@@ -276,17 +307,30 @@ public sealed class TypesService : ITypesService
         IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
         int entryIndex = map.Mods.IndexOf(entry);
         List<string> originalGenerated = new(entry.GeneratedFiles);
+        List<string> originalSources = new(entry.SourceFiles);
+        var originalRoles = new Dictionary<string, string>(entry.FileRoles, StringComparer.OrdinalIgnoreCase);
         var removedGenerated = new List<string>();
 
         foreach (string leaf in fileLeaves)
         {
-            string? generated = entry.GeneratedFiles.FirstOrDefault(g => Path.GetFileName(g) == leaf);
-            if (generated is null)
+            int index = entry.GeneratedFiles.FindIndex(g =>
+                string.Equals(Path.GetFileName(g), leaf, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
             {
                 continue;
             }
 
-            entry.GeneratedFiles.Remove(generated);
+            string generated = entry.GeneratedFiles[index];
+            entry.GeneratedFiles.RemoveAt(index);
+            entry.FileRoles.Remove(Path.GetFileName(generated));
+
+            // SourceFiles is index-parallel to GeneratedFiles; keep it aligned so
+            // a later role reconstruction does not read a stale source.
+            if (index < entry.SourceFiles.Count)
+            {
+                entry.SourceFiles.RemoveAt(index);
+            }
+
             removedGenerated.Add(generated);
         }
 
@@ -313,6 +357,8 @@ public sealed class TypesService : ITypesService
             }
 
             entry.GeneratedFiles = originalGenerated;
+            entry.SourceFiles = originalSources;
+            entry.FileRoles = originalRoles;
             return new TypesOperationResult { Success = false, Messages = messages };
         }
 
@@ -401,9 +447,9 @@ public sealed class TypesService : ITypesService
         IReadOnlySet<string>? previouslyOwned = null)
     {
         MapTypesConfig? map = GetMap(config, mapName);
-        IReadOnlyList<string> fileNames = map is null
-            ? Array.Empty<string>()
-            : GetAllGeneratedFileNames(map, loadedModNames);
+        IReadOnlyList<(string Leaf, string Type)> files = map is null
+            ? Array.Empty<(string Leaf, string Type)>()
+            : GetOrderedEconomyFiles(map, loadedModNames);
 
         // Ownership is the union of the current configuration and any ownership
         // carried over from the replaced configuration, so entries for files that
@@ -422,7 +468,11 @@ public sealed class TypesService : ITypesService
 
         try
         {
-            return _economyCore.UpdateModTypes(missionPath, fileNames, owned);
+            return _economyCore.UpdateModTypes(
+                missionPath,
+                files.Select(file => file.Leaf).ToList(),
+                owned,
+                GetEconomyFileTypes(files));
         }
         catch (Exception)
         {
@@ -486,6 +536,36 @@ public sealed class TypesService : ITypesService
         return map is null ? Array.Empty<string>() : GetAllGeneratedFileNames(map, loadedModNames);
     }
 
+    public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(
+        TypesConfig config,
+        string mapName,
+        string modName)
+    {
+        var files = new List<ConfiguredTypeFile>();
+        ModTypesEntry? entry = GetMap(config, mapName)?.Mods
+            .FirstOrDefault(m => string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return files;
+        }
+
+        for (int i = 0; i < entry.GeneratedFiles.Count; i++)
+        {
+            string generated = entry.GeneratedFiles[i];
+            string leaf = Path.GetFileName(generated);
+            if (string.IsNullOrWhiteSpace(leaf))
+            {
+                continue;
+            }
+
+            string source = i < entry.SourceFiles.Count ? entry.SourceFiles[i] : string.Empty;
+            TypesFileRole role = GetRole(entry, generated);
+            files.Add(new ConfiguredTypeFile(source, leaf, role));
+        }
+
+        return files;
+    }
+
     private TypesOperationResult TryRegenerateEconomy(
         string missionPath,
         MapTypesConfig? map,
@@ -493,13 +573,17 @@ public sealed class TypesService : ITypesService
         IReadOnlySet<string> loadedModNames,
         IReadOnlySet<string> owned)
     {
-        IReadOnlyList<string> fileNames = map is null
-            ? Array.Empty<string>()
-            : GetAllGeneratedFileNames(map, loadedModNames);
+        IReadOnlyList<(string Leaf, string Type)> files = map is null
+            ? Array.Empty<(string Leaf, string Type)>()
+            : GetOrderedEconomyFiles(map, loadedModNames);
 
         try
         {
-            if (_economyCore.UpdateModTypes(missionPath, fileNames, owned))
+            if (_economyCore.UpdateModTypes(
+                missionPath,
+                files.Select(file => file.Leaf).ToList(),
+                owned,
+                GetEconomyFileTypes(files)))
             {
                 return new TypesOperationResult { Success = true, Messages = messages };
             }
@@ -537,14 +621,49 @@ public sealed class TypesService : ITypesService
     private static IReadOnlyList<string> GetAllGeneratedFileNames(
         MapTypesConfig map,
         IReadOnlySet<string> loadedModNames) =>
+        GetOrderedEconomyFiles(map, loadedModNames)
+            .Select(file => file.Leaf)
+            .ToList();
+
+    /// <summary>
+    /// Returns the generated files of the loaded mods in cfgeconomycore.xml order:
+    /// mods in configuration order, and within a mod regular types before
+    /// spawnabletypes using each file's explicit role. OrderBy is stable so ties
+    /// keep their existing (copy) order.
+    /// </summary>
+    private static IReadOnlyList<(string Leaf, string Type)> GetOrderedEconomyFiles(
+        MapTypesConfig map,
+        IReadOnlySet<string> loadedModNames) =>
         map.Mods
             .Where(entry => loadedModNames.Contains(entry.ModName))
             .SelectMany(entry => entry.GeneratedFiles
-                // Within a mod, regular types must precede spawnabletypes; OrderBy
-                // is stable so ties keep their existing (copy) order.
-                .OrderBy(generated => Path.GetFileName(generated)!.Contains("spawnable", StringComparison.OrdinalIgnoreCase)))
-            .Select(generated => Path.GetFileName(generated)!)
+                .Select(generated => (Leaf: Path.GetFileName(generated)!, Type: TypesFileRoles.ToEconomyType(GetRole(entry, generated))))
+                .OrderBy(file => file.Type == TypesFileRoles.Spawnabletypes))
             .ToList();
+
+    private static IReadOnlyDictionary<string, string> GetEconomyFileTypes(
+        IReadOnlyList<(string Leaf, string Type)> files)
+    {
+        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string leaf, string type) in files)
+        {
+            types[leaf] = type;
+        }
+
+        return types;
+    }
+
+    /// <summary>
+    /// Returns the role a generated file is configured under from the explicit
+    /// role map, defaulting to a types file when the map has no entry.
+    /// </summary>
+    private static TypesFileRole GetRole(ModTypesEntry entry, string generated)
+    {
+        string leaf = Path.GetFileName(generated);
+        return entry.FileRoles.TryGetValue(leaf, out string? stored)
+            ? TypesFileRoles.ToRole(stored)
+            : TypesFileRole.Types;
+    }
 
     private static IReadOnlySet<string> GetAllOwnedFileNames(MapTypesConfig map) =>
         map.Mods
@@ -600,32 +719,6 @@ public sealed class TypesService : ITypesService
     {
         string safeRelative = relative.Replace('\\', '_').Replace('/', '_');
         return $"{cleanModName}_{safeRelative}";
-    }
-
-    /// <summary>
-    /// Returns the path of <paramref name="fullPath"/> relative to
-    /// <paramref name="basePath"/>, or null when it is not a descendant.
-    /// </summary>
-    private static string? GetRelativeWithin(string basePath, string fullPath)
-    {
-        if (string.IsNullOrWhiteSpace(fullPath))
-        {
-            return null;
-        }
-
-        string relative;
-        try
-        {
-            relative = Path.GetRelativePath(basePath, fullPath);
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-
-        return relative.Equals(".", StringComparison.Ordinal) || relative.StartsWith("..", StringComparison.Ordinal)
-            ? null
-            : relative;
     }
 
     private static MapTypesConfig GetOrCreateMap(TypesConfig config, string mapName)

@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using DayZModManager.App.Dialogs;
 using DayZModManager.App.ViewModels;
+using DayZModManager.Core.Services;
 using Microsoft.Win32;
 
 namespace DayZModManager.App.Services;
@@ -9,6 +10,13 @@ namespace DayZModManager.App.Services;
 /// <summary>Default <see cref="IDialogService"/> backed by WPF dialogs.</summary>
 public sealed class UiDialogService : IDialogService
 {
+    private readonly IProcessLauncher _processLauncher;
+
+    public UiDialogService(IProcessLauncher processLauncher)
+    {
+        _processLauncher = processLauncher ?? throw new ArgumentNullException(nameof(processLauncher));
+    }
+
     public void ShowMessage(string message, string title, bool isError = false) =>
         MessageBox.Show(message, title, MessageBoxButton.OK, isError ? MessageBoxImage.Error : MessageBoxImage.Information);
 
@@ -55,18 +63,33 @@ public sealed class UiDialogService : IDialogService
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null)
+    public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+        string modName,
+        IReadOnlyList<string> files,
+        IReadOnlySet<string>? activeFiles = null,
+        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null,
+        string? modFolderPath = null)
     {
         if (files.Count == 0)
         {
-            ShowMessage($"No XML files with 'type' keyword found in mod {modName}.", "Info");
+            ShowMessage($"No XML files found in mod {modName}.", "Info");
             return null;
         }
 
+        Action? openModFolder = string.IsNullOrWhiteSpace(modFolderPath)
+            ? null
+            : () =>
+            {
+                if (Directory.Exists(modFolderPath))
+                {
+                    _processLauncher.OpenFolder(modFolderPath);
+                }
+            };
+
         string basePath = GetCommonBasePath(files);
-        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, activeFiles);
-        var window = new TypeFilePickerWindow(viewModel);
-        return window.ShowDialog() == true ? window.SelectedFiles : null;
+        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, activeFiles, activeRoles);
+        var window = new TypeFilePickerWindow(viewModel, openModFolder);
+        return window.ShowDialog() == true ? window.Selections : null;
     }
 
     private static string GetCommonBasePath(IReadOnlyList<string> files)

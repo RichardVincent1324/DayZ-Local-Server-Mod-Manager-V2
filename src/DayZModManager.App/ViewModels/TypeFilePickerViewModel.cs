@@ -1,41 +1,63 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
+using System.IO;
 using DayZModManager.Core.Services;
 
 namespace DayZModManager.App.ViewModels;
 
-/// <summary>A selectable types file in the picker.</summary>
+/// <summary>A choice in the unrecognized-file role dropdown.</summary>
+public sealed record TypeFileRoleChoice(TypesFileRole Role, string Display);
+
+/// <summary>A selectable XML file in the types picker.</summary>
 public sealed class TypeFileOptionViewModel : ViewModelBase
 {
     private bool _isChecked;
+    private TypesFileRole _role;
 
-    public TypeFileOptionViewModel(string fullPath, string displayPath, string role)
+    public TypeFileOptionViewModel(string fullPath, string displayPath, bool isRecognized)
     {
         FullPath = fullPath;
         DisplayPath = displayPath;
-        Role = role;
+        IsRecognized = isRecognized;
+        _role = isRecognized
+            ? (TypesFileRoles.IsSpawnable(Path.GetFileName(fullPath)) ? TypesFileRole.SpawnableTypes : TypesFileRole.Types)
+            : TypesFileRole.Types;
     }
 
     public string FullPath { get; }
 
     public string DisplayPath { get; }
 
-    /// <summary>The DayZ role of the file: "types" or "spawnabletypes".</summary>
-    public string Role { get; }
+    /// <summary>True when the file name carries a "type"/"spawnable" keyword and its role cannot be changed.</summary>
+    public bool IsRecognized { get; }
+
+    public bool IsUnrecognized => !IsRecognized;
+
+    /// <summary>The roles offered for an unrecognized file.</summary>
+    public IReadOnlyList<TypeFileRoleChoice> RoleChoices => TypeFilePickerViewModel.RoleChoices;
 
     public bool IsChecked
     {
         get => _isChecked;
         set => SetField(ref _isChecked, value);
     }
+
+    /// <summary>
+    /// The role the file will be copied under. Only meaningful for unrecognized
+    /// files; recognized files keep their filename-derived role.
+    /// </summary>
+    public TypesFileRole Role
+    {
+        get => _role;
+        set => SetField(ref _role, value);
+    }
 }
 
 /// <summary>
-/// Backs the types-file picker dialog. Only the files already configured for the
-/// mod are pre-selected, and a mod may have at most one active file per role
-/// ("types" / "spawnabletypes"): checking a file unchecks the other candidates of
-/// the same role so mods shipping alternative sets (e.g. Casual vs Hardcore)
-/// cannot end up with two active "types" files.
+/// Backs the types-file picker dialog. All discovered XML files are listed;
+/// recognized files (name contains "type"/"spawnable") come first, with
+/// unrecognized files separated at the bottom where the user may assign them a
+/// role. Only the files already configured for the mod are pre-selected, so a
+/// re-run with no edits does not silently change anything.
 /// </summary>
 public sealed class TypeFilePickerViewModel : ViewModelBase
 {
@@ -43,7 +65,8 @@ public sealed class TypeFilePickerViewModel : ViewModelBase
         string modName,
         IReadOnlyList<string> files,
         string basePath,
-        IReadOnlySet<string>? activeFiles = null)
+        IReadOnlySet<string>? activeFiles = null,
+        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null)
     {
         ModName = modName;
         foreach (string file in files)
@@ -51,63 +74,49 @@ public sealed class TypeFilePickerViewModel : ViewModelBase
             string display = file.StartsWith(basePath, StringComparison.OrdinalIgnoreCase)
                 ? file[basePath.Length..].TrimStart('\\', '/')
                 : file;
-            string role = TypesFileRoles.RoleOf(System.IO.Path.GetFileName(file));
-            bool isActive = activeFiles?.Contains(file) == true;
-            Options.Add(new TypeFileOptionViewModel(file, display, role) { IsChecked = isActive });
-        }
+            bool recognized = TypesFileRoles.IsRecognized(Path.GetFileName(file));
+            var option = new TypeFileOptionViewModel(file, display, recognized);
 
-        foreach (TypeFileOptionViewModel option in Options)
-        {
-            option.PropertyChanged += OnOptionChanged;
-        }
+            if (activeFiles?.Contains(file) == true)
+            {
+                option.IsChecked = true;
+                if (!recognized && activeRoles is not null && activeRoles.TryGetValue(file, out TypesFileRole role))
+                {
+                    option.Role = role;
+                }
+            }
 
-        EnforceOnePerRole();
+            if (recognized)
+            {
+                RecognizedOptions.Add(option);
+            }
+            else
+            {
+                UnrecognizedOptions.Add(option);
+            }
+        }
     }
+
+    public static IReadOnlyList<TypeFileRoleChoice> RoleChoices { get; } = new[]
+    {
+        new TypeFileRoleChoice(TypesFileRole.Types, "Types"),
+        new TypeFileRoleChoice(TypesFileRole.SpawnableTypes, "Spawnable"),
+    };
 
     public string ModName { get; }
 
-    public ObservableCollection<TypeFileOptionViewModel> Options { get; } = new();
+    /// <summary>Files whose name already classifies them as types/spawnabletypes.</summary>
+    public ObservableCollection<TypeFileOptionViewModel> RecognizedOptions { get; } = new();
 
-    public IReadOnlyList<string> GetSelectedFiles() =>
-        Options.Where(o => o.IsChecked).Select(o => o.FullPath).ToList();
+    /// <summary>Files with no economy keyword; the user chooses their role.</summary>
+    public ObservableCollection<TypeFileOptionViewModel> UnrecognizedOptions { get; } = new();
 
-    /// <summary>
-    /// Keeps at most one checked option per role, preserving the earliest. This
-    /// reconciles configurations created before the one-per-role rule existed.
-    /// </summary>
-    private void EnforceOnePerRole()
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (TypeFileOptionViewModel option in Options)
-        {
-            if (!option.IsChecked || seen.Add(option.Role))
-            {
-                continue;
-            }
+    public bool HasUnrecognizedOptions => UnrecognizedOptions.Count > 0;
 
-            option.IsChecked = false;
-        }
-    }
-
-    private void OnOptionChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName != nameof(TypeFileOptionViewModel.IsChecked))
-        {
-            return;
-        }
-
-        var changed = (TypeFileOptionViewModel)sender!;
-        if (!changed.IsChecked)
-        {
-            return;
-        }
-
-        foreach (TypeFileOptionViewModel other in Options)
-        {
-            if (other != changed && other.IsChecked && string.Equals(other.Role, changed.Role, StringComparison.Ordinal))
-            {
-                other.IsChecked = false;
-            }
-        }
-    }
+    public IReadOnlyList<TypeFileSelection> GetSelections() =>
+        RecognizedOptions
+            .Concat(UnrecognizedOptions)
+            .Where(option => option.IsChecked)
+            .Select(option => new TypeFileSelection(option.FullPath, option.Role))
+            .ToList();
 }

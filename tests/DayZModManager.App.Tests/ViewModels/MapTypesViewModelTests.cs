@@ -310,7 +310,7 @@ public class MapTypesViewModelTests
         const string hardcore = @"D:\workshop\@CF\hardcore_types.xml";
         var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
-        var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { hardcore } };
+        var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { new TypeFileSelection(hardcore, TypesFileRole.Types) } };
 
         (MapTypesViewModel vm, FakeTypesService fakeTypes, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
 
@@ -328,7 +328,7 @@ public class MapTypesViewModelTests
         const string hardcore = @"D:\workshop\@CF\hardcore_types.xml";
         var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
-        var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { hardcore } };
+        var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { new TypeFileSelection(hardcore, TypesFileRole.Types) } };
 
         (MapTypesViewModel vm, FakeTypesService fakeTypes, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
 
@@ -345,7 +345,7 @@ public class MapTypesViewModelTests
         const string casual = @"D:\workshop\@CF\casual_types.xml";
         var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
-        var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { casual } };
+        var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
         (MapTypesViewModel vm, FakeTypesService fakeTypes, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
 
@@ -361,7 +361,7 @@ public class MapTypesViewModelTests
         const string casual = @"D:\workshop\@CF\casual_types.xml";
         var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
-        var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { casual } };
+        var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
         (MapTypesViewModel vm, FakeTypesService fakeTypes, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
 
@@ -376,9 +376,14 @@ public class MapTypesViewModelTests
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
         const string hardcore = @"D:\workshop\@CF\hardcore_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(new ModTypesEntry
+        {
+            ModName = "@CF",
+            SourceFiles = { "casual_types.xml" },
+            GeneratedFiles = { @"db\ModTypes\CF_casual_types.xml" },
+        });
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
-        var dialogs = new FakeDialogs { SelectedFiles = new[] { casual } };
+        var dialogs = new FakeDialogs { SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
         (MapTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
 
@@ -387,6 +392,21 @@ public class MapTypesViewModelTests
         Assert.NotNull(fakeDialogs.LastActiveFiles);
         Assert.Contains(casual, fakeDialogs.LastActiveFiles);
         Assert.DoesNotContain(hardcore, fakeDialogs.LastActiveFiles);
+    }
+
+    [Fact]
+    public void ConfigureMod_PassesModFolderPathToPicker()
+    {
+        const string casual = @"D:\workshop\@CF\casual_types.xml";
+        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
+        var dialogs = new FakeDialogs { SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
+
+        (MapTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(config, types, dialogs);
+
+        vm.ConfigXmlCommand.Execute(null);
+
+        Assert.Equal(Path.Combine(@"D:\workshop", "@CF"), fakeDialogs.LastModFolderPath);
     }
 
     [Fact]
@@ -474,6 +494,25 @@ public class MapTypesViewModelTests
         TypesRowViewModel orphan = Assert.Single(vm.TypesRows, r => r.IsUntracked);
         Assert.Equal("(untracked)", orphan.ModName);
         Assert.Equal("Orphan_types.xml", orphan.FileName);
+    }
+
+    [Fact]
+    public void Sync_PopulatesFileTypeColumn_FromConfiguredRole()
+    {
+        var config = ConfigWithEntry(new ModTypesEntry
+        {
+            ModName = "@CF",
+            GeneratedFiles = { @"db\ModTypes\CF_types.xml", @"db\ModTypes\CF_spawn.xml" },
+            FileRoles = { { "CF_types.xml", "types" }, { "CF_spawn.xml", "spawnabletypes" } },
+        });
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{ModTypesFolderPath()}\Orphan_types.xml");
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(config, new FakeTypesService(), new FakeDialogs(), fileSystem: fs);
+
+        Assert.Equal("type", vm.TypesRows.Single(r => r.FileName == "CF_types.xml").FileType);
+        Assert.Equal("spawnable", vm.TypesRows.Single(r => r.FileName == "CF_spawn.xml").FileType);
+        Assert.Equal(string.Empty, vm.TypesRows.Single(r => r.IsUntracked).FileType);
     }
 
     [Fact]
@@ -1204,6 +1243,8 @@ public class MapTypesViewModelTests
 
         public IReadOnlyList<string>? ConfigureModSourceFiles { get; private set; }
 
+        public IReadOnlyList<TypeFileSelection>? ConfigureModSelections { get; private set; }
+
         public int ConfigureModCalls { get; private set; }
 
         public IReadOnlySet<string>? LastRemoveLeaves { get; private set; }
@@ -1218,27 +1259,49 @@ public class MapTypesViewModelTests
 
         public IReadOnlySet<string>? LastUntrackedLeaves { get; private set; }
 
-        public IReadOnlyList<string> DiscoverTypeFiles(string workshopPath, string modName) => DiscoveryFiles;
+        public IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName) => DiscoveryFiles;
 
-        public string? GetGeneratedFileName(string workshopPath, string modName, string sourceFile)
+        public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(TypesConfig config, string mapName, string modName)
         {
-            string modPath = Path.Combine(workshopPath, modName);
-            string? relative = RelativeWithin(modPath, sourceFile);
-            if (relative is null)
+            var files = new List<ConfiguredTypeFile>();
+            if (!config.Maps.TryGetValue(mapName, out MapTypesConfig? map))
             {
-                return null;
+                return files;
             }
 
-            string clean = modName.StartsWith('@') ? modName[1..] : modName;
-            return clean + "_" + relative.Replace('\\', '_').Replace('/', '_');
+            ModTypesEntry? entry = map.Mods.FirstOrDefault(m =>
+                string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                return files;
+            }
+
+            for (int i = 0; i < entry.GeneratedFiles.Count; i++)
+            {
+                string generated = entry.GeneratedFiles[i];
+                string leaf = Path.GetFileName(generated);
+                if (string.IsNullOrEmpty(leaf))
+                {
+                    continue;
+                }
+
+                string source = i < entry.SourceFiles.Count ? entry.SourceFiles[i] : string.Empty;
+                TypesFileRole role = entry.FileRoles.TryGetValue(leaf, out string? stored)
+                    ? TypesFileRoles.ToRole(stored)
+                    : TypesFileRole.Types;
+                files.Add(new ConfiguredTypeFile(source, leaf, role));
+            }
+
+            return files;
         }
 
         public TypesOperationResult ConfigureMod(
             TypesConfig config, string mapName, string missionPath, string workshopPath, string modName,
-            IReadOnlyList<string> sourceFiles, IReadOnlySet<string> loadedModNames)
+            IReadOnlyList<TypeFileSelection> selections, IReadOnlySet<string> loadedModNames)
         {
             ConfigureModCalls++;
-            ConfigureModSourceFiles = sourceFiles;
+            ConfigureModSelections = selections.ToList();
+            ConfigureModSourceFiles = selections.Select(s => s.SourceFile).ToList();
             return new TypesOperationResult { Success = true };
         }
 
@@ -1283,14 +1346,6 @@ public class MapTypesViewModelTests
 
         public IReadOnlyList<string> GetActiveTypeFileNames(
             TypesConfig config, string mapName, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
-
-        private static string? RelativeWithin(string basePath, string fullPath)
-        {
-            string relative = Path.GetRelativePath(basePath, fullPath);
-            return relative.Equals(".", StringComparison.Ordinal) || relative.StartsWith("..", StringComparison.Ordinal)
-                ? null
-                : relative;
-        }
     }
 
     private sealed class FakeTypesConfigStore : ITypesConfigStore
@@ -1539,9 +1594,13 @@ public class MapTypesViewModelTests
 
         public string? LastWarningNote { get; private set; }
 
-        public IReadOnlyList<string>? SelectedFiles { get; set; }
+        public IReadOnlyList<TypeFileSelection>? SelectedFiles { get; set; }
 
         public IReadOnlySet<string>? LastActiveFiles { get; private set; }
+
+        public IReadOnlyDictionary<string, TypesFileRole>? LastActiveRoles { get; private set; }
+
+        public string? LastModFolderPath { get; private set; }
 
         public string? AskTextResult { get; set; } = null;
 
@@ -1586,9 +1645,13 @@ public class MapTypesViewModelTests
 
         public string? PickFile(string title, string filter, string initialDirectory) => null;
 
-        public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null)
+        public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+            string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
+            IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null)
         {
             LastActiveFiles = activeFiles;
+            LastActiveRoles = activeRoles;
+            LastModFolderPath = modFolderPath;
             return SelectedFiles;
         }
     }

@@ -42,6 +42,16 @@ public class PersistedConfigNullHardeningTests
     }
 
     [Fact]
+    public void ModTypesEntry_NullFileRoles_BecomesEmptyCaseInsensitiveDictionary()
+    {
+        ModTypesEntry? entry = JsonSerializer.Deserialize<ModTypesEntry>("{\"fileRoles\":null}", Options);
+
+        Assert.NotNull(entry!.FileRoles);
+        entry.FileRoles["CF_types.xml"] = "types";
+        Assert.True(entry.FileRoles.ContainsKey("cf_TYPES.xml"));
+    }
+
+    [Fact]
     public void SaveMetaData_NullLists_BecomeEmptyLists()
     {
         SaveMetaData? meta = JsonSerializer.Deserialize<SaveMetaData>(

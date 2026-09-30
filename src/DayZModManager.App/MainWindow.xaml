@@ -167,7 +167,7 @@
 		</Border>
 
         <!-- Footer: log -->
-        <Border DockPanel.Dock="Bottom" Height="160" BorderBrush="#FFDDDDDD" BorderThickness="0,1,0,0">
+        <Border DockPanel.Dock="Bottom" Height="130" BorderBrush="#FFDDDDDD" BorderThickness="0,1,0,0">
             <ListBox x:Name="LogListBox"
                      ItemsSource="{Binding Log.Entries}"
                      ItemTemplate="{StaticResource LogEntryTemplate}"
@@ -263,6 +263,7 @@
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
                         <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
                             <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
+							VerticalAlignment="Center"
 							ScrollViewer.CanContentScroll="False"
 							VirtualizingStackPanel.IsVirtualizing="False"
 							MaxDropDownHeight="300" />
@@ -270,10 +271,11 @@
 
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
                         <TextBlock Text="Types Config:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
-                        <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}" Width="280"
-						ScrollViewer.CanContentScroll="False"
-						VirtualizingStackPanel.IsVirtualizing="False"
-						MaxDropDownHeight="300" />
+							<ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}" Width="280"
+							VerticalAlignment="Center"
+							ScrollViewer.CanContentScroll="False"
+							VirtualizingStackPanel.IsVirtualizing="False"
+							MaxDropDownHeight="300" />
                         <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0"
                                 ToolTip="{Binding TypesLockedMessage}"
                                 ToolTipService.ShowOnDisabled="True"
@@ -315,8 +317,8 @@
 
                     <Grid Grid.Row="2">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="8*" />
-                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="8.2*" />
+                            <ColumnDefinition Width="1.8*" />
                         </Grid.ColumnDefinitions>
 
                         <DataGrid Grid.Column="0" Margin="0,0,8,0" ItemsSource="{Binding TypesRows}"
@@ -345,8 +347,9 @@
                                 </Style>
                             </DataGrid.RowStyle>
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="4*" />
-                                <DataGridTextColumn Header="Types Files" Binding="{Binding FileName}" Width="6*" />
+                                <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="3.7*" />
+                                <DataGridTextColumn Header="Configured File" Binding="{Binding FileName}" Width="5.8*" />
+                                <DataGridTextColumn Header="File Type" Binding="{Binding FileType}" Width="1.5*" />
                             </DataGrid.Columns>
                         </DataGrid>
 

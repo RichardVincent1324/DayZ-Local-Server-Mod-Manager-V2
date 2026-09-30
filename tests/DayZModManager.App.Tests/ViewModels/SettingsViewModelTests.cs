@@ -3,6 +3,7 @@ using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
 using DayZModManager.Core;
 using DayZModManager.Core.Models;
+using DayZModManager.Core.Services;
 
 namespace DayZModManager.App.Tests.ViewModels;
 
@@ -341,6 +342,8 @@ public class SettingsViewModelTests
 
         public string? PickFile(string title, string filter, string initialDirectory) => File;
 
-        public IReadOnlyList<string>? PickTypeFiles(string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null) => null;
+        public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+            string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
+            IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null) => null;
     }
 }

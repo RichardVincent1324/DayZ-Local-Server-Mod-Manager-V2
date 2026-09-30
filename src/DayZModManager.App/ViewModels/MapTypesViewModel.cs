@@ -421,45 +421,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             ? null
             : _typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map) ? map : null;
 
-    /// <summary>
-    /// Returns the leaf names of the generated files currently configured for a mod.
-    /// </summary>
-    private HashSet<string> GetActiveLeafNames(string modName)
-    {
-        var leaves = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        ModTypesEntry? entry = CurrentMapConfig()?.Mods.FirstOrDefault(m =>
-            string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
-        if (entry is null)
-        {
-            return leaves;
-        }
-
-        foreach (string generated in entry.GeneratedFiles)
-        {
-            leaves.Add(Path.GetFileName(generated));
-        }
-
-        return leaves;
-    }
-
-    /// <summary>
-    /// Returns the active generated files (by leaf name) that would be deleted if
-    /// <paramref name="selectedFiles"/> became the mod's configuration.
-    /// </summary>
-    private List<string> FilesRemovedBySelection(string modName, HashSet<string> activeLeaves, IReadOnlyList<string> selectedFiles)
-    {
-        var kept = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string file in selectedFiles)
-        {
-            if (_typesService.GetGeneratedFileName(_workshopPath, modName, file) is { } leaf)
-            {
-                kept.Add(leaf);
-            }
-        }
-
-        return activeLeaves.Where(leaf => !kept.Contains(leaf)).ToList();
-    }
-
     private string? ResolveAppliedMapPath()
     {
         if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
@@ -755,22 +716,39 @@ public sealed class MapTypesViewModel : ViewModelBase
                 return;
             }
 
-            IReadOnlyList<string> files = _typesService.DiscoverTypeFiles(_workshopPath, modName);
-            _log.Info($"Found {files.Count} candidate type file(s) in {modName}.");
+            IReadOnlyList<string> files = _typesService.DiscoverXmlFiles(_workshopPath, modName);
+            _log.Info($"Found {files.Count} XML file(s) in {modName}.");
 
             // Pre-select only the files that are currently configured for this
-            // mod so a re-run with no edits does not silently change anything.
-            HashSet<string> activeLeaves = GetActiveLeafNames(modName);
-            var activeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string file in files)
+            // mod (and restore an unrecognized file's assigned role) so a re-run
+            // with no edits does not silently change anything. Matching is by
+            // mod-relative source path so a disambiguated (numbered) generated
+            // name is handled transparently.
+            string modFolderPath = Path.Combine(_workshopPath, modName);
+            IReadOnlyList<ConfiguredTypeFile> configuredFiles =
+                _typesService.GetConfiguredFiles(_typesConfig, _typesConfig.CurrentMap, modName);
+            var configuredBySource = new Dictionary<string, ConfiguredTypeFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (ConfiguredTypeFile configured in configuredFiles)
             {
-                if (_typesService.GetGeneratedFileName(_workshopPath, modName, file) is { } leaf && activeLeaves.Contains(leaf))
+                if (!string.IsNullOrWhiteSpace(configured.SourceRelative))
                 {
-                    activeFiles.Add(file);
+                    configuredBySource[configured.SourceRelative] = configured;
                 }
             }
 
-            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files, activeFiles);
+            var activeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var activeRoles = new Dictionary<string, TypesFileRole>(StringComparer.OrdinalIgnoreCase);
+            foreach (string file in files)
+            {
+                string relative = Path.GetRelativePath(modFolderPath, file);
+                if (configuredBySource.TryGetValue(relative, out ConfiguredTypeFile? configured))
+                {
+                    activeFiles.Add(file);
+                    activeRoles[file] = configured.Role;
+                }
+            }
+
+            IReadOnlyList<TypeFileSelection>? selected = _dialogs.PickTypeFiles(modName, files, activeFiles, activeRoles, modFolderPath);
             if (selected is null || selected.Count == 0)
             {
                 return;
@@ -779,9 +757,20 @@ public sealed class MapTypesViewModel : ViewModelBase
             // Reconfiguring a mod that is already configured overwrites its files
             // in db/ModTypes; never do that silently, even when the same file is
             // selected again.
-            if (activeLeaves.Count > 0)
+            if (configuredFiles.Count > 0)
             {
-                List<string> removed = FilesRemovedBySelection(modName, activeLeaves, selected);
+                var selectedSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (TypeFileSelection selection in selected)
+                {
+                    selectedSources.Add(Path.GetRelativePath(modFolderPath, selection.SourceFile));
+                }
+
+                List<string> removed = configuredFiles
+                    .Where(configured => !selectedSources.Contains(configured.SourceRelative))
+                    .Select(configured => string.IsNullOrWhiteSpace(configured.GeneratedLeaf)
+                        ? configured.SourceRelative
+                        : configured.GeneratedLeaf)
+                    .ToList();
                 string message = $"Mod {modName} already has configured type file(s). Reconfiguring will overwrite its current configuration in db/ModTypes with the newly selected file(s).";
                 if (removed.Count > 0)
                 {
@@ -1468,6 +1457,7 @@ public sealed class MapTypesViewModel : ViewModelBase
                     ModName = entry.ModName,
                     SourceFiles = entry.SourceFiles.ToList(),
                     GeneratedFiles = entry.GeneratedFiles.ToList(),
+                    FileRoles = new Dictionary<string, string>(entry.FileRoles, StringComparer.OrdinalIgnoreCase),
                 }).ToList(),
         };
 
@@ -1648,12 +1638,21 @@ public sealed class MapTypesViewModel : ViewModelBase
                     }
 
                     owned.Add(leaf);
-                    TypesRows.Add(new TypesRowViewModel(entry.ModName, leaf, inactive));
+                    TypesRows.Add(new TypesRowViewModel(entry.ModName, leaf, inactive, fileType: FileTypeLabel(entry, leaf)));
                 }
             }
         }
 
         AddUntrackedRows(owned);
+    }
+
+    /// <summary>Returns the display label ("type"/"spawnable") for a tracked generated file.</summary>
+    private static string FileTypeLabel(ModTypesEntry entry, string leaf)
+    {
+        TypesFileRole role = entry.FileRoles.TryGetValue(leaf, out string? stored)
+            ? TypesFileRoles.ToRole(stored)
+            : TypesFileRole.Types;
+        return role == TypesFileRole.SpawnableTypes ? "spawnable" : "type";
     }
 
     /// <summary>

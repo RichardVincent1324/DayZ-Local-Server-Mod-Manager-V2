@@ -347,8 +347,8 @@
                                 </Style>
                             </DataGrid.RowStyle>
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="3.7*" />
-                                <DataGridTextColumn Header="Configured File" Binding="{Binding FileName}" Width="5.8*" />
+                                <DataGridTextColumn Header="Mod Name" Binding="{Binding ModName}" Width="3.5*" />
+                                <DataGridTextColumn Header="Configured File" Binding="{Binding FileName}" Width="6*" />
                                 <DataGridTextColumn Header="File Type" Binding="{Binding FileType}" Width="1.5*" />
                             </DataGrid.Columns>
                         </DataGrid>

@@ -10,9 +10,10 @@ V2 is the successor to the original [DayZ Local Server Mod Manager](https://gith
 
 ## Screenshots
 
-<img width="500" alt="DayZ Local Server Mod Manager V2 screenshot" src="https://github.com/user-attachments/assets/9db4af27-ce20-44f4-aa23-732ba9b5ce6e" />
+<img width="500" alt="Mod Manage Tab" src="assets/ModManageTab.png" />
 
-<img width="500" alt="DayZ Local Server Mod Manager V2 screenshot" src="https://github.com/user-attachments/assets/3247a0fd-8567-499d-b91b-4648432c1105" />
+
+<img width="500" alt="Map Types Tab" src="assets/MapTypesTab.png" />
 
 ---
 
@@ -20,7 +21,7 @@ V2 is the successor to the original [DayZ Local Server Mod Manager](https://gith
 
 ### [Download DayZ Local Server Mod Manager V2](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest)
 
-**Latest stable release: v2.0.1**
+**Latest stable release: v2.0.2**
 
 * Windows x64
 * Self-contained
@@ -30,25 +31,6 @@ V2 is the successor to the original [DayZ Local Server Mod Manager](https://gith
 > V2 manages an existing DayZ Server installation. It does **not** install or replace DayZ Server itself.
 
 ---
-
-> [!IMPORTANT]
-> ## Required: download `LocalServer.example.bat` from the original repository
->
-> **The V2 repository currently does not include `LocalServer.example.bat`.**
->
-> V2 expects a compatible DayZ launch batch file so it can manage the server's mod list, server profile, and launch workflow. **Without this batch file (or another compatible batch file with the expected variables), the tool cannot be used normally.**
->
-> Download the template from the original V1 repository:
->
-> **[`LocalServer.example.bat` — DayZ-Local-Server-Mod-Manager](https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/LocalServer.example.bat)**
->
-> After downloading it:
->
-> 1. Copy it into your **DayZ Server** folder.
-> 2. Recommended: rename the copy to `LocalServer.bat`.
-> 3. Open it in a text editor and set `serverDirectory` to your actual DayZ Server path.
-> 4. In V2 **Settings**, select that `.bat` file as your launch batch file.
-> 5. Once V2 is managing the file, avoid manually editing the manager-owned `modList` block because V2 rewrites it when you Apply your mod configuration.
 
 ## What does V2 do?
 
@@ -69,6 +51,87 @@ Local DayZ Server
         ↓
 DayZ Client
 ```
+---
+
+# Getting Started
+
+## 1. Install and initialize DayZ Server
+
+Make sure you already have:
+
+- DayZ installed.
+- DayZ Server installed (via Steam).
+- Your DayZ Server folder available locally.
+
+It is a good idea to run the server at least once so the normal configuration and mission folders exist, including files such as `serverDZ.cfg` and the `mpmissions` directory.
+
+## 2. Download V2
+
+Download the latest release:
+
+**https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest**
+
+## 3. Download the required launch batch file
+
+The V2 repository does **not** currently provide `LocalServer.example.bat`.
+
+Get it from the original project:
+
+**https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/LocalServer.example.bat**
+
+Place a copy in your DayZ Server root. For example:
+
+```text
+D:\DayZServer\LocalServer.example.bat
+```
+
+The template contains variables V2 expects to work with, including settings similar to:
+
+```bat
+set "serverDirectory=C:\Path\To\DayZServer"
+set "modList=-mod=;"
+set "serverProfile=map_profiles\dayzOffline.chernarusplus"
+```
+
+At minimum, change `serverDirectory` to your actual DayZ Server installation path. You can also adjust the server port, CPU count, and other launch settings in the template if required.
+
+> [!WARNING]
+> After V2 is configured to use the batch file, do not manually maintain the `modList` block. V2 owns and rewrites that portion when applying your mod configuration.
+
+## 4. Configure V2 Settings
+
+Open V2 and configure:
+
+- **Workshop path** — the directory containing your installed `@...` mod folders, commonly:
+
+  ```text
+  <SteamLibrary>\steamapps\common\DayZ\!Workshop
+  ```
+
+- **Server path** — the directory containing `DayZServer_x64.exe` and `serverDZ.cfg`.
+- **Batch file** — the `LocalServer.example.bat` file you prepared in the previous step. Select it manually on first run; V2 does not preselect a default batch file, and the server cannot be started until one is chosen.
+
+## 5. Configure the local server for this workflow
+
+V2 is designed for local/solo play and does not manage DayZ `.bikey` / `.bisign` signature deployment.
+
+For the intended local-server workflow, open your `serverDZ.cfg`.
+DayZ default value is:
+```cfg
+verifySignatures = 2;   // Verifies .pbos against .bisign files. (only 2 is supported)
+```
+Locate this existing line and change value from `2` to `0`. Do not insert a duplicate new entry.
+```cfg
+verifySignatures = 0;
+```
+`verifySignatures = 0` disables PBO signature verification, required for this local‑mod workflow.
+
+> [!CAUTION]
+> This setup is intended for a private local server. Do not use V2 as a public-server security or signature-management solution.
+
+
+## 6. ✅ Setup complete :tada::confetti_ball:
+> Your local DayZ server environment is ready. Continue below to learn about available features.
 
 ---
 
@@ -87,7 +150,6 @@ DayZ Client
 ### Junction and batch-file management
 
 - Loaded mods are exposed to the server as Windows directory junctions inside a dedicated `ModList` folder.
-- Keeps the DayZ Server root much cleaner, even with very large mod collections.
 - Uses server-root-relative mod paths such as `ModList/@CF`.
 - Rewrites the batch file's manager-owned `modList` block when applying changes.
 - Writes large mod lists across multiple valid `cmd` lines rather than creating one unmanageable command line.
@@ -100,8 +162,13 @@ DayZ Client
 - Switch the active map from the UI.
 - Update the active mission template in `serverDZ.cfg`.
 - Update the batch file's `serverProfile` and corresponding `map_profiles` location.
-- Scan mods for XML files whose names contain `type`.
-- Copy selected type-related XML files into the active mission's `db/ModTypes` directory.
+- Discover **every** XML file in a mod (recursively).
+- Files whose names contain `type` or `spawnable` are **recognized** and classified automatically. All other files are listed separately at the bottom of the picker, where you assign each one a **Types** or **Spawnable** role.
+- A mod may include any number of `types` and `spawnable` files.
+- Use the picker's **Open mod folder** button to inspect unrecognized files in File Explorer before assigning a role.
+- Copy the selected files into the active mission's `db/ModTypes` directory.
+- Store each file's role in `types_config.json`; the role drives the `type` attribute and the types-before-spawnable ordering in `cfgeconomycore.xml`.
+- The types grid shows **Mod Name**, **Configured File**, and **File Type** (`type` or `spawnable`), so the assigned role is visible at a glance.
 - Keep `cfgeconomycore.xml` synchronized with manager-owned types entries.
 - Preserve entries that V2 does not own.
 - Detect untracked XML files in `db/ModTypes` so orphaned files are visible instead of silently remaining active.
@@ -160,91 +227,35 @@ DayZ-Mod-Manager-V2\
          └─ ModTypes\
 ```
 
-The data directory follows the configured server setup when V2 relocates it.
-
 ---
-
-# Getting Started
-
-## 1. Install and initialize DayZ Server
-
-Make sure you already have:
-
-- DayZ installed.
-- DayZ Server installed.
-- Your DayZ Server folder available locally.
-
-It is a good idea to run the server at least once so the normal configuration and mission folders exist, including files such as `serverDZ.cfg` and the `mpmissions` directory.
-
-## 2. Download V2
-
-Download the latest release:
-
-**https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager-V2/releases/latest**
-
-## 3. Download the required launch batch file
-
-The V2 repository does **not** currently provide `LocalServer.example.bat`.
-
-Get it from the original project:
-
-**https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/LocalServer.example.bat**
-
-Place a copy in your DayZ Server root. For example:
-
-```text
-D:\DayZServer\LocalServer.bat
-```
-
-The template contains variables V2 expects to work with, including settings similar to:
-
-```bat
-set "serverDirectory=C:\Path\To\DayZServer"
-set "modList=-mod=;"
-set "serverProfile=map_profiles\dayzOffline.chernarusplus"
-```
-
-At minimum, change `serverDirectory` to your actual DayZ Server installation path. You can also adjust the server port, CPU count, and other launch settings in the template if required.
-
-> [!WARNING]
-> After V2 is configured to use the batch file, do not manually maintain the `modList` block. V2 owns and rewrites that portion when applying your mod configuration.
-
-## 4. Configure V2 Settings
-
-Open V2 and configure:
-
-- **Workshop path** — the directory containing your installed `@...` mod folders, commonly:
-
-  ```text
-  <SteamLibrary>\steamapps\common\DayZ\!Workshop
-  ```
-
-- **Server path** — the directory containing `DayZServer_x64.exe` and `serverDZ.cfg`.
-- **Batch file** — the `LocalServer.bat` file you prepared in the previous step. Select it manually on first run; V2 does not preselect a default batch file, and the server cannot be started until one is chosen.
-
-## 5. Configure the local server for this workflow
-
-V2 is designed for local/solo play and does not manage DayZ `.bikey` / `.bisign` signature deployment.
-
-For the intended local-server workflow, open your `serverDZ.cfg`.
-DayZ default value is:
-```cfg
-verifySignatures = 2;   // Verifies .pbos against .bisign files. (only 2 is supported)
-```
-Locate this existing line and change value from `2` to `0`. Do not insert a duplicate new entry.
-```cfg
-verifySignatures = 0;
-```
-`verifySignatures = 0` disables PBO signature verification, required for this local‑mod workflow.
-
-> [!CAUTION]
-> This setup is intended for a private local server. Do not use V2 as a public-server security or signature-management solution.
-
-# ✅ **Setup complete**
 
 Your environment is now fully configured. Use V2’s user interface to manage mods, map/types settings, save profiles and start your local server.
 
 > Always stop the DayZ server before performing operations that alter the active world state: switching maps, modifying types configs, loading saves or starting a new game.
+
+---
+
+## Upgrading from an earlier version
+
+> [!IMPORTANT]
+> Version **v2.0.2 changed how `types` roles are stored**. Do not reuse the `DayZ-Mod-Manager-V2` data folder or progress saves created by v2.0.1: its `types_config.json` and `meta.json` contain no role data, so every file would be treated as a `types` file. Start fresh instead.
+
+Before upgrading, complete the following steps:
+
+### Clean up the old v2.0.1 instance
+1. Back up the `storage_<instanceId>` and `ModTypes` folders from `DayZ-Mod-Manager-V2\Progress_Saves\<map_name>\<save_name>`.
+2. Back up `meta.json`. The legacy `meta.json` is only used to identify your previously loaded mods and is incompatible with v2.0.2.
+3. Launch the old v2.0.1 build of DayZ Mod Manager.
+4. Unload all mods via the **Mod Management** tab, then remove all configured types files using the [Remove Selected] button in the **Map & Types** tab.
+5. Close the application and delete the v2.0.1 executable.
+6. Delete the `DayZServer\DayZ-Mod-Manager-V2` and `%LOCALAPPDATA%\DayZ-Mod-Manager-V2` data directories.
+
+### Restore your saves inside v2.0.2
+1. Manually load your previously used mods by referencing the `ModList` stored in the backed-up legacy `meta.json`.
+2. Configure your types files in v2.0.2 using the filenames from your `ModTypes` backup with the [Config XML] button.
+3. Copy your backed-up `ModTypes` folder to overwrite the newly created `ModTypes` folder generated by v2.0.2.
+4. Copy the `storage_<instanceId>` folder into `mpmissions\<current_map>`.
+5. Click the [Add Save] button located in the **Map & Types** tab of v2.0.2.
 
 ---
 

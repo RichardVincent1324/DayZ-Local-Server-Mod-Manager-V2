@@ -80,6 +80,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         ConfigXmlCommand = new RelayCommand(ConfigureMod, () => TypesEditingAllowed);
         OpenModTypesFolderCommand = new RelayCommand(OpenModTypesFolder, () => TypesEditingAllowed);
+        OpenMapProfilesFolderCommand = new RelayCommand(OpenMapProfilesFolder);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => TypesEditingAllowed && CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid, () => TypesEditingAllowed);
         LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is not null && !IsSaveBusy);
@@ -181,6 +182,9 @@ public sealed class MapTypesViewModel : ViewModelBase
     public string OpenModTypesFolderToolTip =>
         TypesEditingAllowed ? "Open ModTypes folder in File Explorer" : TypesLockedMessage;
 
+    /// <summary>Tooltip for the always-available map profiles folder button.</summary>
+    public string MapProfilesFolderToolTip => "Open map_profiles folder in File Explorer";
+
     /// <summary>True when the mission's storage folder exists (a world has been created).</summary>
     private bool WorldExists(string mapName)
     {
@@ -256,6 +260,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     public RelayCommand ConfigXmlCommand { get; }
     public RelayCommand OpenModTypesFolderCommand { get; }
+    public RelayCommand OpenMapProfilesFolderCommand { get; }
     public RelayCommand RemoveSelectedCommand { get; }
     public RelayCommand CleanInvalidCommand { get; }
     public RelayCommand LoadSaveCommand { get; }
@@ -1744,6 +1749,44 @@ public sealed class MapTypesViewModel : ViewModelBase
         catch (Exception ex)
         {
             _log.Error($"Failed to open the ModTypes folder: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens the server's <c>map_profiles\&lt;current map&gt;</c> folder in File
+    /// Explorer, falling back to the <c>map_profiles</c> root when no map is
+    /// applied yet. Always available (it does not depend on world state). The
+    /// folder is created when missing; failures are logged, never thrown.
+    /// </summary>
+    private void OpenMapProfilesFolder()
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath))
+        {
+            _log.Warning("Set the server path before opening the map profiles folder.");
+            return;
+        }
+
+        string folder = string.IsNullOrWhiteSpace(_typesConfig.CurrentMap)
+            ? Path.Combine(_serverPath, "map_profiles")
+            : Path.Combine(_serverPath, "map_profiles", _typesConfig.CurrentMap);
+
+        try
+        {
+            _fileSystem.CreateDirectory(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the map profiles folder: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            _processLauncher.OpenFolder(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the map profiles folder: {ex.Message}");
         }
     }
 

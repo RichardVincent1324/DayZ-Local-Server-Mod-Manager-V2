@@ -917,6 +917,68 @@ public class MapTypesViewModelTests
     }
 
     [Fact]
+    public void OpenMapProfilesFolderCommand_WithCurrentMap_CreatesFolderAndOpensIt()
+    {
+        var fs = new FakeFileSystem();
+        var launcher = new FakeProcessLauncher();
+        string expected = Path.Combine(ServerPath, "map_profiles", MapName);
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), new FakeDialogs(),
+            fileSystem: fs, processLauncher: launcher);
+
+        vm.OpenMapProfilesFolderCommand.Execute(null);
+
+        Assert.True(fs.DirectoryExists(expected));
+        Assert.Equal(expected, launcher.LastOpenedFolder);
+    }
+
+    [Fact]
+    public void OpenMapProfilesFolderCommand_WithNoCurrentMap_OpensMapProfilesRoot()
+    {
+        var fs = new FakeFileSystem();
+        var launcher = new FakeProcessLauncher();
+        string expected = Path.Combine(ServerPath, "map_profiles");
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            new TypesConfig(), new FakeTypesService(), new FakeDialogs(),
+            fileSystem: fs, processLauncher: launcher);
+
+        vm.OpenMapProfilesFolderCommand.Execute(null);
+
+        Assert.True(fs.DirectoryExists(expected));
+        Assert.Equal(expected, launcher.LastOpenedFolder);
+    }
+
+    [Fact]
+    public void OpenMapProfilesFolderCommand_IsAlwaysEnabled()
+    {
+        var fs = new FakeFileSystem();
+        fs.CreateDirectory(Path.Combine(ServerPath, "mpmissions", MapName, "storage_1"));
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), new FakeDialogs(), fileSystem: fs);
+
+        // Unlike the ModTypes button, a world present must not disable it.
+        Assert.False(vm.TypesEditingAllowed);
+        Assert.True(vm.OpenMapProfilesFolderCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void OpenMapProfilesFolderCommand_WithNoServerPath_DoesNotOpen()
+    {
+        var fs = new FakeFileSystem();
+        var launcher = new FakeProcessLauncher();
+
+        MapTypesViewModel vm = Create(new TypesConfig(), fileSystem: fs, processLauncher: launcher);
+        // No Refresh -> no server path applied.
+
+        vm.OpenMapProfilesFolderCommand.Execute(null);
+
+        Assert.Null(launcher.LastOpenedFolder);
+    }
+
+    [Fact]
     public async Task LoadSave_MismatchedConfig_LoadsWithoutWarning()
     {
         var dialogs = new FakeDialogs { ConfirmResult = true };

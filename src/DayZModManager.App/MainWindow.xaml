@@ -128,6 +128,38 @@
 
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
+        <!-- Chrome-less icon button (Segoe MDL2 glyph) with a faint hover wash;
+             the glyph grays out automatically when the button is disabled. The
+             transparent background keeps the full click area hit-testable. -->
+        <Style x:Key="FolderIconButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                                CornerRadius="3" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                    <Condition Property="IsEnabled" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Chrome" Property="Background" Value="#14000000" />
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <DataTemplate x:Key="SearchResultTemplate" DataType="{x:Type vm:SearchResultViewModel}">
             <TextBlock Text="{Binding Name}" Padding="2" VerticalAlignment="Center">
                 <TextBlock.Style>
@@ -261,55 +293,37 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
+                        <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,5,0" Width="80" />
                             <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
 							VerticalAlignment="Center"
 							ScrollViewer.CanContentScroll="False"
 							VirtualizingStackPanel.IsVirtualizing="False"
 							MaxDropDownHeight="300" />
+                        <Button Style="{StaticResource FolderIconButtonStyle}"
+                                Command="{Binding OpenMapProfilesFolderCommand}"
+                                Width="30" Height="26" Margin="4,0,0,0"
+                                ToolTip="{Binding MapProfilesFolderToolTip}"
+                                ToolTipService.ShowOnDisabled="True">
+                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                       VerticalAlignment="Center" HorizontalAlignment="Center" />
+                        </Button>
                     </StackPanel>
 
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="Types Config:" VerticalAlignment="Center" Margin="0,0,8,0" Width="90" />
+                        <TextBlock Text="Types Config:" VerticalAlignment="Center" Margin="0,0,5,0" Width="80" />
 							<ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}" Width="280"
 							VerticalAlignment="Center"
 							ScrollViewer.CanContentScroll="False"
 							VirtualizingStackPanel.IsVirtualizing="False"
 							MaxDropDownHeight="300" />
-                        <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="8,0,0,0"
+                        <Button Content="Config XML" Command="{Binding ConfigXmlCommand}" Width="90" Margin="10,0,0,0"
                                 ToolTip="{Binding TypesLockedMessage}"
                                 ToolTipService.ShowOnDisabled="True"
                                 ToolTipService.IsEnabled="{Binding IsTypesLocked}" />
-                        <Button Command="{Binding OpenModTypesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
+                        <Button Style="{StaticResource FolderIconButtonStyle}"
+                                Command="{Binding OpenModTypesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
                                 ToolTip="{Binding OpenModTypesFolderToolTip}"
-                                ToolTipService.ShowOnDisabled="True"
-                                Background="Transparent"
-                                BorderThickness="0">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="Chrome"
-                                            Background="{TemplateBinding Background}"
-                                            CornerRadius="3"
-                                            SnapsToDevicePixels="True">
-                                        <ContentPresenter HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center"
-                                                          TextElement.Foreground="{TemplateBinding Foreground}" />
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsEnabled" Value="False">
-                                            <Setter Property="Foreground"
-                                                    Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
-                                        </Trigger>
-                                        <MultiTrigger>
-                                            <MultiTrigger.Conditions>
-                                                <Condition Property="IsMouseOver" Value="True" />
-                                                <Condition Property="IsEnabled" Value="True" />
-                                            </MultiTrigger.Conditions>
-                                            <Setter TargetName="Chrome" Property="Background" Value="#14000000" />
-                                        </MultiTrigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Button.Template>
+                                ToolTipService.ShowOnDisabled="True">
                             <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
                                        VerticalAlignment="Center" HorizontalAlignment="Center" />
                         </Button>

@@ -223,7 +223,7 @@ public class SaveGameServiceTests
     }
 
     [Fact]
-    public void LoadSave_WithTypesMapping_RestoresModTypesSnapshot()
+    public void LoadSave_LeavesLiveModTypesUntouched()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
@@ -244,12 +244,15 @@ public class SaveGameServiceTests
         Assert.True(result.Success);
         Assert.Empty(result.Warnings);
         Assert.Equal("new-world", fs.TryGetFileContents($@"{MissionPath}\storage_1\players.db"));
-        Assert.Equal("stored-types", fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\stored_types.xml"));
-        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\live_types.xml"));
+
+        // The world's types are read in place from the save's own ModTypes folder;
+        // the live db\ModTypes folder is never touched by a load.
+        Assert.Equal("live-types", fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\live_types.xml"));
+        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\stored_types.xml"));
     }
 
     [Fact]
-    public void LoadSave_WithEmptyTypesMapping_ClearsLiveModTypes()
+    public void LoadSave_WithEmptyTypesMapping_LeavesLiveModTypesUntouched()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
@@ -264,30 +267,7 @@ public class SaveGameServiceTests
         SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, DataDirectory, "Alpha");
 
         Assert.True(result.Success);
-        Assert.False(fs.FileExists($@"{MissionPath}\db\ModTypes\live_types.xml"));
-    }
-
-    [Fact]
-    public void LoadSave_WithMappingButNoSnapshot_WarnsAndKeepsLiveTypes()
-    {
-        var fs = new FakeFileSystem();
-        SeedLiveStorage(fs);
-        SeedLiveModTypes(fs, fileName: "live_types.xml", contents: "live-types");
-
-        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
-        fs.AddDirectory(library, "Alpha");
-        fs.AddDirectory($@"{library}\Alpha", "storage_1");
-        fs.AddFile($@"{library}\Alpha\storage_1\players.db", "new-world");
-        WriteMeta(fs, library, "Alpha", new MapTypesConfig
-        {
-            Mods = { new ModTypesEntry { ModName = "@CF", GeneratedFiles = { @"db\ModTypes\stored_types.xml" } } },
-        });
-
-        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, DataDirectory, "Alpha");
-
-        Assert.True(result.Success);
-        Assert.Equal("live-types", fs.TryGetFileContents($@"{MissionPath}\db\ModTypes\live_types.xml"));
-        Assert.Contains(result.Warnings, warning => warning.Contains("missing", StringComparison.OrdinalIgnoreCase));
+        Assert.True(fs.FileExists($@"{MissionPath}\db\ModTypes\live_types.xml"));
     }
 
     [Fact]
@@ -317,6 +297,24 @@ public class SaveGameServiceTests
         ModTypesEntry entry = Assert.Single(loaded.Value.TypesConfig!.Mods);
         Assert.Equal("@CF", entry.ModName);
         Assert.Contains(@"db\ModTypes\CF_types.xml", entry.GeneratedFiles);
+    }
+
+    [Fact]
+    public void AddSave_SnapshotsFromTheProvidedTypesSourceFolder()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs);
+        string customTypes = $@"{ServerPath}\active-types";
+        fs.AddDirectory(customTypes);
+        fs.AddFile($@"{customTypes}\active_types.xml", "active");
+
+        var meta = new SaveMetaData { Map = MapName, StorageFolder = "storage_1", TypesConfig = new MapTypesConfig() };
+        SaveGameResult result = CreateService(fs).AddSave(
+            ServerPath, MapName, DataDirectory, "Alpha", overwrite: false, customTypes, meta);
+
+        Assert.True(result.Success);
+        string library = $@"{DataDirectory}\{SaveGameService.SavesRootName}\{MapName}";
+        Assert.Equal("active", fs.TryGetFileContents($@"{library}\Alpha\ModTypes\active_types.xml"));
     }
 
     [Fact]

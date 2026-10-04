@@ -444,4 +444,69 @@ public class EconomyCoreServiceTests
 
         Assert.False(service.RemoveModTypesFiles(MissionPath, Set("x.xml")));
     }
+
+    [Fact]
+    public void UpdateModTypes_WritesRequestedFolderValue()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+        var service = new EconomyCoreService(fs);
+        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/ModTypes";
+
+        bool result = service.UpdateModTypes(MissionPath, saveFolder, new[] { "CF_types.xml" }, Empty(), Types("CF_types.xml"));
+
+        Assert.True(result);
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        Assert.Equal(saveFolder, (string?)doc.Descendants("ce").Single().Attribute("folder"));
+    }
+
+    [Fact]
+    public void UpdateModTypes_SwitchesAnExistingSavePathBlockBackToConfigured_WithoutDuplicating()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/ModTypes">
+            		<file name="saved_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = new EconomyCoreService(fs);
+
+        bool result = service.UpdateModTypes(MissionPath, new[] { "CF_types.xml" }, Set("saved_types.xml"), Types("CF_types.xml"));
+
+        Assert.True(result);
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        XElement ce = doc.Descendants("ce").Single();
+        Assert.Equal("./db/ModTypes", (string?)ce.Attribute("folder"));
+        Assert.Equal(new[] { "CF_types.xml" }, ce.Elements("file").Select(f => (string?)f.Attribute("name")).ToList());
+    }
+
+    [Fact]
+    public void GetModTypesFolder_ReturnsTheManagerBlockFolder()
+    {
+        var fs = new FakeFileSystem();
+        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/ModTypes";
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="{saveFolder}"><file name="x.xml" type="types" /></ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = new EconomyCoreService(fs);
+
+        Assert.Equal(saveFolder, service.GetModTypesFolder(MissionPath));
+    }
+
+    [Fact]
+    public void GetModTypesFolder_ReturnsNull_WhenNoManagerBlock()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+
+        Assert.Null(new EconomyCoreService(fs).GetModTypesFolder(MissionPath));
+    }
 }

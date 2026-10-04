@@ -36,7 +36,6 @@ public sealed class MainViewModel : ViewModelBase
         IMapService mapService,
         ITypesService typesService,
         ISaveGameService saveGameService,
-        ITypesBackupService typesBackup,
         IServerConfigService serverConfigService,
         IBatchFileService batchFileService,
         IFileSystem fileSystem,
@@ -86,7 +85,7 @@ public sealed class MainViewModel : ViewModelBase
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         MapTypes = new MapTypesViewModel(
-            mapService, typesService, saveGameService, typesBackup, typesConfigStore, serverConfigService, batchFileService,
+            mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher);
         MapTypes.EnsureApplied = EnsureApplied;
         MapTypes.RestoreModList = RestoreModListFromSaveAsync;
@@ -189,7 +188,11 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand StartServerCommand { get; }
 
     /// <summary>Refreshes the Map &amp; Types mod dropdown from the current in-memory loaded mods.</summary>
-    public void OnMapTypesTabActivated() => MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+    public void OnMapTypesTabActivated()
+    {
+        MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+        MapTypes.RestoreActiveSaveFromEconomy();
+    }
 
     private Settings LoadOrCreateSettings()
     {

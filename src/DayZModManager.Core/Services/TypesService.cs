@@ -82,21 +82,31 @@ public interface ITypesService
         IReadOnlySet<string> fileLeaves);
 
     /// <summary>
-    /// Regenerates cfgeconomycore.xml referencing only the types of the mods in
-    /// <paramref name="loadedModNames"/>. Returns false if the file is missing or malformed.
+    /// Regenerates the manager-owned ModTypes block in cfgeconomycore.xml
+    /// referencing only the types of the mods in <paramref name="loadedModNames"/>
+    /// from <paramref name="map"/>. <paramref name="folder"/> is written to the
+    /// block's <c>folder</c> attribute (configured db\ModTypes, or a loaded save's
+    /// types folder). Returns false if the file is missing or malformed.
     /// </summary>
     /// <param name="previouslyOwned">
     /// Type-file leaf names the manager owned before the current configuration was
     /// installed (e.g. the config replaced when a save was loaded). They are added
-    /// to the owned set so their now-deleted files are removed from
+    /// to the owned set so their now-removed files are dropped from
     /// cfgeconomycore.xml instead of being preserved as third-party entries.
     /// </param>
     bool SyncEconomyCore(
-        TypesConfig config,
-        string mapName,
+        MapTypesConfig? map,
         string missionPath,
+        string folder,
         IReadOnlySet<string> loadedModNames,
         IReadOnlySet<string>? previouslyOwned = null);
+
+    /// <summary>
+    /// Returns the <c>folder</c> value of the manager-owned ModTypes block in a
+    /// map's cfgeconomycore.xml, or null when none exists. Used to rediscover
+    /// whether the configured types or a loaded save is active.
+    /// </summary>
+    string? GetActiveTypesFolder(string missionPath);
 
     /// <summary>
     /// Returns the active generated type-file leaf names for a map (in the same
@@ -440,13 +450,12 @@ public sealed class TypesService : ITypesService
     }
 
     public bool SyncEconomyCore(
-        TypesConfig config,
-        string mapName,
+        MapTypesConfig? map,
         string missionPath,
+        string folder,
         IReadOnlySet<string> loadedModNames,
         IReadOnlySet<string>? previouslyOwned = null)
     {
-        MapTypesConfig? map = GetMap(config, mapName);
         IReadOnlyList<(string Leaf, string Type)> files = map is null
             ? Array.Empty<(string Leaf, string Type)>()
             : GetOrderedEconomyFiles(map, loadedModNames);
@@ -454,7 +463,7 @@ public sealed class TypesService : ITypesService
         // Ownership is the union of the current configuration and any ownership
         // carried over from the replaced configuration, so entries for files that
         // were owned before but are not desired now are recognized as stale and
-        // removed (their physical files were already deleted).
+        // removed (their physical files were already removed).
         var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (map is not null)
         {
@@ -470,6 +479,7 @@ public sealed class TypesService : ITypesService
         {
             return _economyCore.UpdateModTypes(
                 missionPath,
+                folder,
                 files.Select(file => file.Leaf).ToList(),
                 owned,
                 GetEconomyFileTypes(files));
@@ -479,6 +489,17 @@ public sealed class TypesService : ITypesService
             return false;
         }
     }
+
+    public string? GetActiveTypesFolder(string missionPath) => _economyCore.GetModTypesFolder(missionPath);
+
+    /// <summary>Convenience overload that targets the configured <c>./db/ModTypes</c> folder.</summary>
+    public bool SyncEconomyCore(
+        TypesConfig config,
+        string mapName,
+        string missionPath,
+        IReadOnlySet<string> loadedModNames,
+        IReadOnlySet<string>? previouslyOwned = null) =>
+        SyncEconomyCore(GetMap(config, mapName), missionPath, EconomyCoreService.ConfiguredFolder, loadedModNames, previouslyOwned);
 
     public TypesOperationResult RemoveUntrackedFiles(
         TypesConfig config,
@@ -581,6 +602,7 @@ public sealed class TypesService : ITypesService
         {
             if (_economyCore.UpdateModTypes(
                 missionPath,
+                EconomyCoreService.ConfiguredFolder,
                 files.Select(file => file.Leaf).ToList(),
                 owned,
                 GetEconomyFileTypes(files)))

@@ -68,12 +68,15 @@ public interface ISaveGameService
     /// <summary>
     /// Copies the live storage folder into the save library (nested under the
     /// save folder). When <paramref name="meta"/> is supplied it is written to
-    /// <c>meta.json</c> next to the copied folder, and the mission's
-    /// <c>db\ModTypes</c> folder is snapshot into the save as well.
+    /// <c>meta.json</c> next to the copied folder, and
+    /// <paramref name="typesSourceFolder"/> is snapshot into the save's
+    /// <c>ModTypes</c> folder. The source is the currently active types folder:
+    /// the live <c>db\ModTypes</c> for the configured types, or the loaded save's
+    /// own <c>ModTypes</c> folder when a save is currently active.
     /// </summary>
     SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
-        SaveMetaData? meta = null);
+        string typesSourceFolder, SaveMetaData? meta = null);
 
     /// <summary>
     /// Replaces the live storage folder with a stored save. The replacement is
@@ -222,9 +225,15 @@ public sealed partial class SaveGameService : ISaveGameService
     public string GetModTypesSnapshotPath(string dataDirectory, string mapName, string saveName) =>
         Path.Combine(GetSaveFolderPath(dataDirectory, mapName, saveName), ModTypesSnapshotFolderName);
 
+    /// <summary>Convenience overload that snapshots the live <c>db\ModTypes</c> folder.</summary>
     public SaveGameResult AddSave(
         string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
-        SaveMetaData? meta = null)
+        SaveMetaData? meta = null) =>
+        AddSave(serverPath, mapName, dataDirectory, saveName, overwrite, GetModTypesFolderPath(serverPath, mapName), meta);
+
+    public SaveGameResult AddSave(
+        string serverPath, string mapName, string dataDirectory, string saveName, bool overwrite,
+        string typesSourceFolder, SaveMetaData? meta = null)
     {
         if (_processState.IsDayZServerRunning())
         {
@@ -242,11 +251,6 @@ public sealed partial class SaveGameService : ISaveGameService
         {
             return Failure($"No storage folder found at {liveStorage}. Start the server once before saving progress.");
         }
-
-        // The live ModTypes folder sits beside the storage folder (under the
-        // mission's db subfolder). It holds the generated type files the world's
-        // economy loads, so a snapshot is taken alongside the world data.
-        string liveModTypes = GetModTypesFolderPath(serverPath, mapName);
 
         string target = Path.Combine(SavesLibrary(dataDirectory, mapName), name);
         if (_fileSystem.DirectoryExists(target) && !overwrite)
@@ -267,9 +271,9 @@ public sealed partial class SaveGameService : ISaveGameService
             // beside it without mixing into the world data.
             _fileSystem.CopyDirectory(liveStorage, Path.Combine(staging, Path.GetFileName(liveStorage)));
 
-            if (meta is not null && _fileSystem.DirectoryExists(liveModTypes))
+            if (meta is not null && _fileSystem.DirectoryExists(typesSourceFolder))
             {
-                _fileSystem.CopyDirectory(liveModTypes, Path.Combine(staging, ModTypesSnapshotFolderName));
+                _fileSystem.CopyDirectory(typesSourceFolder, Path.Combine(staging, ModTypesSnapshotFolderName));
             }
         }
         catch (Exception ex)
@@ -282,8 +286,8 @@ public sealed partial class SaveGameService : ISaveGameService
         {
             meta.Map = string.IsNullOrWhiteSpace(meta.Map) ? mapName : meta.Map;
             meta.StorageFolder = Path.GetFileName(liveStorage);
-            // Every save this version creates carries a mapping (possibly empty)
-            // so a later load can restore types_config.json and db\ModTypes.
+            // Every save this version creates carries a mapping (possibly empty) so
+            // a later load can point cfgeconomycore.xml at this save's ModTypes.
             meta.TypesConfig ??= new MapTypesConfig();
 
             try
@@ -432,64 +436,9 @@ public sealed partial class SaveGameService : ISaveGameService
         TryDeleteDirectory(backup);
         TryDeleteDirectory(liveStorage + TemporarySuffix);
 
-        // Restore the type files the world was saved with. This is best-effort:
-        // a failure here must not turn a successful world load into a failure.
-        IReadOnlyList<string> warnings = RestoreTypesForLoadedSave(serverPath, mapName, dataDirectory, name);
-        return new SaveGameResult
-        {
-            Success = true,
-            Message = $"Loaded save \"{name}\" into {Path.GetFileName(liveStorage)}.",
-            Warnings = warnings,
-        };
-    }
-
-    /// <summary>
-    /// Replaces the live <c>db\ModTypes</c> with the save's snapshot using the
-    /// mapping from its <c>meta.json</c>. Returns human-readable warnings for the
-    /// caller to log; a failure here is non-fatal to the world load.
-    /// </summary>
-    private IReadOnlyList<string> RestoreTypesForLoadedSave(
-        string serverPath, string mapName, string dataDirectory, string saveName)
-    {
-        var warnings = new List<string>();
-
-        SaveMetaData? meta;
-        try
-        {
-            ConfigLoadResult<SaveMetaData> loaded = GetMeta(dataDirectory, mapName, saveName);
-            meta = loaded.Status == ConfigLoadStatus.Success ? loaded.Value : null;
-        }
-        catch (Exception)
-        {
-            meta = null;
-        }
-
-        if (meta?.TypesConfig is null)
-        {
-            warnings.Add("This save's types mapping is missing; type files were not restored.");
-            return warnings;
-        }
-
-        string liveTypes = GetModTypesFolderPath(serverPath, mapName);
-        string snapshot = GetModTypesSnapshotPath(dataDirectory, mapName, saveName);
-        bool hasSnapshot = _fileSystem.DirectoryExists(snapshot);
-        bool mappingHasFiles = meta.TypesConfig.Mods.Any(entry => entry.GeneratedFiles.Count > 0);
-
-        // A non-empty mapping with no snapshot is a partially-written save: do not
-        // clear the live folder on the strength of it.
-        if (!hasSnapshot && mappingHasFiles)
-        {
-            warnings.Add("This save's stored type files are missing; type files were not restored.");
-            return warnings;
-        }
-
-        DirectorySwap.CleanStaleStaging(_fileSystem, liveTypes);
-        if (!DirectorySwap.TryReplace(_fileSystem, liveTypes, hasSnapshot ? snapshot : null, out string error))
-        {
-            warnings.Add($"Failed to restore type files: {error}");
-        }
-
-        return warnings;
+        // The world's type files are read in place from the save's own ModTypes
+        // folder (the caller points cfgeconomycore.xml at it), so no copy is made.
+        return Success($"Loaded save \"{name}\" into {Path.GetFileName(liveStorage)}.");
     }
 
     public ConfigLoadResult<SaveMetaData> GetMeta(string dataDirectory, string mapName, string saveName)

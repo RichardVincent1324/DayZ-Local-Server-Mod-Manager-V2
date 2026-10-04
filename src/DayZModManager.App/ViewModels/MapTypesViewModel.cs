@@ -19,7 +19,6 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
     private readonly ISaveGameService _saveGameService;
-    private readonly ITypesBackupService _typesBackup;
     private readonly ITypesConfigStore _typesConfigStore;
     private readonly IServerConfigService _serverConfig;
     private readonly IBatchFileService _batchFile;
@@ -51,7 +50,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         IMapService mapService,
         ITypesService typesService,
         ISaveGameService saveGameService,
-        ITypesBackupService typesBackup,
         ITypesConfigStore typesConfigStore,
         IServerConfigService serverConfig,
         IBatchFileService batchFile,
@@ -66,7 +64,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         _mapService = mapService;
         _typesService = typesService;
         _saveGameService = saveGameService;
-        _typesBackup = typesBackup;
         _typesConfigStore = typesConfigStore;
         _serverConfig = serverConfig;
         _batchFile = batchFile;
@@ -238,6 +235,20 @@ public sealed class MapTypesViewModel : ViewModelBase
     private (string MapName, string SaveName)? _activeSave;
 
     /// <summary>
+    /// The types mapping that is currently active: the loaded save's mapping while
+    /// a save is active, otherwise null (meaning the configured mapping in
+    /// <see cref="_typesConfig"/> is active).
+    /// </summary>
+    private MapTypesConfig? _activeTypesConfig;
+
+    /// <summary>Clears the loaded-save state so the configured types become active.</summary>
+    private void ClearActiveSave()
+    {
+        _activeSave = null;
+        _activeTypesConfig = null;
+    }
+
+    /// <summary>
     /// After a successful Apply, appends any newly loaded mods to the active
     /// save's meta.json (append-only union) so the save keeps track of them.
     /// </summary>
@@ -306,6 +317,8 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         if (!string.IsNullOrEmpty(_typesConfig.CurrentMap))
         {
+            RestoreActiveSaveFromEconomy();
+
             if (!_discoveredMaps.Any(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)))
             {
                 _log.Warning($"Previously applied map \"{_typesConfig.CurrentMap}\" was not found on this server. Select a valid map.");
@@ -334,6 +347,60 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         SetRestoringSelection(defaultMap);
+    }
+
+    /// <summary>
+    /// Rediscovers the loaded save from the manager-owned cfgeconomycore.xml block
+    /// after a restart: a block pointing under <c>Progress_Saves</c> identifies the
+    /// active save, so its types and mod-list bookkeeping continue to work. A block
+    /// pointing at the configured folder clears any stale active save.
+    /// </summary>
+    public void RestoreActiveSaveFromEconomy()
+    {
+        if (string.IsNullOrEmpty(_typesConfig.CurrentMap) || string.IsNullOrWhiteSpace(_serverPath))
+        {
+            return;
+        }
+
+        string? missionPath = _discoveredMaps
+            .FirstOrDefault(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase))
+            ?.Path;
+        if (missionPath is null)
+        {
+            return;
+        }
+
+        string? folder = _typesService.GetActiveTypesFolder(missionPath);
+        if (folder is null)
+        {
+            return;
+        }
+
+        string normalized = folder.Trim().Replace('\\', '/');
+        if (normalized.Equals(EconomyCoreService.ConfiguredFolder, StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!ActiveSaveForCurrentMap)
+            {
+                ClearActiveSave();
+            }
+
+            return;
+        }
+
+        // Expect .../Progress_Saves/<map>/<save>/ModTypes.
+        string[] parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        int modTypesIndex = Array.FindLastIndex(parts, part => part.Equals("ModTypes", StringComparison.OrdinalIgnoreCase));
+        if (modTypesIndex < 3
+            || !parts[modTypesIndex - 3].Equals("Progress_Saves", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string saveName = parts[modTypesIndex - 1];
+        string dataDirectory = _dataDirectoryProvider.Current;
+        _activeSave = (_typesConfig.CurrentMap, saveName);
+        _activeTypesConfig = LoadActiveTypesConfig(_typesConfig.CurrentMap, dataDirectory, saveName);
     }
 
     /// <summary>Rebuilds the map dropdown from discovered maps plus any maps already configured.</summary>
@@ -400,8 +467,12 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Regenerates cfgeconomycore.xml for the applied map, referencing only loaded mods' types.</summary>
-    public bool SyncEconomyCore()
+    /// <summary>
+    /// Regenerates the manager-owned ModTypes block in cfgeconomycore.xml for the
+    /// applied map. The block points at whichever types are active: the configured
+    /// <c>db\ModTypes</c>, or the loaded save's own ModTypes folder.
+    /// </summary>
+    public bool SyncEconomyCore(IReadOnlySet<string>? previouslyOwned = null)
     {
         string? missionPath = ResolveAppliedMapPath();
         if (missionPath is null)
@@ -409,7 +480,8 @@ public sealed class MapTypesViewModel : ViewModelBase
             return false;
         }
 
-        bool updated = _typesService.SyncEconomyCore(_typesConfig, _typesConfig.CurrentMap, missionPath, LoadedSet());
+        bool updated = _typesService.SyncEconomyCore(
+            ActiveMapConfig(), missionPath, ActiveCeFolderValue(missionPath), LoadedSet(), previouslyOwned);
         if (!updated)
         {
             _log.Warning("Failed to update cfgeconomycore.xml.");
@@ -420,11 +492,53 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Returns the current map's types config, if present.</summary>
+    /// <summary>True when a loaded save's types are currently active for the applied map.</summary>
+    private bool ActiveSaveForCurrentMap =>
+        _activeSave is { } active
+        && string.Equals(active.MapName, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The active types mapping: the loaded save's mapping, or the configured one.</summary>
+    private MapTypesConfig? ActiveMapConfig() =>
+        ActiveSaveForCurrentMap ? _activeTypesConfig : CurrentMapConfig();
+
+    /// <summary>Returns the current map's configured types config, if present.</summary>
     private MapTypesConfig? CurrentMapConfig() =>
         string.IsNullOrEmpty(_typesConfig.CurrentMap)
             ? null
             : _typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map) ? map : null;
+
+    /// <summary>The absolute folder holding the active types (save snapshot or live db\ModTypes).</summary>
+    private string? ActiveTypesFolderAbsolute()
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            return null;
+        }
+
+        if (ActiveSaveForCurrentMap && _activeSave is { } active)
+        {
+            return _saveGameService.GetModTypesSnapshotPath(
+                _dataDirectoryProvider.Current, active.MapName, active.SaveName);
+        }
+
+        return Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap, "db", "ModTypes");
+    }
+
+    /// <summary>
+    /// The <c>folder</c> value for the manager-owned cfgeconomycore.xml block:
+    /// <c>./db/ModTypes</c> when the configured types are active, otherwise the
+    /// active folder relative to the mission (forward slashes).
+    /// </summary>
+    private string ActiveCeFolderValue(string missionPath)
+    {
+        string? activeFolder = ActiveTypesFolderAbsolute();
+        if (activeFolder is null || !ActiveSaveForCurrentMap)
+        {
+            return EconomyCoreService.ConfiguredFolder;
+        }
+
+        return Path.GetRelativePath(missionPath, activeFolder).Replace('\\', '/');
+    }
 
     private string? ResolveAppliedMapPath()
     {
@@ -905,7 +1019,6 @@ public sealed class MapTypesViewModel : ViewModelBase
                     _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
                 }
 
-                CaptureConfiguredTypes();
                 _log.Success("Removed selected types files.");
                 RebuildRows();
                 NotifyCommandStates();
@@ -1070,39 +1183,42 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
+        // The loaded world reads its type files in place from the save's own
+        // ModTypes folder. Refuse the load when the save claims type files but its
+        // snapshot folder is missing: pointing cfgeconomycore.xml at a missing
+        // folder would break the world's economy.
+        MapTypesConfig? savedMapping = LoadActiveTypesConfig(mapName, dataDirectory, saveName);
+        bool mappingHasFiles = savedMapping?.Mods.Any(entry => entry.GeneratedFiles.Count > 0) ?? false;
+        bool hasSnapshot = _fileSystem.DirectoryExists(
+            _saveGameService.GetModTypesSnapshotPath(dataDirectory, mapName, saveName));
+        if (mappingHasFiles && !hasSnapshot)
+        {
+            _log.Error($"Save \"{saveName}\" is missing its stored type files; load cancelled.");
+            return;
+        }
+
         string serverPath = _serverPath;
+        IReadOnlySet<string> configuredOwned = OwnedLeaves(CurrentMapConfig());
         IsSaveBusy = true;
         try
         {
-            // Preserve the configured types before the loaded world replaces them,
-            // so a later New Game can restore the user's own configuration.
-            _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? configured);
-            TypesBackupResult backup = await Task.Run(
-                () => _typesBackup.EnsureCaptured(serverPath, mapName, dataDirectory, configured));
-            if (!backup.Success)
-            {
-                foreach (string backupMessage in backup.Messages)
-                {
-                    _log.Error(backupMessage);
-                }
-
-                _log.Error("Load cancelled: the configured types could not be preserved.");
-                return;
-            }
-
             SaveGameResult result = await Task.Run(
                 () => _saveGameService.LoadSave(serverPath, mapName, dataDirectory, saveName));
             LogSaveResult(result);
 
             if (result.Success)
             {
-                ApplyRestoredTypesConfig(mapName, dataDirectory, saveName);
+                // Make the save's types the active source and point the economy core
+                // at its folder. types_config.json (the configured mapping) is left
+                // untouched, and the configured files stay in the live db\ModTypes.
+                _activeSave = (mapName, saveName);
+                _activeTypesConfig = savedMapping;
+                SyncEconomyCore(configuredOwned);
 
                 // Replace the loaded mods with the save's and apply them so the
                 // batch file, mod_order.json and junctions match the saved world.
                 if (report.HasSnapshot && RestoreModList is not null)
                 {
-                    _activeSave = (mapName, saveName);
                     bool modsRestored = await RestoreModList(report.SavedModList);
                     if (!modsRestored)
                     {
@@ -1124,61 +1240,28 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Mirrors the loaded save's types mapping into types_config.json and syncs
-    /// cfgeconomycore.xml, so the configuration matches the restored db\ModTypes.
-    /// </summary>
-    private void ApplyRestoredTypesConfig(string mapName, string dataDirectory, string saveName)
+    /// <summary>Loads the types mapping recorded in a save's meta.json, if readable.</summary>
+    private MapTypesConfig? LoadActiveTypesConfig(string mapName, string dataDirectory, string saveName)
     {
-        SaveMetaData? meta;
         try
         {
             ConfigLoadResult<SaveMetaData> loaded = _saveGameService.GetMeta(dataDirectory, mapName, saveName);
-            meta = loaded.Status == ConfigLoadStatus.Success ? loaded.Value : null;
+            return loaded.Status == ConfigLoadStatus.Success ? loaded.Value?.TypesConfig : null;
         }
         catch (Exception)
         {
-            meta = null;
-        }
-
-        if (meta?.TypesConfig is null)
-        {
-            _log.Warning("The save has no types mapping; types_config.json was left unchanged.");
-            return;
-        }
-
-        // Capture what the manager owned before the save's mapping replaces it:
-        // LoadSave has already deleted those files from db\ModTypes, so their
-        // cfgeconomycore entries must be removed even though the new mapping no
-        // longer records them.
-        IReadOnlySet<string> previouslyOwned = _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? replaced)
-            ? replaced.Mods
-                .SelectMany(entry => entry.GeneratedFiles)
-                .Select(generated => Path.GetFileName(generated)!)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        _typesConfig.Maps[mapName] = meta.TypesConfig;
-        try
-        {
-            _typesConfigStore.Save(dataDirectory, _typesConfig);
-        }
-        catch (Exception ex)
-        {
-            _log.Error($"Failed to persist the restored types configuration: {ex.Message}");
-            return;
-        }
-
-        string missionPath = Path.Combine(_serverPath, "mpmissions", mapName);
-        if (!_typesService.SyncEconomyCore(_typesConfig, mapName, missionPath, LoadedSet(), previouslyOwned))
-        {
-            _log.Warning("Restored the types mapping, but cfgeconomycore.xml could not be updated.");
-        }
-        else
-        {
-            _log.Info("Restored the types files and types configuration for the loaded world.");
+            return null;
         }
     }
+
+    /// <summary>The generated type-file leaf names a map configuration owns.</summary>
+    private static IReadOnlySet<string> OwnedLeaves(MapTypesConfig? map) =>
+        map is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : map.Mods
+                .SelectMany(entry => entry.GeneratedFiles)
+                .Select(generated => Path.GetFileName(generated)!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private async void AddSave()
     {
@@ -1220,8 +1303,9 @@ public sealed class MapTypesViewModel : ViewModelBase
         try
         {
             SaveMetaData meta = BuildSaveSnapshot(mapName);
+            string typesSourceFolder = ActiveTypesFolderAbsolute() ?? string.Empty;
             SaveGameResult result = await Task.Run(
-                () => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists, meta));
+                () => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists, typesSourceFolder, meta));
             LogSaveResult(result);
             if (result.Success)
             {
@@ -1252,6 +1336,18 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
+        // A loaded world's economy reads types directly from its save folder, so the
+        // active save must not be deleted until another source is active.
+        if (_activeSave is { } activeForDelete
+            && string.Equals(activeForDelete.MapName, mapName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(activeForDelete.SaveName, saveName, StringComparison.OrdinalIgnoreCase))
+        {
+            string block = "This save is currently loaded. Load another save or start a New Game before deleting it.";
+            _log.Error(block);
+            _dialogs.ShowMessage(block, "Delete Save", isError: true);
+            return;
+        }
+
         bool confirmed = _dialogs.Confirm(
             $"Delete the stored save \"{saveName}\"? This cannot be undone.", "Delete Save");
         if (!confirmed)
@@ -1273,13 +1369,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             LogSaveResult(result);
             if (result.Success)
             {
-                if (_activeSave is { } active
-                    && string.Equals(active.MapName, mapName, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(active.SaveName, saveName, StringComparison.OrdinalIgnoreCase))
-                {
-                    _activeSave = null;
-                }
-
                 RefreshSaves();
             }
         }
@@ -1321,21 +1410,20 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        string dataDirectory = _dataDirectoryProvider.Current;
         IsSaveBusy = true;
         try
         {
+            // Entries owned by the currently active types must be dropped from the
+            // economy core when the configured types take over again.
+            IReadOnlySet<string> previouslyOwned = OwnedLeaves(ActiveMapConfig());
             SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName));
             LogSaveResult(result);
             if (result.Success)
             {
-                if (_activeSave is { } active
-                    && string.Equals(active.MapName, mapName, StringComparison.OrdinalIgnoreCase))
-                {
-                    _activeSave = null;
-                }
-
-                await RestoreConfiguredTypesAsync(mapName, dataDirectory);
+                // The configured types (live db\ModTypes) become active again; point
+                // the economy core back at them. No files need to be copied.
+                ClearActiveSave();
+                SyncEconomyCore(previouslyOwned);
                 NotifyCommandStates();
                 RebuildRows();
             }
@@ -1347,52 +1435,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         finally
         {
             IsSaveBusy = false;
-        }
-    }
-
-    /// <summary>
-    /// Restores the configured types (files and mapping) saved in the backup
-    /// folder, so a new world starts from the configuration the user set up
-    /// rather than the previously loaded save's types.
-    /// </summary>
-    private async Task RestoreConfiguredTypesAsync(string mapName, string dataDirectory)
-    {
-        string serverPath = _serverPath;
-        TypesBackupResult restore = await Task.Run(
-            () => _typesBackup.Restore(serverPath, mapName, dataDirectory));
-
-        foreach (string message in restore.Messages)
-        {
-            if (restore.Success)
-            {
-                _log.Info(message);
-            }
-            else
-            {
-                _log.Warning(message);
-            }
-        }
-
-        if (!restore.Success || restore.Config is null)
-        {
-            return;
-        }
-
-        _typesConfig.Maps[mapName] = restore.Config;
-        try
-        {
-            _typesConfigStore.Save(dataDirectory, _typesConfig);
-        }
-        catch (Exception ex)
-        {
-            _log.Error($"Failed to persist the restored types configuration: {ex.Message}");
-            return;
-        }
-
-        string missionPath = Path.Combine(_serverPath, "mpmissions", mapName);
-        if (!_typesService.SyncEconomyCore(_typesConfig, mapName, missionPath, LoadedSet()))
-        {
-            _log.Warning("Restored the configured types mapping, but cfgeconomycore.xml could not be updated.");
         }
     }
 
@@ -1436,14 +1478,21 @@ public sealed class MapTypesViewModel : ViewModelBase
             storageFolder = string.Empty;
         }
 
+        MapTypesConfig? active = ActiveMapConfig();
+        var activeConfig = new TypesConfig { CurrentMap = mapName };
+        if (active is not null)
+        {
+            activeConfig.Maps[mapName] = active;
+        }
+
         return new SaveMetaData
         {
             Map = mapName,
             StorageFolder = storageFolder,
             SavedAtUtc = DateTime.UtcNow,
             ModList = _loadedMods.ToList(),
-            TypesFiles = _typesService.GetActiveTypeFileNames(_typesConfig, mapName, LoadedSet()).ToList(),
-            TypesConfig = CloneMapTypes(_typesConfig.Maps.GetValueOrDefault(mapName)),
+            TypesFiles = _typesService.GetActiveTypeFileNames(activeConfig, mapName, LoadedSet()).ToList(),
+            TypesConfig = CloneMapTypes(active),
         };
     }
 
@@ -1582,7 +1631,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         if (result.Success)
         {
             _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
-            CaptureConfiguredTypes();
             _log.Success(successMessage);
             RebuildRows();
             NotifyCommandStates();
@@ -1590,31 +1638,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         else
         {
             _log.Error("Operation failed.");
-        }
-    }
-
-    /// <summary>
-    /// Mirrors the live types folder and its mapping into the per-map backup so a
-    /// later Load Save preserves the user's configured types for the next New Game.
-    /// Best-effort: a failure is logged but never fails the completed operation.
-    /// </summary>
-    private void CaptureConfiguredTypes()
-    {
-        string mapName = _typesConfig.CurrentMap;
-        if (string.IsNullOrWhiteSpace(mapName) || string.IsNullOrWhiteSpace(_serverPath))
-        {
-            return;
-        }
-
-        _typesConfig.Maps.TryGetValue(mapName, out MapTypesConfig? configured);
-        TypesBackupResult result = _typesBackup.Capture(
-            _serverPath, mapName, _dataDirectoryProvider.Current, configured ?? new MapTypesConfig());
-        if (!result.Success)
-        {
-            foreach (string message in result.Messages)
-            {
-                _log.Warning(message);
-            }
         }
     }
 
@@ -1627,7 +1650,8 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map))
+        MapTypesConfig? map = ActiveMapConfig();
+        if (map is not null)
         {
             var valid = new HashSet<string>(_allMods, StringComparer.Ordinal);
             var loaded = LoadedSet();
@@ -1675,8 +1699,12 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         try
         {
-            string missionPath = Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap);
-            string typesFolder = Path.Combine(missionPath, "db", "ModTypes");
+            string? typesFolder = ActiveTypesFolderAbsolute();
+            if (typesFolder is null)
+            {
+                return;
+            }
+
             foreach (string file in _fileSystem.GetFiles(typesFolder, "*.xml", recursive: false))
             {
                 string leaf = Path.GetFileName(file);

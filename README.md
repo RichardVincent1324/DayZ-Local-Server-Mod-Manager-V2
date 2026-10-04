@@ -175,6 +175,7 @@ verifySignatures = 0;
 - Ask for confirmation before overwriting or deleting configured types files.
 - Support `Remove Selected` and `Clean Invalid` maintenance operations.
 - Lock types editing once a world exists (`storage_<instanceId>` present), because DayZ only reads these files when a new world is created; `New Game` unlocks it.
+- Open the active mission's `db/ModTypes` folder, or the `map_profiles` folder, directly in File Explorer from the buttons beside **Config XML** and **Current Map**.
 
 ### Progress saves
 
@@ -185,11 +186,11 @@ verifySignatures = 0;
 - Store save metadata in `meta.json`, including map information, save time, mod order, active types files, and the map's types mapping.
 - Add, load, and delete named saves.
 - Start a new game from the manager.
-- Restore the saved `db/ModTypes` files and the matching `types_config.json` mapping when loading a save, and resynchronize `cfgeconomycore.xml`.
+- Load a save by pointing `cfgeconomycore.xml` at the save's own `db/ModTypes` copy, so the world reads its saved types while the configured `db/ModTypes` files and `types_config.json` stay untouched.
 - Restore the loaded mod list to match the save's mod list on load: the launch batch, `mod_order.json` and junctions are updated, and mods not in the save are unloaded (their Workshop folders are never deleted).
 - Block loading a save whose mods are missing from the Workshop, listing them in a red warning.
 - While a save is loaded, mods added afterwards are appended to that save's `meta.json` ModList so the save keeps track of them.
-- Preserve the configured types in a per-map `ModTypes_Backup` folder so `New Game` can restore them (DayZ only applies type files to a new world).
+- Keep the configured types in the live `db/ModTypes` folder. Loading a save points `cfgeconomycore.xml` at the save's own `ModTypes` copy instead of overwriting the configured files, so `New Game` simply points it back — the configured types are never displaced.
 - Stage save loading so an interrupted operation does not immediately destroy the current world progress.
 
 ### Settings and data storage
@@ -215,10 +216,6 @@ DayZ-Mod-Manager-V2\
 ├─ settings.json
 ├─ mod_order.json
 ├─ types_config.json
-├─ ModTypes_Backup\
-│  └─ <mapName>\
-│     ├─ config.json
-│     └─ ModTypes\
 └─ Progress_Saves\
    └─ <mapName>\
       └─ <saveName>\
@@ -303,7 +300,6 @@ A configured server may look similar to this:
 │  ├─ settings.json
 │  ├─ mod_order.json
 │  ├─ types_config.json
-│  ├─ ModTypes_Backup\
 │  └─ Progress_Saves\
 ├─ LocalServer.bat
 ├─ ModList\

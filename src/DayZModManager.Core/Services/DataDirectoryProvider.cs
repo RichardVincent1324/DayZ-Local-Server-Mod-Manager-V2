@@ -35,16 +35,6 @@ namespace DayZModManager.Core.Services;
 
     public sealed class DataDirectoryProvider : IDataDirectoryProvider
     {
-        // Only the types configuration must be carried across a relocation: the
-        // ApplyService authors settings.json and mod_order.json into the target
-        // directory before MoveTo runs (and MoveTo re-authors settings.json), so
-        // migrating those two over the freshly-written copies would clobber the
-        // just-applied mod order. Saves are migrated separately.
-        private static readonly string[] DataFileNames =
-        {
-            ConfigFileNames.TypesConfig,
-        };
-
         private readonly IFileSystem _fileSystem;
 
         private string _current = string.Empty;
@@ -91,12 +81,12 @@ namespace DayZModManager.Core.Services;
 
         if (!string.Equals(target, _current, StringComparison.OrdinalIgnoreCase))
         {
-            // A failed migration must never silently strand user data (the per-map
-            // types configuration and the progress saves) in a directory the app
-            // stops reading. Abort the relocation before the pointer moves so the
-            // caller surfaces the error and the data stays in the source directory.
-            MigrateDataFiles(_current, target);
-            MigrateSavesDirectory(_current, target);
+            // A failed migration must never silently strand user data (the preset
+            // hierarchy: server configuration, mod order, types configuration and
+            // world saves) in a directory the app stops reading. Abort the
+            // relocation before the pointer moves so the caller surfaces the error
+            // and the data stays in the source directory.
+            MigratePresetsDirectory(_current, target);
         }
 
         _current = target;
@@ -105,56 +95,28 @@ namespace DayZModManager.Core.Services;
         ConfigJson.Write(_fileSystem, Path.Combine(target, ConfigFileNames.Settings), settings);
     }
 
-    private void MigrateSavesDirectory(string source, string target)
+    private void MigratePresetsDirectory(string source, string target)
     {
         if (string.IsNullOrEmpty(source) || string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        string sourceSaves = Path.Combine(source, SaveGameService.SavesRootName);
-        if (!_fileSystem.DirectoryExists(sourceSaves))
+        string sourcePresets = Path.Combine(source, PresetPaths.PresetsDirectoryName);
+        if (!_fileSystem.DirectoryExists(sourcePresets))
         {
             return;
         }
 
         try
         {
-            // Merge into any existing Saves folder, then remove the source copy.
-            _fileSystem.CopyDirectory(sourceSaves, Path.Combine(target, SaveGameService.SavesRootName));
-            _fileSystem.DeleteDirectory(sourceSaves, recursive: true);
+            // Merge into any existing Presets folder, then remove the source copy.
+            _fileSystem.CopyDirectory(sourcePresets, Path.Combine(target, PresetPaths.PresetsDirectoryName));
+            _fileSystem.DeleteDirectory(sourcePresets, recursive: true);
         }
         catch (Exception ex)
         {
-            throw new IOException($"Failed to move the progress saves to {target}: {ex.Message}", ex);
-        }
-    }
-
-    private void MigrateDataFiles(string source, string target)
-    {
-        if (string.IsNullOrEmpty(source) || string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        foreach (string fileName in DataFileNames)
-        {
-            string sourcePath = Path.Combine(source, fileName);
-            if (!_fileSystem.FileExists(sourcePath))
-            {
-                continue;
-            }
-
-            try
-            {
-                string targetPath = Path.Combine(target, fileName);
-                _fileSystem.CopyFile(sourcePath, targetPath);
-                _fileSystem.DeleteFile(sourcePath);
-            }
-            catch (Exception ex)
-            {
-                throw new IOException($"Failed to move {fileName} to {target}: {ex.Message}", ex);
-            }
+            throw new IOException($"Failed to move the presets to {target}: {ex.Message}", ex);
         }
     }
 

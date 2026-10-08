@@ -7,8 +7,9 @@ public class JunctionServiceTests
 {
     private const string ServerPath = @"D:\DayZServer";
     private const string WorkshopPath = @"D:\DayZ\!Workshop";
+    private const string PresetKey = "1";
 
-    private static string ModFolder => Path.Combine(ServerPath, ModListFolder.Name);
+    private static string ModFolder => Path.Combine(ServerPath, ModListFolder.Name, PresetKey);
 
     private static (JunctionService Service, FakeFileSystem Fs, FakeJunctionOperations Junctions) CreateService()
     {
@@ -24,7 +25,7 @@ public class JunctionServiceTests
         fs.AddDirectory(WorkshopPath, "@CF");
         fs.AddDirectory(ServerPath);
 
-        service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.True(fs.DirectoryExists(ModFolder));
     }
@@ -36,7 +37,7 @@ public class JunctionServiceTests
         fs.AddDirectory(WorkshopPath, "@CF", "@Expansion");
         fs.AddDirectory(ServerPath);
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(1, result.Created);
         Assert.Equal(0, result.Failed);
@@ -54,7 +55,7 @@ public class JunctionServiceTests
         string link = Path.Combine(ModFolder, "@CF");
         junctions.Create(link, Path.Combine(WorkshopPath, "@CF"));
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(0, result.Created);
         Assert.Equal(1, result.Skipped);
@@ -68,7 +69,7 @@ public class JunctionServiceTests
         string link = Path.Combine(ModFolder, "@CF");
         junctions.Create(link, @"D:\OldWorkshop\@CF");
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(0, result.Failed);
         Assert.Equal(1, result.Created);
@@ -85,7 +86,7 @@ public class JunctionServiceTests
         junctions.Create(Path.Combine(ModFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
         junctions.Create(Path.Combine(ModFolder, "@OldMod"), Path.Combine(WorkshopPath, "@OldMod"));
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(1, result.Removed);
         Assert.False(junctions.IsJunction(Path.Combine(ModFolder, "@OldMod")));
@@ -101,7 +102,7 @@ public class JunctionServiceTests
         string rootJunction = Path.Combine(ServerPath, "@CF");
         junctions.Create(rootJunction, Path.Combine(WorkshopPath, "@CF"));
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.True(junctions.IsJunction(rootJunction));
         Assert.Equal(1, result.Created);
@@ -115,7 +116,7 @@ public class JunctionServiceTests
         fs.AddDirectory(ServerPath);
         fs.AddDirectory(ModFolder, "@CF"); // physical folder, not a junction
 
-        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.Sync(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(1, result.Failed);
         Assert.Contains(result.Messages, m => m.Contains("conflict", StringComparison.OrdinalIgnoreCase));
@@ -129,7 +130,7 @@ public class JunctionServiceTests
         fs.AddDirectory(ServerPath);
         junctions.Create(Path.Combine(ModFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
 
-        IReadOnlyList<string> missing = service.Verify(ServerPath, new[] { "@CF", "@Expansion" });
+        IReadOnlyList<string> missing = service.Verify(ServerPath, PresetKey, new[] { "@CF", "@Expansion" });
 
         Assert.Equal(new[] { "@Expansion" }, missing);
     }
@@ -140,7 +141,7 @@ public class JunctionServiceTests
         (JunctionService service, FakeFileSystem fs, _) = CreateService();
         fs.AddDirectory(ServerPath);
 
-        IReadOnlyList<string> missing = service.Verify(ServerPath, new[] { "@CF", "@Expansion" });
+        IReadOnlyList<string> missing = service.Verify(ServerPath, PresetKey, new[] { "@CF", "@Expansion" });
 
         Assert.Equal(new[] { "@CF", "@Expansion" }, missing);
     }
@@ -155,7 +156,7 @@ public class JunctionServiceTests
         junctions.Create(Path.Combine(ModFolder, "@Ghost"), "x");
 
         var valid = new HashSet<string>(new[] { "@CF" }, StringComparer.Ordinal);
-        IReadOnlyList<string> orphans = service.FindOrphanedJunctions(ServerPath, valid);
+        IReadOnlyList<string> orphans = service.FindOrphanedJunctions(ServerPath, PresetKey, valid);
 
         Assert.Equal(new[] { "@Ghost" }, orphans);
     }
@@ -171,7 +172,7 @@ public class JunctionServiceTests
         junctions.Create(Path.Combine(ModFolder, "@Expansion"), @"D:\OldWorkshop\@Expansion"); // stale target
         junctions.Create(Path.Combine(ModFolder, "@OldMod"), Path.Combine(WorkshopPath, "@OldMod")); // orphan
 
-        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(0, result.Failed);
         Assert.Equal(0, result.Removed);
@@ -193,7 +194,7 @@ public class JunctionServiceTests
         junctions.Create(Path.Combine(ModFolder, "@Expansion"), @"D:\OldWorkshop\@Expansion"); // stale, still loaded
         junctions.Create(Path.Combine(ModFolder, "@OldMod"), Path.Combine(WorkshopPath, "@OldMod")); // orphan
 
-        JunctionSyncResult result = service.Finalize(ServerPath, WorkshopPath, new[] { "@CF", "@Expansion" });
+        JunctionSyncResult result = service.Finalize(ServerPath, WorkshopPath, PresetKey, new[] { "@CF", "@Expansion" });
 
         Assert.Equal(0, result.Failed);
         Assert.Equal(1, result.Removed);
@@ -210,7 +211,7 @@ public class JunctionServiceTests
         junctions.Create(link, @"D:\OldWorkshop\@CF");
 
         // Workshop path changed and @CF is not present in the new location yet.
-        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, new[] { "@CF" });
+        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
         Assert.Equal(1, result.Failed);
         Assert.Contains(result.Messages, m => m.Contains("Mod not found in workshop", StringComparison.OrdinalIgnoreCase));
@@ -218,5 +219,52 @@ public class JunctionServiceTests
         // The previously-working junction must be left intact for a failed/aborted Apply.
         Assert.True(junctions.IsJunction(link));
         Assert.Equal(@"D:\OldWorkshop\@CF", junctions.Targets[link]);
+    }
+
+    [Fact]
+    public void Finalize_DoesNotTouchAnotherPresetsJunctions()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(WorkshopPath, "@CF");
+        fs.AddDirectory(ServerPath);
+
+        string otherFolder = Path.Combine(ServerPath, ModListFolder.Name, "2");
+        fs.AddDirectory(otherFolder, "@CF", "@OtherOnly");
+        junctions.Create(Path.Combine(otherFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
+        junctions.Create(Path.Combine(otherFolder, "@OtherOnly"), Path.Combine(WorkshopPath, "@OtherOnly"));
+
+        // Finalizing preset "1" (which has no mods) must leave preset "2" untouched.
+        JunctionSyncResult result = service.Finalize(ServerPath, WorkshopPath, PresetKey, Array.Empty<string>());
+
+        Assert.Equal(0, result.Removed);
+        Assert.True(junctions.IsJunction(Path.Combine(otherFolder, "@CF")));
+        Assert.True(junctions.IsJunction(Path.Combine(otherFolder, "@OtherOnly")));
+    }
+
+    [Fact]
+    public void DeleteJunctionFolder_RemovesPresetFolderAndLinks()
+    {
+        (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
+        fs.AddDirectory(ServerPath);
+        fs.AddDirectory(ModFolder, "@CF", "@Expansion");
+        junctions.Create(Path.Combine(ModFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
+        junctions.Create(Path.Combine(ModFolder, "@Expansion"), Path.Combine(WorkshopPath, "@Expansion"));
+
+        service.DeleteJunctionFolder(ServerPath, PresetKey);
+
+        Assert.False(junctions.IsJunction(Path.Combine(ModFolder, "@CF")));
+        Assert.False(junctions.IsJunction(Path.Combine(ModFolder, "@Expansion")));
+        Assert.False(fs.DirectoryExists(ModFolder));
+    }
+
+    [Fact]
+    public void DeleteJunctionFolder_IsNoOp_WhenFolderMissing()
+    {
+        (JunctionService service, FakeFileSystem fs, _) = CreateService();
+        fs.AddDirectory(ServerPath);
+
+        service.DeleteJunctionFolder(ServerPath, PresetKey);
+
+        Assert.False(fs.DirectoryExists(ModFolder));
     }
 }

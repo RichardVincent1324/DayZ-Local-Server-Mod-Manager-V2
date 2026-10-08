@@ -7,11 +7,13 @@ public class ServerConfigServiceTests
 {
     private const string ServerPath = @"D:\DayZServer";
 
+    private static string ConfigPath => $@"{ServerPath}\serverDZ.cfg";
+
     [Fact]
     public void UpdateTemplate_ReplacesTemplateLine()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ServerPath}\serverDZ.cfg", """
+        fs.AddFile(ConfigPath, """
             class Missions
             {
                 class DayZ
@@ -22,10 +24,10 @@ public class ServerConfigServiceTests
             """);
         var service = new ServerConfigService(fs);
 
-        bool result = service.UpdateTemplate(ServerPath, "dayzOffline.sakhal");
+        bool result = service.UpdateTemplate(ConfigPath, "dayzOffline.sakhal");
 
         Assert.True(result);
-        string content = fs.TryGetFileContents($@"{ServerPath}\serverDZ.cfg")!;
+        string content = fs.TryGetFileContents(ConfigPath)!;
         Assert.Contains("template=\"dayzOffline.sakhal\"", content);
         Assert.DoesNotContain("dayzOffline.chernarusplus", content);
         Assert.Contains("// Mission to load on server startup.", content);
@@ -35,7 +37,7 @@ public class ServerConfigServiceTests
     public void UpdateTemplate_IgnoresCommentedTemplateLine()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ServerPath}\serverDZ.cfg", """
+        fs.AddFile(ConfigPath, """
             class Missions
             {
                 class DayZ
@@ -47,10 +49,10 @@ public class ServerConfigServiceTests
             """);
         var service = new ServerConfigService(fs);
 
-        bool result = service.UpdateTemplate(ServerPath, "dayzOffline.sakhal");
+        bool result = service.UpdateTemplate(ConfigPath, "dayzOffline.sakhal");
 
         Assert.True(result);
-        string content = fs.TryGetFileContents($@"{ServerPath}\serverDZ.cfg")!;
+        string content = fs.TryGetFileContents(ConfigPath)!;
         Assert.Contains("template=\"dayzOffline.sakhal\"", content);
         Assert.Contains(";template=\"dayzOffline.chernarusplus\"", content);
     }
@@ -59,10 +61,10 @@ public class ServerConfigServiceTests
     public void UpdateTemplate_ReturnsFalse_WhenNoTemplateLine()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ServerPath}\serverDZ.cfg", "hostname = \"x\";");
+        fs.AddFile(ConfigPath, "hostname = \"x\";");
         var service = new ServerConfigService(fs);
 
-        Assert.False(service.UpdateTemplate(ServerPath, "dayzOffline.sakhal"));
+        Assert.False(service.UpdateTemplate(ConfigPath, "dayzOffline.sakhal"));
     }
 
     [Fact]
@@ -70,6 +72,40 @@ public class ServerConfigServiceTests
     {
         var service = new ServerConfigService(new FakeFileSystem());
 
-        Assert.False(service.UpdateTemplate(ServerPath, "dayzOffline.sakhal"));
+        Assert.False(service.UpdateTemplate(ConfigPath, "dayzOffline.sakhal"));
+    }
+
+    [Fact]
+    public void WriteInstanceId_ReplacesExistingLine()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(ConfigPath, "instanceId=1;\nhostname=\"x\";");
+        var service = new ServerConfigService(fs);
+
+        Assert.True(service.WriteInstanceId(ConfigPath, 7));
+
+        string content = fs.TryGetFileContents(ConfigPath)!;
+        Assert.Contains("instanceId=7;", content);
+        Assert.DoesNotContain("instanceId=1;", content);
+    }
+
+    [Fact]
+    public void WriteInstanceId_AppendsWhenLineMissing()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(ConfigPath, "hostname=\"x\";\n");
+        var service = new ServerConfigService(fs);
+
+        Assert.True(service.WriteInstanceId(ConfigPath, 3));
+
+        Assert.Contains("instanceId=3;", fs.TryGetFileContents(ConfigPath)!);
+    }
+
+    [Fact]
+    public void WriteInstanceId_ReturnsFalse_WhenFileMissing()
+    {
+        var service = new ServerConfigService(new FakeFileSystem());
+
+        Assert.False(service.WriteInstanceId(ConfigPath, 1));
     }
 }

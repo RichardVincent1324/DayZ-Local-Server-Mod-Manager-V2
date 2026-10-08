@@ -64,6 +64,7 @@ public partial class App : Application
         services.AddSingleton<IModDiscoveryService, ModDiscoveryService>();
         services.AddSingleton<IJunctionService, JunctionService>();
         services.AddSingleton<IServerConfigService, ServerConfigService>();
+        services.AddSingleton<IPresetService, PresetService>();
         services.AddSingleton<IEconomyCoreService, EconomyCoreService>();
         services.AddSingleton<ITypesService, TypesService>();
         services.AddSingleton<ISaveGameService, SaveGameService>();
@@ -91,7 +92,9 @@ public partial class App : Application
             sp.GetRequiredService<IProcessLauncher>(),
             sp.GetRequiredService<IServerLogCleanupService>(),
             sp.GetRequiredService<IDayZServerProcessState>(),
-            dataDirectoryProvider));
+            dataDirectoryProvider,
+            sp.GetRequiredService<IPresetService>(),
+            sp.GetRequiredService<IJunctionService>()));
 
         return services.BuildServiceProvider();
     }

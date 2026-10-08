@@ -2,6 +2,11 @@ using DayZModManager.Core.Services;
 
 namespace DayZModManager.App.Services;
 
+/// <summary>Input gathered by the Add Preset dialog.</summary>
+/// <param name="Name">The new preset's name.</param>
+/// <param name="CopyProfilesFromDefault">True to seed the preset from the default preset's profiles.</param>
+public sealed record AddPresetRequest(string Name, bool CopyProfilesFromDefault);
+
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
 public interface IDialogService
 {
@@ -51,4 +56,10 @@ public interface IDialogService
     /// the user cancelled.
     /// </summary>
     string? AskText(string title, string prompt, string defaultValue = "");
+
+    /// <summary>
+    /// Opens the Add Preset dialog for a map. Returns the requested name and
+    /// whether to copy the default preset's profiles, or null when cancelled.
+    /// </summary>
+    AddPresetRequest? AskAddPreset(string mapName);
 }

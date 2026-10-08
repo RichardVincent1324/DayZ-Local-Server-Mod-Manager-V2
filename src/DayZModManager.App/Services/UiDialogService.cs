@@ -46,6 +46,12 @@ public sealed class UiDialogService : IDialogService
         return window.ShowDialog() == true ? window.Result : null;
     }
 
+    public AddPresetRequest? AskAddPreset(string mapName)
+    {
+        var window = new AddPresetWindow(mapName);
+        return window.ShowDialog() == true ? window.Result : null;
+    }
+
     public string? PickFolder(string title = "Select a folder")
     {
         var dialog = new OpenFolderDialog { Title = title };

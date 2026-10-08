@@ -345,5 +345,7 @@ public class SettingsViewModelTests
         public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
             string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
             IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null) => null;
+
+        public AddPresetRequest? AskAddPreset(string mapName) => null;
     }
 }

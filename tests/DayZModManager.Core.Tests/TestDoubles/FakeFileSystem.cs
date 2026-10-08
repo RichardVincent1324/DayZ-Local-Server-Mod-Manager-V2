@@ -63,9 +63,21 @@ public sealed class FakeFileSystem : IFileSystem
 
     public void CreateDirectory(string path)
     {
-        if (!_directories.ContainsKey(path))
+        if (_directories.ContainsKey(path))
         {
-            _directories[path] = new HashSet<string>(StringComparer.Ordinal);
+            return;
+        }
+
+        _directories[path] = new HashSet<string>(StringComparer.Ordinal);
+
+        // Mirror a real filesystem: creating a directory also creates its parent
+        // chain and registers it as a child of its parent, so GetDirectories sees
+        // directories the code under test creates (not only seeded ones).
+        string? parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(parent) && !string.Equals(parent, path, StringComparison.OrdinalIgnoreCase))
+        {
+            CreateDirectory(parent);
+            _directories[parent].Add(Path.GetFileName(path));
         }
     }
 
@@ -113,6 +125,13 @@ public sealed class FakeFileSystem : IFileSystem
                      .ToList())
         {
             _directories.Remove(directory);
+        }
+
+        // Unregister from the parent so GetDirectories no longer lists it.
+        string? parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(parent) && _directories.TryGetValue(parent, out HashSet<string>? siblings))
+        {
+            siblings.Remove(Path.GetFileName(path));
         }
     }
 

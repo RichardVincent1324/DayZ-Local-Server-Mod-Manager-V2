@@ -50,14 +50,4 @@ public class PersistedConfigNullHardeningTests
         entry.FileRoles["CF_types.xml"] = "types";
         Assert.True(entry.FileRoles.ContainsKey("cf_TYPES.xml"));
     }
-
-    [Fact]
-    public void SaveMetaData_NullLists_BecomeEmptyLists()
-    {
-        SaveMetaData? meta = JsonSerializer.Deserialize<SaveMetaData>(
-            "{\"modList\":null,\"typesFiles\":null}", Options);
-
-        Assert.NotNull(meta!.ModList);
-        Assert.NotNull(meta.TypesFiles);
-    }
 }

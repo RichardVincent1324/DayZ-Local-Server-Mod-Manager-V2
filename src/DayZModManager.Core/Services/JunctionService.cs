@@ -17,13 +17,15 @@ public sealed record JunctionSyncResult
 }
 
 /// <summary>
-/// Synchronizes junctions under the <see cref="ModListFolder.Name"/> folder in the
-/// server root with the desired loaded-mod set. Junction work is split into a
-/// non-destructive preparation phase (create missing links, validate targets) and
-/// a destructive finalize phase (re-point stale links, remove orphaned junctions),
-/// so an Apply can abort safely after preparation without tearing down the links a
-/// still-unchanged launch batch file depends on. Junctions outside the managed
-/// <see cref="ModListFolder.Name"/> folder are left untouched.
+/// Synchronizes junctions under a preset's own folder
+/// (<c>&lt;serverRoot&gt;\ModList\&lt;presetKey&gt;</c>) with that preset's desired
+/// loaded-mod set. Because each preset has its own subfolder, synchronizing one
+/// preset never touches another preset's junctions, so switching presets does not
+/// recreate or delete links. Junction work is split into a non-destructive
+/// preparation phase (create missing links, validate targets) and a destructive
+/// finalize phase (re-point stale links, remove orphaned junctions), so an Apply
+/// can abort safely after preparation without tearing down the links a
+/// still-unchanged launch batch file depends on.
 /// </summary>
 public interface IJunctionService
 {
@@ -31,34 +33,42 @@ public interface IJunctionService
     /// Runs both junction phases (prepare then finalize) in one call. Provided for
     /// callers that want a single, complete synchronization.
     /// </summary>
-    JunctionSyncResult Sync(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods);
+    JunctionSyncResult Sync(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods);
 
     /// <summary>
-    /// Non-destructive preparation: ensures the ModList folder exists and creates
-    /// junctions for loaded mods that have none, skipping links that already point
-    /// at the right target. Links pointing elsewhere (e.g. a changed workshop path)
-    /// are validated but NOT re-pointed here - that is deferred to
+    /// Non-destructive preparation: ensures the preset's ModList folder exists and
+    /// creates junctions for loaded mods that have none, skipping links that
+    /// already point at the right target. Links pointing elsewhere (e.g. a changed
+    /// workshop path) are validated but NOT re-pointed here - that is deferred to
     /// <see cref="Finalize"/>. Orphaned junctions are never touched. Returns
     /// failures when a target cannot be created/resolved; callers should abort
-    /// before mutating the batch file or configuration when <see cref="JunctionSyncResult.Failed"/>
-    /// is non-zero.
+    /// before mutating the batch file or configuration when
+    /// <see cref="JunctionSyncResult.Failed"/> is non-zero.
     /// </summary>
-    JunctionSyncResult PrepareLoaded(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods);
+    JunctionSyncResult PrepareLoaded(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods);
 
     /// <summary>
     /// Destructive finalization: re-points loaded junctions whose target changed
     /// (after confirming the new target exists) and removes junctions for mods not
-    /// in <paramref name="loadedMods"/>. Intended to run only after a successful
-    /// batch-file/config commit. Failures are reported but are not fatal to the
-    /// already-committed configuration (a stuck link is retried on the next Apply).
+    /// in <paramref name="loadedMods"/> from this preset's folder only. Intended to
+    /// run only after a successful batch-file/config commit. Failures are reported
+    /// but are not fatal to the already-committed configuration (a stuck link is
+    /// retried on the next Apply).
     /// </summary>
-    JunctionSyncResult Finalize(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods);
+    JunctionSyncResult Finalize(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods);
 
-    /// <summary>Returns mod junction names under the ModList folder not present in <paramref name="validModNames"/>.</summary>
-    IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames);
+    /// <summary>Returns mod junction names under the preset's folder not present in <paramref name="validModNames"/>.</summary>
+    IReadOnlyList<string> FindOrphanedJunctions(string serverPath, string presetKey, IReadOnlySet<string> validModNames);
 
     /// <summary>Returns the loaded mods whose junction is missing or not a junction.</summary>
-    IReadOnlyList<string> Verify(string serverPath, IReadOnlyList<string> loadedMods);
+    IReadOnlyList<string> Verify(string serverPath, string presetKey, IReadOnlyList<string> loadedMods);
+
+    /// <summary>
+    /// Removes a preset's junction folder and every junction inside it. Used when a
+    /// preset is deleted so it leaves no orphaned links behind. Never traverses
+    /// into junction targets.
+    /// </summary>
+    void DeleteJunctionFolder(string serverPath, string presetKey);
 }
 
 public sealed class JunctionService : IJunctionService
@@ -72,10 +82,10 @@ public sealed class JunctionService : IJunctionService
         _junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
     }
 
-    public JunctionSyncResult Sync(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods)
+    public JunctionSyncResult Sync(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
-        JunctionSyncResult prepared = PrepareLoaded(serverPath, workshopPath, loadedMods);
-        JunctionSyncResult finalized = Finalize(serverPath, workshopPath, loadedMods);
+        JunctionSyncResult prepared = PrepareLoaded(serverPath, workshopPath, presetKey, loadedMods);
+        JunctionSyncResult finalized = Finalize(serverPath, workshopPath, presetKey, loadedMods);
 
         return new JunctionSyncResult
         {
@@ -87,13 +97,13 @@ public sealed class JunctionService : IJunctionService
         };
     }
 
-    public JunctionSyncResult PrepareLoaded(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods)
+    public JunctionSyncResult PrepareLoaded(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
         var messages = new List<string>();
         int created = 0, skipped = 0, failed = 0;
 
-        string junctionDir = Path.Combine(serverPath, ModListFolder.Name);
-        if (!EnsureJunctionDirectory(junctionDir, messages, ref failed))
+        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        if (!EnsureJunctionDirectory(junctionDir, presetKey, messages, ref failed))
         {
             return new JunctionSyncResult
             {
@@ -168,12 +178,12 @@ public sealed class JunctionService : IJunctionService
         };
     }
 
-    public JunctionSyncResult Finalize(string serverPath, string workshopPath, IReadOnlyList<string> loadedMods)
+    public JunctionSyncResult Finalize(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
         var messages = new List<string>();
         int created = 0, removed = 0, failed = 0;
 
-        string junctionDir = Path.Combine(serverPath, ModListFolder.Name);
+        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
         if (!_fileSystem.DirectoryExists(junctionDir))
         {
             return new JunctionSyncResult
@@ -230,8 +240,9 @@ public sealed class JunctionService : IJunctionService
             }
         }
 
-        // Remove junctions whose mod is no longer loaded. A failure here only
-        // leaves a harmless orphan that the next Apply will retry.
+        // Remove junctions whose mod is no longer loaded, within this preset's
+        // folder only. A failure here only leaves a harmless orphan that the next
+        // Apply will retry.
         var loadedSet = new HashSet<string>(loadedMods, StringComparer.OrdinalIgnoreCase);
         foreach (string mod in GetJunctionedMods(junctionDir))
         {
@@ -262,16 +273,16 @@ public sealed class JunctionService : IJunctionService
         };
     }
 
-    public IReadOnlyList<string> FindOrphanedJunctions(string serverPath, IReadOnlySet<string> validModNames)
+    public IReadOnlyList<string> FindOrphanedJunctions(string serverPath, string presetKey, IReadOnlySet<string> validModNames)
     {
-        return GetJunctionedMods(JunctionDir(serverPath))
+        return GetJunctionedMods(ModListFolder.Directory(serverPath, presetKey))
             .Where(mod => !validModNames.Contains(mod))
             .ToList();
     }
 
-    public IReadOnlyList<string> Verify(string serverPath, IReadOnlyList<string> loadedMods)
+    public IReadOnlyList<string> Verify(string serverPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
-        string junctionDir = JunctionDir(serverPath);
+        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
         var missing = new List<string>();
         foreach (string mod in loadedMods)
         {
@@ -284,8 +295,33 @@ public sealed class JunctionService : IJunctionService
         return missing;
     }
 
-    /// <summary>Ensures the ModList junction folder exists, returning false when it cannot be created.</summary>
-    private bool EnsureJunctionDirectory(string junctionDir, List<string> messages, ref int failed)
+    public void DeleteJunctionFolder(string serverPath, string presetKey)
+    {
+        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        if (!_fileSystem.DirectoryExists(junctionDir))
+        {
+            return;
+        }
+
+        // Remove each junction link first (never traversing into its target), then
+        // the (now empty) folder. Best effort: failures leave a harmless leftover.
+        foreach (string mod in GetJunctionedMods(junctionDir))
+        {
+            _junctions.Delete(Path.Combine(junctionDir, mod));
+        }
+
+        try
+        {
+            _fileSystem.DeleteDirectory(junctionDir, recursive: false);
+        }
+        catch (Exception)
+        {
+            // Best effort: the caller has already removed the preset.
+        }
+    }
+
+    /// <summary>Ensures the preset's ModList junction folder exists, returning false when it cannot be created.</summary>
+    private bool EnsureJunctionDirectory(string junctionDir, string presetKey, List<string> messages, ref int failed)
     {
         if (_fileSystem.DirectoryExists(junctionDir))
         {
@@ -303,11 +339,9 @@ public sealed class JunctionService : IJunctionService
             return false;
         }
 
-        messages.Add($"Mod folder created: {ModListFolder.Name}");
+        messages.Add($"Mod folder created: {ModListFolder.Name}/{presetKey}");
         return true;
     }
-
-    private static string JunctionDir(string serverPath) => Path.Combine(serverPath, ModListFolder.Name);
 
     private IReadOnlyList<string> GetJunctionedMods(string junctionDir)
     {

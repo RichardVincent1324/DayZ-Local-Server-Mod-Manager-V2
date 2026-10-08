@@ -10,8 +10,36 @@ public sealed record ApplyContext
 
     public required IReadOnlyList<string> LoadedMods { get; init; }
 
-    /// <summary>Directory where configuration files are persisted.</summary>
+    /// <summary>Directory where global configuration (settings.json) is persisted.</summary>
     public required string DataDirectory { get; init; }
+
+    /// <summary>
+    /// The active preset's folder, where the mod order and types configuration are
+    /// persisted. Null when no map/preset is active yet; the mod order is then not
+    /// persisted.
+    /// </summary>
+    public string? PresetFolder { get; init; }
+
+    /// <summary>
+    /// Value written to the batch file's <c>serverProfile</c> line (the active
+    /// preset's profiles folder, relative to the server root). Null to leave the
+    /// line untouched.
+    /// </summary>
+    public string? ServerProfile { get; init; }
+
+    /// <summary>
+    /// Value written to the batch file's <c>serverConfig</c> line (the active
+    /// preset's <c>serverDZ.cfg</c>, relative to the server root). Null to leave
+    /// the line untouched.
+    /// </summary>
+    public string? ServerConfig { get; init; }
+
+    /// <summary>
+    /// The active preset's junction-folder key (its <c>instanceId</c> as a string).
+    /// Mods are exposed as <c>ModList/&lt;key&gt;/@mod</c> so each preset keeps its
+    /// own junctions. Null when no preset is active; junction work is then skipped.
+    /// </summary>
+    public string? ModListKey { get; init; }
 }
 
 /// <summary>Outcome of an Apply operation, including ordered human-readable logs.</summary>
@@ -83,16 +111,20 @@ public sealed class ApplyService : IApplyService
 
         logs.Add("Validation passed.");
 
-        // 2. Prepare junctions for the loaded mods. This phase is non-destructive:
-        //    it creates missing junctions and validates that every target can be
-        //    resolved, but it never deletes or re-points existing junctions. A
-        //    failure aborts here so the batch file and configuration are never
-        //    touched while a previously-working junction (or a still-referenced
-        //    mod's link) is left broken.
-        JunctionSyncResult prepared = _junctions.PrepareLoaded(
-            context.Settings.ServerPath,
-            context.Settings.WorkshopPath,
-            context.LoadedMods);
+        // 2. Prepare junctions for the loaded mods under the active preset's own
+        //    ModList subfolder. This phase is non-destructive: it creates missing
+        //    junctions and validates that every target can be resolved, but it never
+        //    deletes or re-points existing junctions. A failure aborts here so the
+        //    batch file and configuration are never touched while a previously-working
+        //    junction (or a still-referenced mod's link) is left broken.
+        bool junctionsEnabled = !string.IsNullOrWhiteSpace(context.ModListKey);
+        JunctionSyncResult prepared = junctionsEnabled
+            ? _junctions.PrepareLoaded(
+                context.Settings.ServerPath,
+                context.Settings.WorkshopPath,
+                context.ModListKey!,
+                context.LoadedMods)
+            : new JunctionSyncResult();
 
         logs.AddRange(prepared.Messages);
 
@@ -109,9 +141,12 @@ public sealed class ApplyService : IApplyService
         //    other. Junctions created for newly-loaded mods are harmless and are
         //    reconciled again on the next Apply. The previous contents are kept so
         //    a later failure can restore the file instead of leaving it diverged.
-        IReadOnlyList<string> modPaths = context.LoadedMods.Select(ModListFolder.Entry).ToList();
+        IReadOnlyList<string> modPaths = junctionsEnabled
+            ? context.LoadedMods.Select(mod => ModListFolder.Entry(context.ModListKey!, mod)).ToList()
+            : new List<string>();
         string batchPath = context.Settings.BatFilePath;
         string? batchSnapshot = ReadFileSnapshot(batchPath);
+        bool serverConfigLineWritten = true;
         try
         {
             if (!_batchFile.WriteModList(batchPath, modPaths))
@@ -119,12 +154,39 @@ public sealed class ApplyService : IApplyService
                 logs.Add("ERROR: Failed to update the batch file. No changes were made.");
                 return new ApplyResult { Success = false, Logs = logs };
             }
+
+            // Point the launcher at the active preset's environment. A missing
+            // serverProfile line means the template cannot isolate profiles per
+            // preset; warn but continue (the junction/mod configuration still
+            // applied). A missing serverConfig line is handled by copying the
+            // preset's serverDZ.cfg to the server root below.
+            if (!string.IsNullOrWhiteSpace(context.ServerProfile)
+                && !_batchFile.WriteServerProfile(batchPath, context.ServerProfile))
+            {
+                logs.Add("WARNING: The batch file has no serverProfile line; the preset's profiles folder will not be used.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(context.ServerConfig))
+            {
+                serverConfigLineWritten = _batchFile.WriteServerConfig(batchPath, context.ServerConfig);
+                if (!serverConfigLineWritten)
+                {
+                    logs.Add("WARNING: The batch file has no serverConfig line; the preset's serverDZ.cfg will be copied to the server root instead.");
+                }
+            }
         }
         catch (Exception ex)
         {
             RestoreFileSnapshot(batchPath, batchSnapshot);
             logs.Add($"ERROR: Failed to update the batch file: {ex.Message}. The launch batch file was not changed.");
             return new ApplyResult { Success = false, Logs = logs };
+        }
+
+        // Fallback for templates without a serverConfig line: make the preset's
+        // serverDZ.cfg the server root config so the active preset still runs.
+        if (!serverConfigLineWritten)
+        {
+            CopyPresetConfigToServerRoot(context, logs);
         }
 
         logs.Add("Batch file updated.");
@@ -135,7 +197,10 @@ public sealed class ApplyService : IApplyService
         try
         {
             _settings.Save(context.DataDirectory, context.Settings);
-            _modOrder.Save(context.DataDirectory, context.LoadedMods);
+            if (!string.IsNullOrWhiteSpace(context.PresetFolder))
+            {
+                _modOrder.Save(context.PresetFolder, context.LoadedMods);
+            }
         }
         catch (Exception ex)
         {
@@ -147,13 +212,17 @@ public sealed class ApplyService : IApplyService
         logs.Add($"Saved configuration: {context.LoadedMods.Count} mod(s) loaded.");
 
         // 5. Destructive junction finalization: re-point stale links and remove the
-        //    junctions of mods that are no longer loaded. Runs only after the batch
-        //    file and configuration are committed, so a stuck junction degrades to
-        //    a warning (retried on the next Apply) instead of aborting the Apply.
-        JunctionSyncResult finalized = _junctions.Finalize(
-            context.Settings.ServerPath,
-            context.Settings.WorkshopPath,
-            context.LoadedMods);
+        //    junctions of mods that are no longer loaded, within the active preset's
+        //    own ModList subfolder. Runs only after the batch file and configuration
+        //    are committed, so a stuck junction degrades to a warning (retried on the
+        //    next Apply) instead of aborting the Apply.
+        JunctionSyncResult finalized = junctionsEnabled
+            ? _junctions.Finalize(
+                context.Settings.ServerPath,
+                context.Settings.WorkshopPath,
+                context.ModListKey!,
+                context.LoadedMods)
+            : new JunctionSyncResult();
 
         logs.AddRange(finalized.Messages);
         if (finalized.Failed > 0)
@@ -162,7 +231,9 @@ public sealed class ApplyService : IApplyService
         }
 
         // 6. Verify
-        IReadOnlyList<string> missing = _junctions.Verify(context.Settings.ServerPath, context.LoadedMods);
+        IReadOnlyList<string> missing = junctionsEnabled
+            ? _junctions.Verify(context.Settings.ServerPath, context.ModListKey!, context.LoadedMods)
+            : Array.Empty<string>();
         if (missing.Count > 0)
         {
             logs.Add($"WARNING: {missing.Count} loaded mod(s) have no junction: {string.Join(", ", missing)}");
@@ -175,6 +246,38 @@ public sealed class ApplyService : IApplyService
         logs.Add($"Junctions: {created} created, {removed} removed, {skipped} skipped.");
         logs.Add("Apply complete.");
         return new ApplyResult { Success = true, Logs = logs };
+    }
+
+    /// <summary>
+    /// Copies the active preset's <c>serverDZ.cfg</c> over the server root config
+    /// when the launch template has no <c>serverConfig</c> line, so the preset is
+    /// still the environment the server runs.
+    /// </summary>
+    private void CopyPresetConfigToServerRoot(ApplyContext context, List<string> logs)
+    {
+        if (string.IsNullOrWhiteSpace(context.PresetFolder)
+            || string.IsNullOrWhiteSpace(context.Settings.ServerPath))
+        {
+            return;
+        }
+
+        string presetConfig = Path.Combine(context.PresetFolder, ConfigFileNames.ServerConfig);
+        string rootConfig = Path.Combine(context.Settings.ServerPath, ConfigFileNames.ServerConfig);
+        if (!_fileSystem.FileExists(presetConfig)
+            || string.Equals(presetConfig, rootConfig, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            _fileSystem.CopyFile(presetConfig, rootConfig);
+            logs.Add("Copied the preset's serverDZ.cfg to the server root.");
+        }
+        catch (Exception ex)
+        {
+            logs.Add($"WARNING: Failed to copy the preset's serverDZ.cfg to the server root: {ex.Message}");
+        }
     }
 
     /// <summary>Reads a file's contents for later rollback, or null when it cannot be read.</summary>

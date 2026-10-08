@@ -32,6 +32,13 @@ public interface IBatchFileService
     /// Returns false if the file or the line is missing.
     /// </summary>
     bool WriteServerProfile(string batFilePath, string relativeProfile);
+
+    /// <summary>
+    /// Rewrites the <c>serverConfig</c> line with the given server configuration
+    /// path (typically the active preset's <c>serverDZ.cfg</c>). Returns false if
+    /// the file or the line is missing.
+    /// </summary>
+    bool WriteServerConfig(string batFilePath, string serverConfigPath);
 }
 
 public sealed partial class BatchFileService : IBatchFileService
@@ -64,6 +71,11 @@ public sealed partial class BatchFileService : IBatchFileService
     public bool WriteServerProfile(string batFilePath, string relativeProfile)
     {
         return ReplaceSingleLine(batFilePath, ServerProfileLineRegex(), $"set \"serverProfile={relativeProfile}\"");
+    }
+
+    public bool WriteServerConfig(string batFilePath, string serverConfigPath)
+    {
+        return ReplaceSingleLine(batFilePath, ServerConfigLineRegex(), $"set \"serverConfig={serverConfigPath}\"");
     }
 
     /// <summary>
@@ -204,4 +216,7 @@ public sealed partial class BatchFileService : IBatchFileService
 
     [GeneratedRegex(@"^\s*set\s+""serverProfile=.*""\s*$", RegexOptions.Multiline)]
     private static partial Regex ServerProfileLineRegex();
+
+    [GeneratedRegex(@"^\s*set\s+""serverConfig=.*""\s*$", RegexOptions.Multiline)]
+    private static partial Regex ServerConfigLineRegex();
 }

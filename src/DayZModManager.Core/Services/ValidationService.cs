@@ -9,6 +9,13 @@ public sealed record ValidationContext
     public required Settings Settings { get; init; }
 
     public required IReadOnlyList<string> LoadedMods { get; init; }
+
+    /// <summary>
+    /// Path to the active preset's <c>serverDZ.cfg</c>. When set, it is validated
+    /// as the server configuration; when null, the server root's <c>serverDZ.cfg</c>
+    /// is validated instead.
+    /// </summary>
+    public string? ActiveServerConfigPath { get; init; }
 }
 
 /// <summary>
@@ -40,7 +47,7 @@ public sealed class ValidationService : IValidationService
         Settings settings = context.Settings;
 
         ValidateWorkshop(settings.WorkshopPath, errors);
-        ValidateServer(settings.ServerPath, errors);
+        ValidateServer(settings.ServerPath, context.ActiveServerConfigPath, errors);
         ValidateBatch(settings.BatFilePath, errors);
 
         // Only check individual mods when the workshop directory actually exists,
@@ -65,7 +72,7 @@ public sealed class ValidationService : IValidationService
         }
     }
 
-    private void ValidateServer(string serverPath, List<string> errors)
+    private void ValidateServer(string serverPath, string? activeServerConfigPath, List<string> errors)
     {
         if (string.IsNullOrWhiteSpace(serverPath))
         {
@@ -84,9 +91,12 @@ public sealed class ValidationService : IValidationService
             errors.Add($"{ServerExecutable} not found in the server directory.");
         }
 
-        if (!_fileSystem.FileExists(Path.Combine(serverPath, ServerConfig)))
+        string configPath = string.IsNullOrWhiteSpace(activeServerConfigPath)
+            ? Path.Combine(serverPath, ServerConfig)
+            : activeServerConfigPath;
+        if (!_fileSystem.FileExists(configPath))
         {
-            errors.Add($"{ServerConfig} not found in the server directory.");
+            errors.Add($"{ServerConfig} not found: {configPath}");
         }
     }
 

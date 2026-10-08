@@ -3,12 +3,16 @@ using DayZModManager.Core.Models;
 
 namespace DayZModManager.Core.Services;
 
-/// <summary>Loads and saves the ordered list of loaded mods (mod_order.json).</summary>
+/// <summary>
+/// Loads and saves a preset's ordered list of loaded mods
+/// (<c>&lt;preset&gt;\mod_order.json</c>). The mod order is preset-level: it
+/// belongs to the active preset, never to an individual save.
+/// </summary>
 public interface IModOrderStore
 {
-    ConfigLoadResult<IReadOnlyList<string>> Load(string dataDirectory);
+    ConfigLoadResult<IReadOnlyList<string>> Load(string presetFolder);
 
-    void Save(string dataDirectory, IReadOnlyList<string> mods);
+    void Save(string presetFolder, IReadOnlyList<string> mods);
 }
 
 public sealed class ModOrderStore : IModOrderStore
@@ -20,9 +24,9 @@ public sealed class ModOrderStore : IModOrderStore
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public ConfigLoadResult<IReadOnlyList<string>> Load(string dataDirectory)
+    public ConfigLoadResult<IReadOnlyList<string>> Load(string presetFolder)
     {
-        string path = Path.Combine(dataDirectory, ConfigFileNames.ModOrder);
+        string path = Path.Combine(presetFolder, ConfigFileNames.ModOrder);
         ConfigLoadResult<List<string>> result = ConfigJson.Read<List<string>>(_fileSystem, path);
 
         return result.Status switch
@@ -33,9 +37,9 @@ public sealed class ModOrderStore : IModOrderStore
         };
     }
 
-    public void Save(string dataDirectory, IReadOnlyList<string> mods)
+    public void Save(string presetFolder, IReadOnlyList<string> mods)
     {
-        string path = Path.Combine(dataDirectory, ConfigFileNames.ModOrder);
+        string path = Path.Combine(presetFolder, ConfigFileNames.ModOrder);
         ConfigJson.Write(_fileSystem, path, mods.ToList());
     }
 }

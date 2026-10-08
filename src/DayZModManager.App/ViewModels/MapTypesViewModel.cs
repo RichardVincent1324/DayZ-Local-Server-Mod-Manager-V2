@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
@@ -29,10 +30,13 @@ public sealed class MapTypesViewModel : ViewModelBase
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
     private readonly IDayZServerProcessState _serverProcess;
     private readonly IProcessLauncher _processLauncher;
+    private readonly IPresetService _presetService;
+    private readonly IJunctionService _junctions;
 
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
     private string _batFileName = string.Empty;
+    private string _activePresetName = PresetPaths.DefaultPresetName;
     private List<string> _allMods = new();
     private IReadOnlyList<string> _loadedMods = Array.Empty<string>();
     private IReadOnlyList<MapInfo> _discoveredMaps = Array.Empty<MapInfo>();
@@ -44,6 +48,9 @@ public sealed class MapTypesViewModel : ViewModelBase
     private bool _isSwitching;
     private bool _typesBusy;
     private bool _isSaveBusy;
+    private bool _isSwitchingPreset;
+    private bool _isRestoringPreset;
+    private bool _isRestoringMod;
     private string? _pendingMap;
 
     public MapTypesViewModel(
@@ -59,7 +66,9 @@ public sealed class MapTypesViewModel : ViewModelBase
         TypesConfig typesConfig,
         IDataDirectoryProvider dataDirectoryProvider,
         IDayZServerProcessState serverProcess,
-        IProcessLauncher processLauncher)
+        IProcessLauncher processLauncher,
+        IPresetService presetService,
+        IJunctionService junctions)
     {
         _mapService = mapService;
         _typesService = typesService;
@@ -74,18 +83,99 @@ public sealed class MapTypesViewModel : ViewModelBase
         _dataDirectoryProvider = dataDirectoryProvider;
         _serverProcess = serverProcess;
         _processLauncher = processLauncher;
+        _presetService = presetService;
+        _junctions = junctions;
 
-        ConfigXmlCommand = new RelayCommand(ConfigureMod, () => TypesEditingAllowed);
+        ConfigureModCommand = new RelayCommand<string>(ConfigureMod, () => TypesEditingAllowed);
         OpenModTypesFolderCommand = new RelayCommand(OpenModTypesFolder, () => TypesEditingAllowed);
         OpenMapProfilesFolderCommand = new RelayCommand(OpenMapProfilesFolder);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => TypesEditingAllowed && CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid, () => TypesEditingAllowed);
         LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is not null && !IsSaveBusy);
         DeleteSaveCommand = new RelayCommand(DeleteSave, () => SelectedSave is not null && !IsSaveBusy);
+        RenameSaveCommand = new RelayCommand(RenameSave, () => SelectedSave is not null && !IsSaveBusy);
         AddSaveCommand = new RelayCommand(AddSave, () => !IsSaveBusy);
         NewGameCommand = new RelayCommand(NewGame, () => !IsSaveBusy);
+        AddPresetCommand = new RelayCommand(AddPreset, () => !IsBusy && !string.IsNullOrEmpty(_typesConfig.CurrentMap));
+        RenamePresetCommand = new RelayCommand(RenamePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
+        DeletePresetCommand = new RelayCommand(DeletePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
 
         SelectedTypesRows.CollectionChanged += (_, _) => NotifyCommandStates();
+    }
+
+    /// <summary>
+    /// The preset whose environment (types, mod order, profiles, instance ID) this
+    /// page operates on. Set by the shell when the active preset changes. Defaults
+    /// to the map's reserved default preset.
+    /// </summary>
+    public string ActivePresetName
+    {
+        get => _activePresetName;
+        set
+        {
+            string normalized = string.IsNullOrWhiteSpace(value) ? PresetPaths.DefaultPresetName : value;
+            if (SetField(ref _activePresetName, normalized))
+            {
+                RebuildRows();
+                RefreshSaves();
+                NotifyCommandStates();
+            }
+        }
+    }
+
+    /// <summary>Folder of the active preset for the given map.</summary>
+    private string PresetFolder(string mapName) =>
+        PresetPaths.PresetFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
+
+    /// <summary>Preset ModTypes folder for the given map.</summary>
+    private string PresetModTypesFolder(string mapName) =>
+        PresetPaths.ModTypesFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
+
+    /// <summary>Preset saves folder for the given map.</summary>
+    private string PresetSavesFolder(string mapName) =>
+        PresetPaths.SavesFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
+
+    /// <summary>The active preset's dedicated instance ID for the given map.</summary>
+    private int PresetInstanceId(string mapName) =>
+        _presetService.ReadInstanceId(_dataDirectoryProvider.Current, mapName, _activePresetName);
+
+    /// <summary>Where the current types operation writes files and economy references.</summary>
+    private TypesTarget ActiveTypesTarget(string missionPath) =>
+        new(missionPath, PresetModTypesFolder(_typesConfig.CurrentMap), ActiveCeFolderValue(missionPath));
+
+    /// <summary>
+    /// Invoked when the user selects a different preset. Loads the preset's mod
+    /// order and types configuration, persists it as the map's active preset, and
+    /// applies it. Provided by the shell. Returns false on failure.
+    /// </summary>
+    public Func<string, string, Task<bool>>? ActivatePreset { get; set; }
+
+    /// <summary>Invoked to resolve the persisted active preset for a map. Provided by the shell.</summary>
+    public Func<string, string>? ResolvePresetForMap { get; set; }
+
+    /// <summary>The presets available for the current map.</summary>
+    public ObservableCollection<PresetItemViewModel> Presets { get; } = new();
+
+    private PresetItemViewModel? _selectedPreset;
+
+    /// <summary>
+    /// The selected preset. Selecting a different preset makes it the map's active
+    /// preset (loading its configuration and applying it). Programmatic restoration
+    /// is flagged so it never re-activates.
+    /// </summary>
+    public PresetItemViewModel? SelectedPreset
+    {
+        get => _selectedPreset;
+        set
+        {
+            if (SetField(ref _selectedPreset, value)
+                && !_isRestoringPreset
+                && value is not null
+                && !string.Equals(value.Name, _activePresetName, StringComparison.Ordinal))
+            {
+                _ = SwitchPresetAsync(value.Name);
+            }
+        }
     }
 
     public ObservableCollection<string> MapNames { get; } = new();
@@ -98,7 +188,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     /// <summary>
     /// The currently selected map. Selecting a different map applies it
-    /// immediately (server template, batch file, map_profiles and economy).
+    /// immediately (server template, the active preset's profiles and config, and economy).
     /// Programmatic restoration during refresh is flagged so it never re-applies.
     /// </summary>
     public string? SelectedMap
@@ -113,11 +203,34 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// The mod selected in the Types Config dropdown. Selecting a mod runs the
+    /// configure flow and then clears the selection, so the dropdown behaves as an
+    /// action (like the Current Map dropdown) and the same mod can be re-selected.
+    /// </summary>
     public string? SelectedMod
     {
         get => _selectedMod;
-        set => SetField(ref _selectedMod, value);
+        set
+        {
+            if (!SetField(ref _selectedMod, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(IsModSelectionEmpty));
+
+            if (_isRestoringMod || string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            HandleModSelection(value);
+        }
     }
+
+    /// <summary>True when no mod is selected; drives the Types Config placeholder overlay.</summary>
+    public bool IsModSelectionEmpty => string.IsNullOrEmpty(_selectedMod);
 
     public string? SelectedSave
     {
@@ -179,8 +292,8 @@ public sealed class MapTypesViewModel : ViewModelBase
     public string OpenModTypesFolderToolTip =>
         TypesEditingAllowed ? "Open ModTypes folder in File Explorer" : TypesLockedMessage;
 
-    /// <summary>Tooltip for the always-available map profiles folder button.</summary>
-    public string MapProfilesFolderToolTip => "Open map_profiles folder in File Explorer";
+    /// <summary>Tooltip for the always-available preset profiles folder button.</summary>
+    public string MapProfilesFolderToolTip => "Open the preset profiles folder in File Explorer";
 
     /// <summary>True when the mission's storage folder exists (a world has been created).</summary>
     private bool WorldExists(string mapName)
@@ -192,7 +305,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         try
         {
-            return _fileSystem.DirectoryExists(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
+            return _fileSystem.DirectoryExists(_saveGameService.GetStorageFolderPath(_serverPath, mapName, PresetInstanceId(mapName)));
         }
         catch (Exception)
         {
@@ -214,7 +327,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// Start Server action so it never launches the server while the launch batch,
     /// mission files, or the live storage folder are being rewritten or deleted.
     /// </summary>
-    public bool IsBusy => _isSwitching || _typesBusy || _isSaveBusy;
+    public bool IsBusy => _isSwitching || _typesBusy || _isSaveBusy || _isSwitchingPreset;
 
     private void NotifyBusyChanged() => OnPropertyChanged(nameof(IsBusy));
 
@@ -224,52 +337,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// </summary>
     public Func<Task<bool>>? EnsureApplied { get; set; }
 
-    /// <summary>
-    /// Invoked when a progress save is loaded to replace the loaded mod list with
-    /// the save's list and apply it (batch modList, mod_order.json, junctions).
-    /// Returns true on success.
-    /// </summary>
-    public Func<IReadOnlyList<string>, Task<bool>>? RestoreModList { get; set; }
-
-    /// <summary>The save currently loaded for the active map, if any (session only).</summary>
-    private (string MapName, string SaveName)? _activeSave;
-
-    /// <summary>
-    /// The types mapping that is currently active: the loaded save's mapping while
-    /// a save is active, otherwise null (meaning the configured mapping in
-    /// <see cref="_typesConfig"/> is active).
-    /// </summary>
-    private MapTypesConfig? _activeTypesConfig;
-
-    /// <summary>Clears the loaded-save state so the configured types become active.</summary>
-    private void ClearActiveSave()
-    {
-        _activeSave = null;
-        _activeTypesConfig = null;
-    }
-
-    /// <summary>
-    /// After a successful Apply, appends any newly loaded mods to the active
-    /// save's meta.json (append-only union) so the save keeps track of them.
-    /// </summary>
-    public void OnApplied(IReadOnlyList<string> appliedMods)
-    {
-        if (_activeSave is not { } active
-            || !string.Equals(active.MapName, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(_serverPath))
-        {
-            return;
-        }
-
-        SaveGameResult result = _saveGameService.AppendMetaModList(
-            _dataDirectoryProvider.Current, active.MapName, active.SaveName, appliedMods);
-        if (!result.Success)
-        {
-            _log.Warning(result.Message);
-        }
-    }
-
-    public RelayCommand ConfigXmlCommand { get; }
+    public RelayCommand<string> ConfigureModCommand { get; }
     public RelayCommand OpenModTypesFolderCommand { get; }
     public RelayCommand OpenMapProfilesFolderCommand { get; }
     public RelayCommand RemoveSelectedCommand { get; }
@@ -277,7 +345,11 @@ public sealed class MapTypesViewModel : ViewModelBase
     public RelayCommand LoadSaveCommand { get; }
     public RelayCommand AddSaveCommand { get; }
     public RelayCommand DeleteSaveCommand { get; }
+    public RelayCommand RenameSaveCommand { get; }
     public RelayCommand NewGameCommand { get; }
+    public RelayCommand AddPresetCommand { get; }
+    public RelayCommand RenamePresetCommand { get; }
+    public RelayCommand DeletePresetCommand { get; }
 
     public void Refresh(Settings settings, IReadOnlyList<string> workshopMods, IReadOnlyList<string> loadedMods)
     {
@@ -296,6 +368,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         RebuildMapNames();
         RefreshModNames(loadedMods);
         RebuildRows();
+        RefreshPresets();
         RefreshSaves();
         NotifyCommandStates();
     }
@@ -317,8 +390,6 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         if (!string.IsNullOrEmpty(_typesConfig.CurrentMap))
         {
-            RestoreActiveSaveFromEconomy();
-
             if (!_discoveredMaps.Any(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)))
             {
                 _log.Warning($"Previously applied map \"{_typesConfig.CurrentMap}\" was not found on this server. Select a valid map.");
@@ -347,60 +418,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         SetRestoringSelection(defaultMap);
-    }
-
-    /// <summary>
-    /// Rediscovers the loaded save from the manager-owned cfgeconomycore.xml block
-    /// after a restart: a block pointing under <c>Progress_Saves</c> identifies the
-    /// active save, so its types and mod-list bookkeeping continue to work. A block
-    /// pointing at the configured folder clears any stale active save.
-    /// </summary>
-    public void RestoreActiveSaveFromEconomy()
-    {
-        if (string.IsNullOrEmpty(_typesConfig.CurrentMap) || string.IsNullOrWhiteSpace(_serverPath))
-        {
-            return;
-        }
-
-        string? missionPath = _discoveredMaps
-            .FirstOrDefault(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase))
-            ?.Path;
-        if (missionPath is null)
-        {
-            return;
-        }
-
-        string? folder = _typesService.GetActiveTypesFolder(missionPath);
-        if (folder is null)
-        {
-            return;
-        }
-
-        string normalized = folder.Trim().Replace('\\', '/');
-        if (normalized.Equals(EconomyCoreService.ConfiguredFolder, StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!ActiveSaveForCurrentMap)
-            {
-                ClearActiveSave();
-            }
-
-            return;
-        }
-
-        // Expect .../Progress_Saves/<map>/<save>/ModTypes.
-        string[] parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        int modTypesIndex = Array.FindLastIndex(parts, part => part.Equals("ModTypes", StringComparison.OrdinalIgnoreCase));
-        if (modTypesIndex < 3
-            || !parts[modTypesIndex - 3].Equals("Progress_Saves", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        string saveName = parts[modTypesIndex - 1];
-        string dataDirectory = _dataDirectoryProvider.Current;
-        _activeSave = (_typesConfig.CurrentMap, saveName);
-        _activeTypesConfig = LoadActiveTypesConfig(_typesConfig.CurrentMap, dataDirectory, saveName);
     }
 
     /// <summary>Rebuilds the map dropdown from discovered maps plus any maps already configured.</summary>
@@ -449,22 +466,41 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// <summary>Rebuilds the types-config mod dropdown from the currently loaded mods.</summary>
     public void RefreshModNames(IReadOnlyList<string> loadedMods)
     {
-        string? previous = SelectedMod;
-
         ModNames.Clear();
         foreach (string mod in loadedMods)
         {
             ModNames.Add(mod);
         }
 
-        if (previous is not null && ModNames.Contains(previous))
+        // The dropdown is an action, not persistent state: always start with no
+        // selection so the placeholder shows and any mod can be selected again.
+        SetRestoringModSelection(null);
+    }
+
+    /// <summary>Sets <see cref="SelectedMod"/> without triggering the configure action.</summary>
+    private void SetRestoringModSelection(string? modName)
+    {
+        _isRestoringMod = true;
+        try
         {
-            SelectedMod = previous;
+            SelectedMod = modName;
         }
-        else
+        finally
         {
-            SelectedMod = ModNames.Count > 0 ? ModNames[0] : null;
+            _isRestoringMod = false;
         }
+    }
+
+    /// <summary>
+    /// Runs the configure flow for a mod chosen from the Types Config dropdown and
+    /// clears the selection so the action can be repeated. Deferred by one dispatcher
+    /// tick so the modal picker does not open while the ComboBox is still updating.
+    /// </summary>
+    private async void HandleModSelection(string modName)
+    {
+        await Task.Yield();
+        SetRestoringModSelection(null);
+        ConfigureModCommand.Execute(modName);
     }
 
     /// <summary>
@@ -492,14 +528,8 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>True when a loaded save's types are currently active for the applied map.</summary>
-    private bool ActiveSaveForCurrentMap =>
-        _activeSave is { } active
-        && string.Equals(active.MapName, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>The active types mapping: the loaded save's mapping, or the configured one.</summary>
-    private MapTypesConfig? ActiveMapConfig() =>
-        ActiveSaveForCurrentMap ? _activeTypesConfig : CurrentMapConfig();
+    /// <summary>The active types mapping: the active preset's configured types.</summary>
+    private MapTypesConfig? ActiveMapConfig() => CurrentMapConfig();
 
     /// <summary>Returns the current map's configured types config, if present.</summary>
     private MapTypesConfig? CurrentMapConfig() =>
@@ -507,7 +537,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             ? null
             : _typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map) ? map : null;
 
-    /// <summary>The absolute folder holding the active types (save snapshot or live db\ModTypes).</summary>
+    /// <summary>The absolute folder holding the active preset's generated types files.</summary>
     private string? ActiveTypesFolderAbsolute()
     {
         if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrEmpty(_typesConfig.CurrentMap))
@@ -515,24 +545,17 @@ public sealed class MapTypesViewModel : ViewModelBase
             return null;
         }
 
-        if (ActiveSaveForCurrentMap && _activeSave is { } active)
-        {
-            return _saveGameService.GetModTypesSnapshotPath(
-                _dataDirectoryProvider.Current, active.MapName, active.SaveName);
-        }
-
-        return Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap, "db", "ModTypes");
+        return PresetModTypesFolder(_typesConfig.CurrentMap);
     }
 
     /// <summary>
-    /// The <c>folder</c> value for the manager-owned cfgeconomycore.xml block:
-    /// <c>./db/ModTypes</c> when the configured types are active, otherwise the
-    /// active folder relative to the mission (forward slashes).
+    /// The <c>folder</c> value for the manager-owned cfgeconomycore.xml block: the
+    /// active preset's ModTypes folder relative to the mission (forward slashes).
     /// </summary>
     private string ActiveCeFolderValue(string missionPath)
     {
         string? activeFolder = ActiveTypesFolderAbsolute();
-        if (activeFolder is null || !ActiveSaveForCurrentMap)
+        if (activeFolder is null)
         {
             return EconomyCoreService.ConfiguredFolder;
         }
@@ -726,17 +749,41 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string previousMap = _typesConfig.CurrentMap;
+        string dataDirectory = _dataDirectoryProvider.Current;
 
-        if (!_serverConfig.UpdateTemplate(_serverPath, mapName))
+        // Switching maps uses that map's active preset (persisted from a previous
+        // session), falling back to the reserved default preset. The default
+        // preset is always (re)created so the map always has a working environment.
+        PresetResult ensured = _presetService.EnsureDefaultPreset(_serverPath, dataDirectory, mapName);
+        if (!ensured.Success)
         {
-            _log.Error("Failed to update the server template (serverDZ.cfg); the map was not switched.");
+            _log.Error(ensured.Message);
             return false;
         }
 
-        // The map profile folder mirrors the mpmissions mission folder exactly
-        // (e.g. map_profiles\dayzOffline.chernarusplus) so profiles and logs line
-        // up 1:1 with the mission the tool runs.
-        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{mapName}"))
+        string requestedPreset = ResolvePresetForMap?.Invoke(mapName) ?? PresetPaths.DefaultPresetName;
+        if (!_presetService.PresetExists(dataDirectory, mapName, requestedPreset))
+        {
+            requestedPreset = PresetPaths.DefaultPresetName;
+        }
+
+        _activePresetName = requestedPreset;
+        string presetConfig = PresetPaths.ServerConfigPath(dataDirectory, mapName, _activePresetName);
+
+        if (!_serverConfig.UpdateTemplate(presetConfig, mapName))
+        {
+            _log.Error("Failed to update the preset server template (serverDZ.cfg); the map was not switched.");
+            return false;
+        }
+
+        // Point the launcher at the active preset's environment: its profiles and
+        // its serverDZ.cfg, both expressed relative to the server root.
+        string batPath = Path.Combine(_serverPath, _batFileName);
+        string profileValue = PresetPaths.RelativeToServer(
+            _serverPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, _activePresetName));
+        string configValue = PresetPaths.RelativeToServer(_serverPath, presetConfig);
+
+        if (!_batchFile.WriteServerProfile(batPath, profileValue))
         {
             // Roll the template back so the server files stay on the previous map.
             RollbackMapFiles(previousMap, mapName);
@@ -744,11 +791,18 @@ public sealed class MapTypesViewModel : ViewModelBase
             return false;
         }
 
+        if (!_batchFile.WriteServerConfig(batPath, configValue))
+        {
+            // Templates without a serverConfig line fall back to the server root.
+            TryCopyPresetConfigToRoot(mapName);
+            _log.Warning("Batch file has no serverConfig line; the preset serverDZ.cfg was copied to the server root instead.");
+        }
+
         // Commit: only after the server files were updated successfully.
         _typesConfig.CurrentMap = mapName;
         try
         {
-            _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+            _typesConfigStore.Save(PresetFolder(mapName), _typesConfig);
         }
         catch (Exception ex)
         {
@@ -758,24 +812,46 @@ public sealed class MapTypesViewModel : ViewModelBase
             return false;
         }
 
-        // Pre-create the profile folder the batch serverProfile points at. DayZ
-        // also creates it on its first boot, so this is only a convenience; a
-        // failure is non-fatal.
+        // Pre-create the preset profiles folder the batch serverProfile points at.
+        // DayZ also creates it on its first boot; a failure is non-fatal.
         try
         {
-            _fileSystem.CreateDirectory(Path.Combine(_serverPath, "map_profiles", mapName));
+            _fileSystem.CreateDirectory(PresetPaths.ProfilesFolder(dataDirectory, mapName, _activePresetName));
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to create map_profiles directory: {ex.Message}");
+            _log.Error($"Failed to create the preset profiles directory: {ex.Message}");
         }
 
         NotifyCommandStates();
         RebuildRows();
         SyncEconomyCore();
+        RefreshPresets();
         RefreshSaves();
         _log.Success($"Map switched to: {mapName}");
         return true;
+    }
+
+    /// <summary>
+    /// Best-effort copy of the active preset's serverDZ.cfg to the server root,
+    /// used when the launch template has no serverConfig line.
+    /// </summary>
+    private void TryCopyPresetConfigToRoot(string mapName)
+    {
+        string presetConfig = PresetPaths.ServerConfigPath(
+            _dataDirectoryProvider.Current, mapName, _activePresetName);
+        string rootConfig = Path.Combine(_serverPath, "serverDZ.cfg");
+        try
+        {
+            if (_fileSystem.FileExists(presetConfig))
+            {
+                _fileSystem.CopyFile(presetConfig, rootConfig);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning($"Failed to copy the preset serverDZ.cfg to the server root: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -791,19 +867,29 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        if (!_serverConfig.UpdateTemplate(_serverPath, previousMap))
+        string dataDirectory = _dataDirectoryProvider.Current;
+        string previousConfig = PresetPaths.ServerConfigPath(dataDirectory, previousMap, _activePresetName);
+        if (!_serverConfig.UpdateTemplate(previousConfig, previousMap))
         {
             _log.Warning("Failed to restore the previous server template after the map switch was aborted.");
         }
 
-        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), $"map_profiles\\{previousMap}"))
+        string profileValue = PresetPaths.RelativeToServer(
+            _serverPath, PresetPaths.ProfilesFolder(dataDirectory, previousMap, _activePresetName));
+        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), profileValue))
         {
             _log.Warning("Failed to restore the previous batch serverProfile after the map switch was aborted.");
         }
     }
 
-    private async void ConfigureMod()
+    private async void ConfigureMod(string? modName)
     {
+        if (string.IsNullOrWhiteSpace(modName))
+        {
+            _log.Warning("Select a mod to configure first.");
+            return;
+        }
+
         if (GuardTypesEditing("configuring types files"))
         {
             return;
@@ -822,13 +908,6 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         try
         {
-            string? modName = SelectedMod;
-            if (modName is null)
-            {
-                _log.Warning("Select a mod to configure first.");
-                return;
-            }
-
             string? missionPath = ResolveAppliedMapPath();
             if (missionPath is null)
             {
@@ -912,7 +991,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             }
 
             TypesOperationResult result = _typesService.ConfigureMod(
-                _typesConfig, _typesConfig.CurrentMap, missionPath, _workshopPath, modName, selected, LoadedSet());
+                _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
 
             LogOperation(result, "Types configuration completed.");
         }
@@ -988,7 +1067,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             {
                 var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
                 TypesOperationResult result = _typesService.RemoveFiles(
-                    _typesConfig, _typesConfig.CurrentMap, missionPath, group.Key, leaves, LoadedSet());
+                    _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
                 messages.AddRange(result.Messages);
                 if (!result.Success)
                 {
@@ -999,7 +1078,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             if (untrackedLeaves.Count > 0)
             {
                 TypesOperationResult result = _typesService.RemoveUntrackedFiles(
-                    _typesConfig, _typesConfig.CurrentMap, missionPath, untrackedLeaves);
+                    _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), untrackedLeaves);
                 messages.AddRange(result.Messages);
                 if (!result.Success)
                 {
@@ -1016,7 +1095,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             {
                 if (trackedRows.Count > 0)
                 {
-                    _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                    _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
                 }
 
                 _log.Success("Removed selected types files.");
@@ -1095,7 +1174,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             }
 
             TypesOperationResult result = _typesService.CleanInvalid(
-                _typesConfig, _typesConfig.CurrentMap, missionPath, active, LoadedSet());
+                _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), active, LoadedSet());
 
             foreach (string message in result.Messages)
             {
@@ -1104,7 +1183,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
             if (result.Success)
             {
-                _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+                _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
                 RebuildRows();
             }
             else
@@ -1142,25 +1221,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        string dataDirectory = _dataDirectoryProvider.Current;
-        LoadCompatibilityReport report = BuildLoadCompatibilityReport(mapName, dataDirectory, saveName);
-
-        // A save whose mods are not all present would fail to load its junctions;
-        // refuse it rather than silently restoring a different mod set.
-        if (report.HasMissingSavedMods)
-        {
-            string missing =
-                "This save was created with mod(s) that are missing from the Workshop and cannot be loaded:\n\n  "
-                + string.Join("\n  ", report.MissingSavedMods)
-                + "\n\nInstall/subscribe the missing mod(s) in Steam, then load the save again.";
-            _log.Error($"Load cancelled: mod(s) missing from the Workshop: {string.Join(", ", report.MissingSavedMods)}");
-            _dialogs.ShowWarning(
-                $"Load save \"{saveName}\" for map {mapName}?",
-                "Load Save",
-                missing);
-            return;
-        }
-
 		string message =
 			$"Load save \"{saveName}\" (map: {mapName})?\n\n" +
 			$"This will overwrite your current progress in {StorageLabel(mapName)} and replace the mission's type file configuration with the stored copy, " +
@@ -1168,9 +1228,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 			$"Your configured type settings are preserved for the next New Game. " +
 			$"The current progress will be lost.";
 	
-        bool confirmed = string.IsNullOrWhiteSpace(report.SnapshotWarning)
-            ? _dialogs.Confirm(message, "Load Save")
-            : _dialogs.ConfirmWithWarning(message, "Load Save", report.SnapshotWarning);
+        bool confirmed = _dialogs.Confirm(message, "Load Save");
 
         if (!confirmed)
         {
@@ -1183,49 +1241,20 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        // The loaded world reads its type files in place from the save's own
-        // ModTypes folder. Refuse the load when the save claims type files but its
-        // snapshot folder is missing: pointing cfgeconomycore.xml at a missing
-        // folder would break the world's economy.
-        MapTypesConfig? savedMapping = LoadActiveTypesConfig(mapName, dataDirectory, saveName);
-        bool mappingHasFiles = savedMapping?.Mods.Any(entry => entry.GeneratedFiles.Count > 0) ?? false;
-        bool hasSnapshot = _fileSystem.DirectoryExists(
-            _saveGameService.GetModTypesSnapshotPath(dataDirectory, mapName, saveName));
-        if (mappingHasFiles && !hasSnapshot)
-        {
-            _log.Error($"Save \"{saveName}\" is missing its stored type files; load cancelled.");
-            return;
-        }
-
         string serverPath = _serverPath;
-        IReadOnlySet<string> configuredOwned = OwnedLeaves(CurrentMapConfig());
+        int instanceId = PresetInstanceId(mapName);
+        string savesFolder = PresetSavesFolder(mapName);
         IsSaveBusy = true;
         try
         {
             SaveGameResult result = await Task.Run(
-                () => _saveGameService.LoadSave(serverPath, mapName, dataDirectory, saveName));
+                () => _saveGameService.LoadSave(serverPath, mapName, savesFolder, instanceId, saveName));
             LogSaveResult(result);
 
             if (result.Success)
             {
-                // Make the save's types the active source and point the economy core
-                // at its folder. types_config.json (the configured mapping) is left
-                // untouched, and the configured files stay in the live db\ModTypes.
-                _activeSave = (mapName, saveName);
-                _activeTypesConfig = savedMapping;
-                SyncEconomyCore(configuredOwned);
-
-                // Replace the loaded mods with the save's and apply them so the
-                // batch file, mod_order.json and junctions match the saved world.
-                if (report.HasSnapshot && RestoreModList is not null)
-                {
-                    bool modsRestored = await RestoreModList(report.SavedModList);
-                    if (!modsRestored)
-                    {
-                        _log.Error("The save loaded, but its mod list could not be applied. Use Apply to retry.");
-                    }
-                }
-
+                // A save only restores world state. The preset's configuration
+                // (mods, types, profiles, instance ID) is left untouched.
                 NotifyCommandStates();
                 RebuildRows();
             }
@@ -1239,29 +1268,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             IsSaveBusy = false;
         }
     }
-
-    /// <summary>Loads the types mapping recorded in a save's meta.json, if readable.</summary>
-    private MapTypesConfig? LoadActiveTypesConfig(string mapName, string dataDirectory, string saveName)
-    {
-        try
-        {
-            ConfigLoadResult<SaveMetaData> loaded = _saveGameService.GetMeta(dataDirectory, mapName, saveName);
-            return loaded.Status == ConfigLoadStatus.Success ? loaded.Value?.TypesConfig : null;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>The generated type-file leaf names a map configuration owns.</summary>
-    private static IReadOnlySet<string> OwnedLeaves(MapTypesConfig? map) =>
-        map is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : map.Mods
-                .SelectMany(entry => entry.GeneratedFiles)
-                .Select(generated => Path.GetFileName(generated)!)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private async void AddSave()
     {
@@ -1298,14 +1304,14 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        string dataDirectory = _dataDirectoryProvider.Current;
+        int instanceId = PresetInstanceId(mapName);
+        string savesFolder = PresetSavesFolder(mapName);
+        bool overwrite = exists;
         IsSaveBusy = true;
         try
         {
-            SaveMetaData meta = BuildSaveSnapshot(mapName);
-            string typesSourceFolder = ActiveTypesFolderAbsolute() ?? string.Empty;
             SaveGameResult result = await Task.Run(
-                () => _saveGameService.AddSave(serverPath, mapName, dataDirectory, trimmed, overwrite: exists, typesSourceFolder, meta));
+                () => _saveGameService.AddSave(serverPath, mapName, savesFolder, instanceId, trimmed, overwrite));
             LogSaveResult(result);
             if (result.Success)
             {
@@ -1336,18 +1342,6 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        // A loaded world's economy reads types directly from its save folder, so the
-        // active save must not be deleted until another source is active.
-        if (_activeSave is { } activeForDelete
-            && string.Equals(activeForDelete.MapName, mapName, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(activeForDelete.SaveName, saveName, StringComparison.OrdinalIgnoreCase))
-        {
-            string block = "This save is currently loaded. Load another save or start a New Game before deleting it.";
-            _log.Error(block);
-            _dialogs.ShowMessage(block, "Delete Save", isError: true);
-            return;
-        }
-
         bool confirmed = _dialogs.Confirm(
             $"Delete the stored save \"{saveName}\"? This cannot be undone.", "Delete Save");
         if (!confirmed)
@@ -1361,11 +1355,11 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        string dataDirectory = _dataDirectoryProvider.Current;
+        string savesFolder = PresetSavesFolder(mapName);
         IsSaveBusy = true;
         try
         {
-            SaveGameResult result = await Task.Run(() => _saveGameService.DeleteSave(dataDirectory, mapName, saveName));
+            SaveGameResult result = await Task.Run(() => _saveGameService.DeleteSave(savesFolder, saveName));
             LogSaveResult(result);
             if (result.Success)
             {
@@ -1410,20 +1404,14 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
+        int instanceId = PresetInstanceId(mapName);
         IsSaveBusy = true;
         try
         {
-            // Entries owned by the currently active types must be dropped from the
-            // economy core when the configured types take over again.
-            IReadOnlySet<string> previouslyOwned = OwnedLeaves(ActiveMapConfig());
-            SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName));
+            SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName, instanceId));
             LogSaveResult(result);
             if (result.Success)
             {
-                // The configured types (live db\ModTypes) become active again; point
-                // the economy core back at them. No files need to be copied.
-                ClearActiveSave();
-                SyncEconomyCore(previouslyOwned);
                 NotifyCommandStates();
                 RebuildRows();
             }
@@ -1438,12 +1426,256 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Rebuilds the preset list for the current map.</summary>
+    private void RefreshPresets()
+    {
+        string mapName = _typesConfig.CurrentMap;
+        Presets.Clear();
+
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            SetRestoringPresetSelection(null);
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string name in _presetService.ListPresetNames(_dataDirectoryProvider.Current, mapName))
+        {
+            if (seen.Add(name))
+            {
+                Presets.Add(new PresetItemViewModel(name));
+            }
+        }
+
+        // The reserved default always exists as a selection target even before the
+        // preset has been materialised on disk.
+        if (!Presets.Any(p => p.IsDefault))
+        {
+            Presets.Insert(0, new PresetItemViewModel(PresetPaths.DefaultPresetName));
+        }
+
+        PresetItemViewModel? current =
+            Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal))
+            ?? Presets.First();
+        SetRestoringPresetSelection(current);
+        NotifyCommandStates();
+    }
+
+    private void SetRestoringPresetSelection(PresetItemViewModel? preset)
+    {
+        _isRestoringPreset = true;
+        try
+        {
+            SelectedPreset = preset;
+        }
+        finally
+        {
+            _isRestoringPreset = false;
+        }
+    }
+
+    private async Task SwitchPresetAsync(string presetName)
+    {
+        if (string.Equals(presetName, _activePresetName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string mapName = _typesConfig.CurrentMap;
+        if (string.IsNullOrWhiteSpace(mapName) || _isSwitchingPreset)
+        {
+            return;
+        }
+
+        if (RefuseWhileServerRunning("switching presets"))
+        {
+            SetRestoringPresetSelection(
+                Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal)));
+            return;
+        }
+
+        _isSwitchingPreset = true;
+        NotifyBusyChanged();
+        try
+        {
+            bool ok = ActivatePreset is not null && await ActivatePreset(mapName, presetName);
+            if (!ok)
+            {
+                SetRestoringPresetSelection(
+                    Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal)));
+                return;
+            }
+
+            RebuildRows();
+            RefreshSaves();
+            NotifyCommandStates();
+            _log.Success($"Preset switched to: {presetName}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Preset switch failed: {ex.Message}");
+        }
+        finally
+        {
+            _isSwitchingPreset = false;
+            NotifyBusyChanged();
+        }
+    }
+
+    private async void AddPreset()
+    {
+        string? mapName = AppliedMapOrWarn();
+        if (mapName is null)
+        {
+            return;
+        }
+
+        AddPresetRequest? request = _dialogs.AskAddPreset(mapName);
+        if (request is null || string.IsNullOrWhiteSpace(request.Name))
+        {
+            return;
+        }
+
+        PresetResult result = _presetService.CreatePreset(
+            _serverPath, _dataDirectoryProvider.Current, mapName, request.Name,
+            request.CopyProfilesFromDefault);
+        if (!result.Success)
+        {
+            _log.Error(result.Message);
+            _dialogs.ShowMessage(result.Message, "Add Preset", isError: true);
+            return;
+        }
+
+        _log.Success(result.Message);
+        RefreshPresets();
+
+        PresetItemViewModel? created = Presets.FirstOrDefault(
+            p => string.Equals(p.Name, request.Name.Trim(), StringComparison.Ordinal));
+        if (created is not null)
+        {
+            SetRestoringPresetSelection(created);
+            await SwitchPresetAsync(created.Name);
+        }
+    }
+
+    private void RenamePreset()
+    {
+        string mapName = _typesConfig.CurrentMap;
+        PresetItemViewModel? preset = SelectedPreset;
+        if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
+        {
+            return;
+        }
+
+        string? newName = _dialogs.AskText("Rename Preset", $"Rename preset \"{preset.Name}\" to:", preset.Name);
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            return;
+        }
+
+        string trimmed = newName.Trim();
+        if (string.Equals(trimmed, preset.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        PresetResult result = _presetService.RenamePreset(_dataDirectoryProvider.Current, mapName, preset.Name, trimmed);
+        if (!result.Success)
+        {
+            _log.Error(result.Message);
+            return;
+        }
+
+        _log.Success(result.Message);
+        bool wasActive = string.Equals(_activePresetName, preset.Name, StringComparison.Ordinal);
+        RefreshPresets();
+
+        if (wasActive && ActivatePreset is not null)
+        {
+            _ = ActivatePreset(mapName, trimmed);
+        }
+    }
+
+    private void DeletePreset()
+    {
+        string mapName = _typesConfig.CurrentMap;
+        PresetItemViewModel? preset = SelectedPreset;
+        if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
+        {
+            return;
+        }
+
+        if (!_dialogs.Confirm(
+                $"Delete preset \"{preset.Name}\"? Its configuration, profiles and saves will be removed. This cannot be undone.",
+                "Delete Preset"))
+        {
+            return;
+        }
+
+        // Read the instance ID before deleting: it is the preset's ModList subfolder.
+        int instanceId = _presetService.ReadInstanceId(_dataDirectoryProvider.Current, mapName, preset.Name);
+
+        PresetResult result = _presetService.DeletePreset(_dataDirectoryProvider.Current, mapName, preset.Name);
+        if (!result.Success)
+        {
+            _log.Error(result.Message);
+            return;
+        }
+
+        // Remove the preset's junction folder so no orphaned links are left behind.
+        if (!string.IsNullOrWhiteSpace(_serverPath))
+        {
+            _junctions.DeleteJunctionFolder(_serverPath, ModListFolder.PresetKey(instanceId));
+        }
+
+        _log.Success(result.Message);
+        bool wasActive = string.Equals(_activePresetName, preset.Name, StringComparison.Ordinal);
+        RefreshPresets();
+
+        if (wasActive && ActivatePreset is not null)
+        {
+            _ = ActivatePreset(mapName, PresetPaths.DefaultPresetName);
+        }
+    }
+
+    private void RenameSave()
+    {
+        string? mapName = AppliedMapOrWarn();
+        string? saveName = SelectedSave;
+        if (mapName is null || saveName is null)
+        {
+            if (saveName is null)
+            {
+                _log.Warning("Select a stored save first.");
+            }
+
+            return;
+        }
+
+        if (RefuseWhileServerRunning("renaming a save"))
+        {
+            return;
+        }
+
+        string? newName = _dialogs.AskText("Rename Save", $"Rename save \"{saveName}\" to:", saveName);
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            return;
+        }
+
+        SaveGameResult result = _saveGameService.RenameSave(PresetSavesFolder(mapName), saveName, newName.Trim());
+        LogSaveResult(result);
+        if (result.Success)
+        {
+            RefreshSaves();
+        }
+    }
+
     /// <summary>Returns the applied map name, warning when none is applied yet.</summary>
     private string? AppliedMapOrWarn()
     {
         if (string.IsNullOrWhiteSpace(_typesConfig.CurrentMap))
-        {
-            _log.Warning("Apply a map first before managing progress saves.");
+        {            _log.Warning("Apply a map first before managing progress saves.");
             return null;
         }
 
@@ -1454,107 +1686,12 @@ public sealed class MapTypesViewModel : ViewModelBase
     {
         try
         {
-            return Path.GetFileName(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
+            return Path.GetFileName(_saveGameService.GetStorageFolderPath(_serverPath, mapName, PresetInstanceId(mapName)));
         }
         catch (Exception)
         {
             return "storage folder";
         }
-    }
-
-    /// <summary>
-    /// Captures the current configuration a progress save depends on: the loaded
-    /// mod list (order matters) and the map's active generated type files.
-    /// </summary>
-    private SaveMetaData BuildSaveSnapshot(string mapName)
-    {
-        string storageFolder;
-        try
-        {
-            storageFolder = Path.GetFileName(_saveGameService.GetStorageFolderPath(_serverPath, mapName));
-        }
-        catch (Exception)
-        {
-            storageFolder = string.Empty;
-        }
-
-        MapTypesConfig? active = ActiveMapConfig();
-        var activeConfig = new TypesConfig { CurrentMap = mapName };
-        if (active is not null)
-        {
-            activeConfig.Maps[mapName] = active;
-        }
-
-        return new SaveMetaData
-        {
-            Map = mapName,
-            StorageFolder = storageFolder,
-            SavedAtUtc = DateTime.UtcNow,
-            ModList = _loadedMods.ToList(),
-            TypesFiles = _typesService.GetActiveTypeFileNames(activeConfig, mapName, LoadedSet()).ToList(),
-            TypesConfig = CloneMapTypes(active),
-        };
-    }
-
-    /// <summary>
-    /// Deep-copies a map's types configuration so the persisted save snapshot
-    /// cannot alias (and later drift with) the live in-memory model. A missing
-    /// map config becomes an empty (non-null) mapping so every new save is restorable.
-    /// </summary>
-    private static MapTypesConfig CloneMapTypes(MapTypesConfig? source) =>
-        new()
-        {
-            Mods = source is null
-                ? new List<ModTypesEntry>()
-                : source.Mods.Select(entry => new ModTypesEntry
-                {
-                    ModName = entry.ModName,
-                    SourceFiles = entry.SourceFiles.ToList(),
-                    GeneratedFiles = entry.GeneratedFiles.ToList(),
-                    FileRoles = new Dictionary<string, string>(entry.FileRoles, StringComparer.OrdinalIgnoreCase),
-                }).ToList(),
-        };
-
-    /// <summary>
-    /// Reads a stored save's configuration snapshot to decide whether its mod
-    /// list and type files can be restored, and whether any saved mod is missing
-    /// from the Workshop. The mismatch details are not surfaced: loading applies
-    /// the save's configuration automatically.
-    /// </summary>
-    private LoadCompatibilityReport BuildLoadCompatibilityReport(string mapName, string dataDirectory, string saveName)
-    {
-        ConfigLoadResult<SaveMetaData> stored;
-        try
-        {
-            stored = _saveGameService.GetMeta(dataDirectory, mapName, saveName);
-        }
-        catch (Exception)
-        {
-            return new LoadCompatibilityReport(
-                false, Array.Empty<string>(), Array.Empty<string>(),
-                "This save's configuration snapshot could not be read, so its mod list and type files will not be restored.");
-        }
-
-        if (stored.Status == ConfigLoadStatus.Missing)
-        {
-            return new LoadCompatibilityReport(
-                false, Array.Empty<string>(), Array.Empty<string>(),
-                "This save has no configuration snapshot, so its mod list and type files will not be restored.");
-        }
-
-        if (stored.Status == ConfigLoadStatus.Corrupt)
-        {
-            return new LoadCompatibilityReport(
-                false, Array.Empty<string>(), Array.Empty<string>(),
-                "This save's configuration snapshot is unreadable, so its mod list and type files will not be restored.");
-        }
-
-        SaveMetaData saved = stored.Value!;
-        List<string> missingFromWorkshop = saved.ModList
-            .Where(mod => !_allMods.Contains(mod, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-
-        return new LoadCompatibilityReport(true, saved.ModList, missingFromWorkshop, string.Empty);
     }
 
     private void LogSaveResult(SaveGameResult result)
@@ -1610,7 +1747,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         try
         {
-            foreach (string save in _saveGameService.ListSaves(_dataDirectoryProvider.Current, mapName))
+            foreach (string save in _saveGameService.ListSaves(PresetSavesFolder(mapName)))
             {
                 SaveNames.Add(save);
             }
@@ -1630,7 +1767,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
         if (result.Success)
         {
-            _typesConfigStore.Save(_dataDirectoryProvider.Current, _typesConfig);
+            _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
             _log.Success(successMessage);
             RebuildRows();
             NotifyCommandStates();
@@ -1724,10 +1861,14 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private void NotifyCommandStates()
     {
-        ConfigXmlCommand.RaiseCanExecuteChanged();
+        ConfigureModCommand.RaiseCanExecuteChanged();
         OpenModTypesFolderCommand.RaiseCanExecuteChanged();
         RemoveSelectedCommand.RaiseCanExecuteChanged();
         CleanInvalidCommand.RaiseCanExecuteChanged();
+        RenameSaveCommand.RaiseCanExecuteChanged();
+        AddPresetCommand.RaiseCanExecuteChanged();
+        RenamePresetCommand.RaiseCanExecuteChanged();
+        DeletePresetCommand.RaiseCanExecuteChanged();
         NotifyTypesEditingChanged();
     }
 
@@ -1747,10 +1888,9 @@ public sealed class MapTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Opens the active map's mission <c>db\ModTypes</c> folder in File Explorer.
-    /// Gated by the same condition as the Config XML button (a map is applied and
-    /// no world exists). The folder is created when missing so Explorer always
-    /// lands on it; failures are logged, never thrown.
+    /// Opens the active preset's <c>ModTypes</c> folder in File Explorer. Gated by
+    /// the same condition as the Config XML button (a map is applied and no world
+    /// exists). The folder is created when missing; failures are logged, never thrown.
     /// </summary>
     private void OpenModTypesFolder()
     {
@@ -1759,7 +1899,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        string folder = Path.Combine(_serverPath, "mpmissions", _typesConfig.CurrentMap, "db", "ModTypes");
+        string folder = PresetModTypesFolder(_typesConfig.CurrentMap);
         try
         {
             _fileSystem.CreateDirectory(folder);
@@ -1781,22 +1921,23 @@ public sealed class MapTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Opens the server's <c>map_profiles\&lt;current map&gt;</c> folder in File
-    /// Explorer, falling back to the <c>map_profiles</c> root when no map is
-    /// applied yet. Always available (it does not depend on world state). The
-    /// folder is created when missing; failures are logged, never thrown.
+    /// Opens the active preset's <c>profiles</c> folder in File Explorer, falling
+    /// back to the presets root when no map is applied yet. Always available (it
+    /// does not depend on world state). The folder is created when missing;
+    /// failures are logged, never thrown.
     /// </summary>
     private void OpenMapProfilesFolder()
     {
         if (string.IsNullOrWhiteSpace(_serverPath))
         {
-            _log.Warning("Set the server path before opening the map profiles folder.");
+            _log.Warning("Set the server path before opening the preset profiles folder.");
             return;
         }
 
+        string dataDirectory = _dataDirectoryProvider.Current;
         string folder = string.IsNullOrWhiteSpace(_typesConfig.CurrentMap)
-            ? Path.Combine(_serverPath, "map_profiles")
-            : Path.Combine(_serverPath, "map_profiles", _typesConfig.CurrentMap);
+            ? PresetPaths.PresetsRoot(dataDirectory)
+            : PresetPaths.ProfilesFolder(dataDirectory, _typesConfig.CurrentMap, _activePresetName);
 
         try
         {
@@ -1804,7 +1945,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to open the map profiles folder: {ex.Message}");
+            _log.Error($"Failed to open the preset profiles folder: {ex.Message}");
             return;
         }
 
@@ -1814,7 +1955,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to open the map profiles folder: {ex.Message}");
+            _log.Error($"Failed to open the preset profiles folder: {ex.Message}");
         }
     }
 
@@ -1827,21 +1968,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// What the Load Save flow needs from a stored save: whether it has a
-    /// configuration snapshot (so the mod list and type files can be restored),
-    /// the mod list it was created with, and any saved mods missing from the
-    /// Workshop (which blocks the load).
-    /// </summary>
-    private sealed record LoadCompatibilityReport(
-        bool HasSnapshot,
-        IReadOnlyList<string> SavedModList,
-        IReadOnlyList<string> MissingSavedMods,
-        string SnapshotWarning)
-    {
-        public bool HasMissingSavedMods => MissingSavedMods.Count > 0;
     }
 
     private static bool ContainsIgnoreCase(ObservableCollection<string> items, string value) =>

@@ -1,4 +1,5 @@
 using System.IO;
+using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
@@ -21,6 +22,8 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IServerLogCleanupService _logCleanup;
     private readonly IDialogService _dialogs;
     private readonly IDayZServerProcessState _serverProcess;
+    private readonly IPresetService _presetService;
+    private readonly IJunctionService _junctions;
 
     private Settings _settings = new();
     private bool _isDirty;
@@ -43,7 +46,9 @@ public sealed class MainViewModel : ViewModelBase
         IProcessLauncher launcher,
         IServerLogCleanupService logCleanup,
         IDayZServerProcessState serverProcessState,
-        IDataDirectoryProvider dataDirectoryProvider)
+        IDataDirectoryProvider dataDirectoryProvider,
+        IPresetService presetService,
+        IJunctionService junctions)
     {
         _settingsService = settingsService;
         _modOrderStore = modOrderStore;
@@ -54,6 +59,8 @@ public sealed class MainViewModel : ViewModelBase
         _dataDirectoryProvider = dataDirectoryProvider;
         _dialogs = dialogs;
         _serverProcess = serverProcessState;
+        _presetService = presetService;
+        _junctions = junctions;
 
         Log = new LogViewModel();
         ModState = new ModState();
@@ -62,33 +69,48 @@ public sealed class MainViewModel : ViewModelBase
         // --- Load persistent state ---
         _settings = LoadOrCreateSettings();
 
-        ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(_dataDirectoryProvider.Current);
-        if (order.Status == ConfigLoadStatus.Success)
-        {
-            ModState.ReplaceLoadedMods(order.Value!);
-        }
-        else if (order.Status == ConfigLoadStatus.Corrupt)
-        {
-            Log.Error("mod_order.json is corrupt and was ignored.");
-        }
+        // Preset-scoped configuration: mod order and types live in the active
+        // preset's folder. Until a map is applied there is no active preset.
+        string activePreset = ResolveActivePreset(_settings, _settings.ActiveMap);
+        string? presetFolder = string.IsNullOrWhiteSpace(_settings.ActiveMap)
+            ? null
+            : PresetPaths.PresetFolder(_dataDirectoryProvider.Current, _settings.ActiveMap, activePreset);
 
-        ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(_dataDirectoryProvider.Current);
-        if (types.Status == ConfigLoadStatus.Success)
+        if (presetFolder is not null)
         {
-            ApplyLoadedTypes(types.Value!);
-        }
-        else if (types.Status == ConfigLoadStatus.Corrupt)
-        {
-            Log.Error("types_config.json is corrupt and was ignored.");
+            ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(presetFolder);
+            if (order.Status == ConfigLoadStatus.Success)
+            {
+                ModState.ReplaceLoadedMods(order.Value!);
+            }
+            else if (order.Status == ConfigLoadStatus.Corrupt)
+            {
+                Log.Error("mod_order.json is corrupt and was ignored.");
+            }
+
+            ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(presetFolder);
+            if (types.Status == ConfigLoadStatus.Success)
+            {
+                ApplyLoadedTypes(types.Value!);
+            }
+            else if (types.Status == ConfigLoadStatus.Corrupt)
+            {
+                Log.Error("types_config.json is corrupt and was ignored.");
+            }
         }
 
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         MapTypes = new MapTypesViewModel(
             mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
-            fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher);
+            fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher,
+            presetService, _junctions)
+        {
+            ActivePresetName = activePreset,
+        };
         MapTypes.EnsureApplied = EnsureApplied;
-        MapTypes.RestoreModList = RestoreModListFromSaveAsync;
+        MapTypes.ActivatePreset = ActivatePresetAsync;
+        MapTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
         Settings = new SettingsViewModel(dialogs);
         Settings.ApplyRequested += async () => await ApplyAsync();
 
@@ -191,7 +213,80 @@ public sealed class MainViewModel : ViewModelBase
     public void OnMapTypesTabActivated()
     {
         MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
-        MapTypes.RestoreActiveSaveFromEconomy();
+    }
+
+    /// <summary>Resolves the preset active for a map, defaulting to the reserved default preset.</summary>
+    private static string ResolveActivePreset(Settings settings, string mapName)
+    {
+        if (!string.IsNullOrWhiteSpace(mapName)
+            && settings.ActivePresets.TryGetValue(mapName, out string? preset)
+            && !string.IsNullOrWhiteSpace(preset))
+        {
+            return preset;
+        }
+
+        return PresetPaths.DefaultPresetName;
+    }
+
+    /// <summary>Returns a copy of <paramref name="settings"/> recording the active preset for a map.</summary>
+    private static Settings WithActiveSelection(Settings settings, string mapName, string presetName)
+    {
+        var active = new Dictionary<string, string>(settings.ActivePresets, StringComparer.OrdinalIgnoreCase)
+        {
+            [mapName] = presetName,
+        };
+        return settings with { ActiveMap = mapName, ActivePresets = active };
+    }
+
+    /// <summary>
+    /// Makes <paramref name="presetName"/> the active preset for a map: loads its
+    /// mod order and types configuration, persists the selection, and applies the
+    /// preset's environment. Invoked by the Map &amp; Types page.
+    /// </summary>
+    private async Task<bool> ActivatePresetAsync(string mapName, string presetName)
+    {
+        if (string.IsNullOrWhiteSpace(mapName) || string.IsNullOrWhiteSpace(presetName))
+        {
+            return false;
+        }
+
+        string dataDirectory = _dataDirectoryProvider.Current;
+        string presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, presetName);
+
+        if (!PresetPaths.IsDefaultPreset(presetName)
+            && !_presetService.PresetExists(dataDirectory, mapName, presetName))
+        {
+            Log.Error($"Preset \"{presetName}\" does not exist for {mapName}.");
+            return false;
+        }
+
+        ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(presetFolder);
+        IReadOnlyList<string> mods = order.Status == ConfigLoadStatus.Success
+            ? order.Value!
+            : Array.Empty<string>();
+        Mods.ReplaceLoadedMods(mods);
+
+        ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(presetFolder);
+        if (types.Status == ConfigLoadStatus.Success)
+        {
+            ApplyLoadedTypes(types.Value!);
+        }
+        else
+        {
+            TypesConfig.Maps.Clear();
+            TypesConfig.CurrentMap = mapName;
+        }
+
+        _settings = WithActiveSelection(_settings, mapName, presetName);
+        MapTypes.ActivePresetName = presetName;
+
+        bool applied = await ApplyAsync();
+        if (!applied)
+        {
+            Log.Error($"Failed to apply preset \"{presetName}\".");
+        }
+
+        return applied;
     }
 
     private Settings LoadOrCreateSettings()
@@ -269,7 +364,13 @@ public sealed class MainViewModel : ViewModelBase
     {
         try
         {
-            Settings newSettings = Settings.ToSettings();
+            Settings newSettings = Settings.ToSettings() with
+            {
+                // The active map/preset selection is app state the Settings page does
+                // not edit, so it must be carried through a round-trip.
+                ActiveMap = _settings.ActiveMap,
+                ActivePresets = _settings.ActivePresets,
+            };
             IReadOnlyList<string> loadedMods = ModState.LoadedMods.ToList();
 
             bool pathsChanged = newSettings.WorkshopPath != _settings.WorkshopPath
@@ -287,11 +388,34 @@ public sealed class MainViewModel : ViewModelBase
 
             string dataDirectory = _dataDirectoryProvider.Resolve(newSettings);
 
+            // The active preset is the environment being applied. Its folder and
+            // launch variables are derived from the applied map and active preset.
+            string mapName = TypesConfig.CurrentMap;
+            string activePreset = MapTypes.ActivePresetName;
+            string? presetFolder = null;
+            string? serverProfile = null;
+            string? serverConfig = null;
+            string? modListKey = null;
+            if (!string.IsNullOrWhiteSpace(mapName))
+            {
+                presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, activePreset);
+                serverProfile = PresetPaths.RelativeToServer(
+                    newSettings.ServerPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, activePreset));
+                serverConfig = PresetPaths.RelativeToServer(
+                    newSettings.ServerPath, PresetPaths.ServerConfigPath(dataDirectory, mapName, activePreset));
+                modListKey = ModListFolder.PresetKey(
+                    _presetService.ReadInstanceId(dataDirectory, mapName, activePreset));
+            }
+
             ApplyResult result = await Task.Run(() => _applyService.Apply(new ApplyContext
             {
                 Settings = newSettings,
                 LoadedMods = loadedMods,
                 DataDirectory = dataDirectory,
+                PresetFolder = presetFolder,
+                ServerProfile = serverProfile,
+                ServerConfig = serverConfig,
+                ModListKey = modListKey,
             }));
 
             foreach (string line in result.Logs)
@@ -310,6 +434,21 @@ public sealed class MainViewModel : ViewModelBase
             if (!string.Equals(dataDirectory, _dataDirectoryProvider.Current, StringComparison.OrdinalIgnoreCase))
             {
                 _dataDirectoryProvider.MoveTo(dataDirectory, newSettings);
+
+                // Migrating the Presets tree can carry a stale mod_order.json over
+                // the file the Apply just wrote. Re-save the authoritative order so
+                // the relocated preset matches the applied configuration.
+                if (!string.IsNullOrWhiteSpace(mapName))
+                {
+                    try
+                    {
+                        _modOrderStore.Save(PresetPaths.PresetFolder(dataDirectory, mapName, activePreset), loadedMods);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning($"Failed to re-save the mod order after relocating the data directory: {ex.Message}");
+                    }
+                }
             }
 
             // From here the apply is committed. A UI refresh failure is logged as
@@ -346,7 +485,6 @@ public sealed class MainViewModel : ViewModelBase
                 }
 
                 MapTypes.SyncEconomyCore();
-                MapTypes.OnApplied(loadedMods);
             }
             catch (Exception ex)
             {
@@ -511,10 +649,10 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
-        // The profile folder mirrors the mpmissions mission folder (e.g.
-        // map_profiles\dayzOffline.chernarusplus), which is where DayZ writes the
-        // .RPT and .log files.
-        string folder = Path.Combine(settings.ServerPath, "map_profiles", mapName);
+        // The active preset's profiles folder is where DayZ writes the .RPT and
+        // .log files.
+        string activePreset = MapTypes.ActivePresetName;
+        string folder = PresetPaths.ProfilesFolder(_dataDirectoryProvider.Current, mapName, activePreset);
 
         ServerLogCleanupResult result = await Task.Run(() => _logCleanup.Cleanup(folder));
         if (!result.FolderExists)
@@ -555,16 +693,5 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         return ApplyAsync();
-    }
-
-    /// <summary>
-    /// Replaces the loaded mod list with the one a progress save was created with
-    /// and applies it, so the launch batch, mod_order.json and junctions match the
-    /// save. Invoked by the Map &amp; Types page when a save is loaded.
-    /// </summary>
-    private async Task<bool> RestoreModListFromSaveAsync(IReadOnlyList<string> mods)
-    {
-        Mods.ReplaceLoadedMods(mods);
-        return await ApplyAsync();
     }
 }

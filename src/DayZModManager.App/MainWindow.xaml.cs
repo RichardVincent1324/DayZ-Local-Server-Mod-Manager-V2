@@ -78,8 +78,7 @@ public partial class MainWindow : Window
     }
 
     private void SelectAll_Click(object sender, RoutedEventArgs e)
-    {
-        if (_activeModList is not null)
+    {        if (_activeModList is not null)
         {
             _activeModList.SelectAll();
         }

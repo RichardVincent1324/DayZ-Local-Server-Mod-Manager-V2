@@ -10,6 +10,7 @@ public class ApplyServiceTests
     private const string WorkshopPath = @"D:\DayZ\!Workshop";
     private const string ServerPath = @"D:\DayZServer";
     private const string DataDirectory = @"D:\app\data";
+    private const string PresetDir = @"D:\app\data\Presets\dayzOffline.chernarusplus\__default_preset__";
 
     private static ApplyContext CreateContext(IReadOnlyList<string> loadedMods) =>
         new()
@@ -22,6 +23,10 @@ public class ApplyServiceTests
             },
             LoadedMods = loadedMods,
             DataDirectory = DataDirectory,
+            PresetFolder = PresetDir,
+            ServerProfile = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\profiles",
+            ServerConfig = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\serverDZ.cfg",
+            ModListKey = "1",
         };
 
     private static FakeFileSystem SeedValidEnvironment()
@@ -60,14 +65,14 @@ public class ApplyServiceTests
         Assert.True(result.Success);
 
         // Configuration saved
-        IReadOnlyList<string> savedOrder = new ModOrderStore(fs).Load(DataDirectory).Value!;
+        IReadOnlyList<string> savedOrder = new ModOrderStore(fs).Load(PresetDir).Value!;
         Assert.Equal(new[] { "@CF" }, savedOrder);
 
         // Batch file updated
-        Assert.Contains("modList=-mod=ModList/@CF;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
+        Assert.Contains("modList=-mod=ModList/1/@CF;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
 
-        // Junction created under the ModList folder
-        Assert.True(junctions.IsJunction($@"{ServerPath}\{ModListFolder.Name}\@CF"));
+        // Junction created under the preset's ModList subfolder
+        Assert.True(junctions.IsJunction(Path.Combine(ModListFolder.Directory(ServerPath, "1"), "@CF")));
     }
 
     [Fact]
@@ -86,7 +91,7 @@ public class ApplyServiceTests
         Assert.False(result.Success);
         Assert.Contains(result.Logs, l => l.Contains("Validation failed"));
         Assert.Empty(junctions.Targets);
-        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
     }
 
     [Fact]
@@ -113,10 +118,10 @@ public class ApplyServiceTests
         // Junctions are synchronized before the batch file, so they exist even
         // though the batch write failed (they are reconciled again on the next
         // Apply and are harmless while the server still points at the old list).
-        Assert.True(junctions.IsJunction($@"{ServerPath}\{ModListFolder.Name}\@CF"));
+        Assert.True(junctions.IsJunction(Path.Combine(ModListFolder.Directory(ServerPath, "1"), "@CF")));
 
         // Nothing should be persisted when the batch-file write fails.
-        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
         Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
@@ -138,7 +143,7 @@ public class ApplyServiceTests
 
         // A failed junction sync must not leave config on disk, otherwise the
         // next start would reload changes the user was told were not applied.
-        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
         Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
@@ -148,7 +153,7 @@ public class ApplyServiceTests
         FakeFileSystem fs = SeedValidEnvironment();
         fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=ModList/@CF;ModList/@Expansion;\"");
         var junctions = new FakeJunctionOperations();
-        string modFolder = $@"{ServerPath}\{ModListFolder.Name}";
+        string modFolder = ModListFolder.Directory(ServerPath, "1");
         junctions.Create($@"{modFolder}\@CF", $@"{WorkshopPath}\@CF");
         junctions.Create($@"{modFolder}\@Expansion", $@"{WorkshopPath}\@Expansion");
 
@@ -174,7 +179,7 @@ public class ApplyServiceTests
         Assert.True(junctions.IsJunction($@"{modFolder}\@CF"));
 
         // Nothing is persisted when the batch-file write throws.
-        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
         Assert.Equal(ConfigLoadStatus.Missing, new SettingsService(fs).Load(DataDirectory).Status);
     }
 
@@ -202,7 +207,7 @@ public class ApplyServiceTests
 
         // The launcher must not reference a mod list that was never committed.
         Assert.Equal(originalBatch, fs.TryGetFileContents(batchPath));
-        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(DataDirectory).Status);
+        Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
     }
 
     private sealed class ThrowingSettingsService : ISettingsService
@@ -242,5 +247,7 @@ public class ApplyServiceTests
         }
 
         public bool WriteServerProfile(string batFilePath, string relativeProfile) => _inner.WriteServerProfile(batFilePath, relativeProfile);
+
+        public bool WriteServerConfig(string batFilePath, string serverConfigPath) => _inner.WriteServerConfig(batFilePath, serverConfigPath);
     }
 }

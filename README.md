@@ -149,8 +149,8 @@ verifySignatures = 0;
 
 ### Junction and batch-file management
 
-- Loaded mods are exposed to the server as Windows directory junctions inside a dedicated `ModList` folder.
-- Uses server-root-relative mod paths such as `ModList/@CF`.
+- Loaded mods are exposed to the server as Windows directory junctions inside a per-preset subfolder of the `ModList` folder (e.g. `ModList\1\@CF`, keyed by the preset's `instanceId`), so switching presets never recreates or deletes another preset's junctions.
+- Uses server-root-relative mod paths such as `ModList/1/@CF`.
 - Rewrites the batch file's manager-owned `modList` block when applying changes.
 - Writes large mod lists across multiple valid `cmd` lines rather than creating one unmanageable command line.
 - Reconciles existing managed junctions during Apply.
@@ -177,21 +177,21 @@ verifySignatures = 0;
 - Lock types editing once a world exists (`storage_<instanceId>` present), because DayZ only reads these files when a new world is created; `New Game` unlocks it.
 - Open the active mission's `db/ModTypes` folder, or the `map_profiles` folder, directly in File Explorer from the buttons beside **Config XML** and **Current Map**.
 
-### Progress saves
+### Presets and progress saves
 
-- Save the current world progress for the active map.
-- Uses the active `storage_<instanceId>` folder, with the instance ID read from `serverDZ.cfg` and defaulting to `1` when appropriate.
-- Store named saves per map.
-- Save a snapshot of the mission's `db/ModTypes` alongside the world data.
-- Store save metadata in `meta.json`, including map information, save time, mod order, active types files, and the map's types mapping.
-- Add, load, and delete named saves.
-- Start a new game from the manager.
-- Load a save by pointing `cfgeconomycore.xml` at the save's own `db/ModTypes` copy, so the world reads its saved types while the configured `db/ModTypes` files and `types_config.json` stay untouched.
-- Restore the loaded mod list to match the save's mod list on load: the launch batch, `mod_order.json` and junctions are updated, and mods not in the save are unloaded (their Workshop folders are never deleted).
-- Block loading a save whose mods are missing from the Workshop, listing them in a red warning.
-- While a save is loaded, mods added afterwards are appended to that save's `meta.json` ModList so the save keeps track of them.
-- Keep the configured types in the live `db/ModTypes` folder. Loading a save points `cfgeconomycore.xml` at the save's own `ModTypes` copy instead of overwriting the configured files, so `New Game` simply points it back — the configured types are never displaced.
-- Stage save loading so an interrupted operation does not immediately destroy the current world progress.
+V2 is **preset-driven**: a *preset* is one complete, independent DayZ server environment (server configuration, mod order, types configuration, `ModTypes`, profiles and a dedicated instance ID). A *save* is only a point-in-time snapshot of the world belonging to a preset.
+
+- Each map has an automatically created `__default_preset__` that cannot be renamed or deleted.
+- Add a named preset with **[Add Preset]**; optionally copy the default preset's profile data as the starting point.
+- Select a preset to make it active; its server configuration, mod order, types and profiles are applied to the server.
+- All presets of a map coexist independently, each with its own `instanceId`, so switching presets never overwrites another preset's live world (`storage_<instanceId>`).
+- Manage a preset's saves from the **⋮** button on its row: Add Save, Load Save, Rename Save, Delete Save, New Game.
+- Save the current world progress for the active preset (a copy of `storage_<instanceId>` plus `save-meta.json`).
+- Loading a save restores only the world state; the preset's mods, types and profiles are unchanged.
+- Start a new game to delete the preset's live storage folder so the map starts fresh on the next launch.
+- Save / Load / New Game operations are blocked while the DayZ Server process is running.
+- Save loading is staged so an interrupted operation does not immediately destroy the current world progress.
+
 
 ### Settings and data storage
 
@@ -214,15 +214,24 @@ Typical contents include:
 ```text
 DayZ-Mod-Manager-V2\
 ├─ settings.json
-├─ mod_order.json
-├─ types_config.json
-└─ Progress_Saves\
+└─ Presets\
    └─ <mapName>\
-      └─ <saveName>\
-         ├─ storage_<id>\
-         ├─ meta.json
-         └─ ModTypes\
+      ├─ __default_preset__\
+      │  ├─ preset-meta.json
+      │  ├─ serverDZ.cfg
+      │  ├─ mod_order.json
+      │  ├─ types_config.json
+      │  ├─ ModTypes\
+      │  ├─ profiles\
+      │  └─ saves\
+      │     └─ <saveName>\
+      │        ├─ save-meta.json
+      │        └─ storage_<id>\
+      └─ <userPreset>\
+         └─ (same structure)
 ```
+
+Each preset's `instanceId` is stored in `preset-meta.json` and identifies its runtime storage slot at `mpmissions\<mapName>\storage_<instanceId>`.
 
 ---
 
@@ -298,23 +307,31 @@ A configured server may look similar to this:
 <serverPath>\
 ├─ DayZ-Mod-Manager-V2\
 │  ├─ settings.json
-│  ├─ mod_order.json
-│  ├─ types_config.json
-│  └─ Progress_Saves\
+│  └─ Presets\
+│     └─ <mapName>\
+│        └─ <presetName>\
+│           ├─ preset-meta.json
+│           ├─ serverDZ.cfg
+│           ├─ mod_order.json
+│           ├─ types_config.json
+│           ├─ ModTypes\
+│           ├─ profiles\
+│           └─ saves\
 ├─ LocalServer.bat
 ├─ ModList\
-│  ├─ @CF                 -> junction to Workshop mod
-│  ├─ @AnotherMod         -> junction to Workshop mod
-│  └─ ...
+│  ├─ 1\                    -> junction folder for preset with instanceId 1
+│  │  ├─ @CF              -> junction to Workshop mod
+│  │  └─ @AnotherMod      -> junction to Workshop mod
+│  └─ 2\                    -> junction folder for another preset
+│     └─ ...
 ├─ mpmissions\
 │  └─ <mapName>\
-│     └─ db\
-│        └─ ModTypes\
-├─ map_profiles\
-│  └─ <mapName>\
-├─ serverDZ.cfg
+│     ├─ cfgeconomycore.xml
+│     └─ storage_<instanceId>\
 └─ DayZServer_x64.exe
 ```
+
+The launch batch file's `modList`, `serverProfile` and `serverConfig` lines are pointed at the active preset (its `profiles` and `serverDZ.cfg`), and `cfgeconomycore.xml` references the active preset's `ModTypes` folder.
 
 ---
 

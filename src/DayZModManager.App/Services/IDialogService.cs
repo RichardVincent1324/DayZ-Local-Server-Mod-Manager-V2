@@ -7,6 +7,11 @@ namespace DayZModManager.App.Services;
 /// <param name="CopyProfilesFromDefault">True to seed the preset from the default preset's profiles.</param>
 public sealed record AddPresetRequest(string Name, bool CopyProfilesFromDefault);
 
+/// <summary>Input gathered by the Duplicate Preset dialog.</summary>
+/// <param name="Name">The new (duplicated) preset's name.</param>
+/// <param name="CopyProfiles">True to also copy the current preset's profiles data.</param>
+public sealed record DuplicatePresetRequest(string Name, bool CopyProfiles);
+
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
 public interface IDialogService
 {
@@ -62,4 +67,11 @@ public interface IDialogService
     /// whether to copy the default preset's profiles, or null when cancelled.
     /// </summary>
     AddPresetRequest? AskAddPreset(string mapName);
+
+    /// <summary>
+    /// Opens the Duplicate Preset dialog for an existing preset. Returns the
+    /// requested name and whether to copy the current preset's profiles, or null
+    /// when cancelled.
+    /// </summary>
+    DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName);
 }

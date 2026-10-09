@@ -3,27 +3,45 @@ using DayZModManager.App.Services;
 
 namespace DayZModManager.App.Dialogs;
 
+/// <summary>Name and copy-profiles choice gathered by the preset prompt window.</summary>
+public sealed record PresetNameInput(string Name, bool CopyProfiles);
+
 public partial class AddPresetWindow : Window
 {
     public AddPresetWindow(string mapName)
+        : this(
+            "Add Preset",
+            $"Preset name for {mapName}:",
+            "Copy profiles data from __default_preset__",
+            checkboxDefault: true,
+            "Create")
+    {
+    }
+
+    public AddPresetWindow(
+        string windowTitle, string prompt, string checkboxContent, bool checkboxDefault, string confirmContent)
     {
         InitializeComponent();
-        PromptText.Text = $"Preset name for {mapName}:";
+        Title = windowTitle;
+        PromptText.Text = prompt;
+        CopyProfilesBox.Content = checkboxContent;
+        CopyProfilesBox.IsChecked = checkboxDefault;
+        ConfirmButton.Content = confirmContent;
         NameBox.Focus();
     }
 
-    public AddPresetRequest? Result { get; private set; }
+    public PresetNameInput? Result { get; private set; }
 
     private void Create_Click(object sender, RoutedEventArgs e)
     {
         string name = NameBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(name))
         {
-            MessageBox.Show("Enter a preset name.", "Add Preset", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("Enter a preset name.", "Preset name", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        Result = new AddPresetRequest(name, CopyProfilesBox.IsChecked == true);
+        Result = new PresetNameInput(name, CopyProfilesBox.IsChecked == true);
         DialogResult = true;
     }
 

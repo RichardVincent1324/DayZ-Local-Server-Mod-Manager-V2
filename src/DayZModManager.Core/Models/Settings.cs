@@ -18,8 +18,8 @@ public sealed record Settings
 
     /// <summary>
     /// When enabled, DayZ server log files (<c>.rpt</c> and <c>.log</c>) in the
-    /// active map's profile folder are all cleared on app startup once more than
-    /// 20 of them have accumulated.
+    /// active preset's profiles folder are all cleared on app startup once more
+    /// than 20 of them have accumulated.
     /// </summary>
     public bool AutoCleanServerLogs { get; init; }
 

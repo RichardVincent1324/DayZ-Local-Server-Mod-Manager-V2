@@ -43,7 +43,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     private string? _selectedMap;
     private string? _selectedMod;
-    private string? _selectedSave;
+    private SaveListEntryViewModel? _selectedSave;
     private bool _isRestoring;
     private bool _isSwitching;
     private bool _typesBusy;
@@ -91,12 +91,14 @@ public sealed class MapTypesViewModel : ViewModelBase
         OpenMapProfilesFolderCommand = new RelayCommand(OpenMapProfilesFolder);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => TypesEditingAllowed && CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid, () => TypesEditingAllowed);
-        LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is not null && !IsSaveBusy);
+        LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is { IsOrphaned: false } && !IsSaveBusy);
         DeleteSaveCommand = new RelayCommand(DeleteSave, () => SelectedSave is not null && !IsSaveBusy);
-        RenameSaveCommand = new RelayCommand(RenameSave, () => SelectedSave is not null && !IsSaveBusy);
+        RenameSaveCommand = new RelayCommand(RenameSave, () => SelectedSave is { IsOrphaned: false } && !IsSaveBusy);
         AddSaveCommand = new RelayCommand(AddSave, () => !IsSaveBusy);
-        NewGameCommand = new RelayCommand(NewGame, () => !IsSaveBusy);
+        WipeWorldCommand = new RelayCommand(WipeWorld, () => !IsSaveBusy);
         AddPresetCommand = new RelayCommand(AddPreset, () => !IsBusy && !string.IsNullOrEmpty(_typesConfig.CurrentMap));
+        DuplicatePresetCommand = new RelayCommand(
+            DuplicatePreset, () => !IsBusy && !string.IsNullOrEmpty(_typesConfig.CurrentMap) && SelectedPreset is not null);
         RenamePresetCommand = new RelayCommand(RenamePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
         DeletePresetCommand = new RelayCommand(DeletePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
 
@@ -168,8 +170,14 @@ public sealed class MapTypesViewModel : ViewModelBase
         get => _selectedPreset;
         set
         {
-            if (SetField(ref _selectedPreset, value)
-                && !_isRestoringPreset
+            if (!SetField(ref _selectedPreset, value))
+            {
+                return;
+            }
+
+            DuplicatePresetCommand.RaiseCanExecuteChanged();
+
+            if (!_isRestoringPreset
                 && value is not null
                 && !string.Equals(value.Name, _activePresetName, StringComparison.Ordinal))
             {
@@ -232,7 +240,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// <summary>True when no mod is selected; drives the Types Config placeholder overlay.</summary>
     public bool IsModSelectionEmpty => string.IsNullOrEmpty(_selectedMod);
 
-    public string? SelectedSave
+    public SaveListEntryViewModel? SelectedSave
     {
         get => _selectedSave;
         set
@@ -241,6 +249,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             {
                 LoadSaveCommand.RaiseCanExecuteChanged();
                 DeleteSaveCommand.RaiseCanExecuteChanged();
+                RenameSaveCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -257,20 +266,23 @@ public sealed class MapTypesViewModel : ViewModelBase
                 LoadSaveCommand.RaiseCanExecuteChanged();
                 DeleteSaveCommand.RaiseCanExecuteChanged();
                 AddSaveCommand.RaiseCanExecuteChanged();
-                NewGameCommand.RaiseCanExecuteChanged();
+                WipeWorldCommand.RaiseCanExecuteChanged();
             }
         }
     }
 
-    /// <summary>Names of stored progress saves for the current map.</summary>
-    public ObservableCollection<string> SaveNames { get; } = new();
+    /// <summary>
+    /// Stored progress saves for the current map, plus any unattached
+    /// (orphaned) live storage folders that no preset owns.
+    /// </summary>
+    public ObservableCollection<SaveListEntryViewModel> SaveNames { get; } = new();
 
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>
     /// True when types may be configured: a map is applied and no world exists.
     /// DayZ only reads type files when a new world is created, so once a world
-    /// (storage folder) is present editing is locked until a New Game.
+    /// (storage folder) is present editing is locked until the world is wiped.
     /// </summary>
     public bool TypesEditingAllowed =>
         !string.IsNullOrWhiteSpace(_typesConfig.CurrentMap) && !WorldExists(_typesConfig.CurrentMap);
@@ -282,7 +294,7 @@ public sealed class MapTypesViewModel : ViewModelBase
     /// <summary>Banner shown while types editing is locked; empty when editing is allowed.</summary>
     public string TypesLockedMessage =>
         IsTypesLocked
-            ? "Types editing is disabled while a world exists. Start a New Game to reconfigure."
+            ? "Types editing is disabled while a world exists. Wipe the current world to reconfigure."
             : string.Empty;
 
     /// <summary>
@@ -323,7 +335,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 
     /// <summary>
     /// True while a map switch, a types operation (configure/remove/clean), or a
-    /// progress-save operation (load/add/delete/new game) is in flight. Used by the
+    /// progress-save operation (load/add/delete/wipe world) is in flight. Used by the
     /// Start Server action so it never launches the server while the launch batch,
     /// mission files, or the live storage folder are being rewritten or deleted.
     /// </summary>
@@ -346,8 +358,9 @@ public sealed class MapTypesViewModel : ViewModelBase
     public RelayCommand AddSaveCommand { get; }
     public RelayCommand DeleteSaveCommand { get; }
     public RelayCommand RenameSaveCommand { get; }
-    public RelayCommand NewGameCommand { get; }
+    public RelayCommand WipeWorldCommand { get; }
     public RelayCommand AddPresetCommand { get; }
+    public RelayCommand DuplicatePresetCommand { get; }
     public RelayCommand RenamePresetCommand { get; }
     public RelayCommand DeletePresetCommand { get; }
 
@@ -1205,16 +1218,24 @@ public sealed class MapTypesViewModel : ViewModelBase
     private async void LoadSave()
     {
         string? mapName = AppliedMapOrWarn();
-        string? saveName = SelectedSave;
-        if (mapName is null || saveName is null)
+        SaveListEntryViewModel? entry = SelectedSave;
+        if (mapName is null || entry is null)
         {
-            if (saveName is null)
+            if (entry is null)
             {
                 _log.Warning("Select a stored save first.");
             }
 
             return;
         }
+
+        if (entry.IsOrphaned)
+        {
+            _log.Warning("Only stored saves can be loaded; unattached storage cannot.");
+            return;
+        }
+
+        string saveName = entry.Name;
 
         if (RefuseWhileServerRunning("loading a save"))
         {
@@ -1225,7 +1246,7 @@ public sealed class MapTypesViewModel : ViewModelBase
 			$"Load save \"{saveName}\" (map: {mapName})?\n\n" +
 			$"This will overwrite your current progress in {StorageLabel(mapName)} and replace the mission's type file configuration with the stored copy, " +
 			$"and set the loaded mod list to this save's. " +
-			$"Your configured type settings are preserved for the next New Game. " +
+			$"Your configured type settings are preserved until you wipe the world. " +
 			$"The current progress will be lost.";
 	
         bool confirmed = _dialogs.Confirm(message, "Load Save");
@@ -1291,7 +1312,8 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
 
         string trimmed = name.Trim();
-        bool exists = SaveNames.Contains(trimmed, StringComparer.OrdinalIgnoreCase);
+        bool exists = SaveNames.Any(entry =>
+            !entry.IsOrphaned && string.Equals(entry.Name, trimmed, StringComparison.OrdinalIgnoreCase));
         if (exists && !_dialogs.Confirm($"A save named \"{trimmed}\" already exists. Overwrite it?", "Overwrite save?"))
         {
             _log.Info("Save cancelled.");
@@ -1331,10 +1353,10 @@ public sealed class MapTypesViewModel : ViewModelBase
     private async void DeleteSave()
     {
         string? mapName = AppliedMapOrWarn();
-        string? saveName = SelectedSave;
-        if (mapName is null || saveName is null)
+        SaveListEntryViewModel? entry = SelectedSave;
+        if (mapName is null || entry is null)
         {
-            if (saveName is null)
+            if (entry is null)
             {
                 _log.Warning("Select a stored save first.");
             }
@@ -1342,6 +1364,13 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
+        if (entry.IsOrphaned)
+        {
+            await DeleteOrphanStorageAsync(mapName, entry);
+            return;
+        }
+
+        string saveName = entry.Name;
         bool confirmed = _dialogs.Confirm(
             $"Delete the stored save \"{saveName}\"? This cannot be undone.", "Delete Save");
         if (!confirmed)
@@ -1376,7 +1405,62 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
-    private async void NewGame()
+    /// <summary>
+    /// Deletes a live storage folder that no preset owns. Refuses while the
+    /// server is running and always confirms, since it destroys world data that
+    /// this tool did not create.
+    /// </summary>
+    private async Task DeleteOrphanStorageAsync(string mapName, SaveListEntryViewModel entry)
+    {
+        if (entry.InstanceId is not int instanceId)
+        {
+            return;
+        }
+
+        if (RefuseWhileServerRunning("deleting unattached storage"))
+        {
+            return;
+        }
+
+        bool confirmed = _dialogs.Confirm(
+            $"Delete unattached storage \"{entry.Name}\" (map: {mapName})?\n\n" +
+            "This folder is not owned by any preset. It may be world data left behind by a deleted preset or created before this tool managed the server. " +
+            "This cannot be undone.",
+            "Delete Unattached Storage");
+        if (!confirmed)
+        {
+            _log.Info("Deletion cancelled.");
+            return;
+        }
+
+        if (IsSaveBusy)
+        {
+            return;
+        }
+
+        string serverPath = _serverPath;
+        IsSaveBusy = true;
+        try
+        {
+            SaveGameResult result = await Task.Run(
+                () => _saveGameService.DeleteStorage(serverPath, mapName, instanceId));
+            LogSaveResult(result);
+            if (result.Success)
+            {
+                RefreshSaves();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to delete unattached storage: {ex.Message}");
+        }
+        finally
+        {
+            IsSaveBusy = false;
+        }
+    }
+
+    private async void WipeWorld()
     {
         string? mapName = AppliedMapOrWarn();
         if (mapName is null)
@@ -1384,17 +1468,17 @@ public sealed class MapTypesViewModel : ViewModelBase
             return;
         }
 
-        if (RefuseWhileServerRunning("starting a new game"))
+        if (RefuseWhileServerRunning("wiping the world"))
         {
             return;
         }
 
         bool confirmed = _dialogs.Confirm(
-            $"Start a NEW GAME on map {mapName}?\n\nThis will DELETE {StorageLabel(mapName)} so the map starts fresh on the next server launch. Continue?",
-            "New Game");
+            $"Wipe the current world on map {mapName}?\n\nThis will DELETE {StorageLabel(mapName)} so the map starts fresh on the next server launch. Continue?",
+            "Wipe World");
         if (!confirmed)
         {
-            _log.Info("New game cancelled.");
+            _log.Info("Wipe cancelled.");
             return;
         }
 
@@ -1408,7 +1492,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         IsSaveBusy = true;
         try
         {
-            SaveGameResult result = await Task.Run(() => _saveGameService.NewGame(serverPath, mapName, instanceId));
+            SaveGameResult result = await Task.Run(() => _saveGameService.WipeWorld(serverPath, mapName, instanceId));
             LogSaveResult(result);
             if (result.Success)
             {
@@ -1418,7 +1502,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to start a new game: {ex.Message}");
+            _log.Error($"Failed to wipe the world: {ex.Message}");
         }
         finally
         {
@@ -1558,6 +1642,49 @@ public sealed class MapTypesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Creates a copy of the currently selected preset so the user can experiment
+    /// with mods and types without touching the original. The copy always inherits
+    /// the source's server config, mod order, types config and ModTypes; profiles
+    /// are copied only when the user opts in.
+    /// </summary>
+    private async void DuplicatePreset()
+    {
+        string? mapName = AppliedMapOrWarn();
+        PresetItemViewModel? source = SelectedPreset;
+        if (mapName is null || source is null)
+        {
+            return;
+        }
+
+        DuplicatePresetRequest? request = _dialogs.AskDuplicatePreset(source.Name);
+        if (request is null || string.IsNullOrWhiteSpace(request.Name))
+        {
+            return;
+        }
+
+        PresetResult result = _presetService.DuplicatePreset(
+            _serverPath, _dataDirectoryProvider.Current, mapName, source.Name,
+            request.Name, request.CopyProfiles);
+        if (!result.Success)
+        {
+            _log.Error(result.Message);
+            _dialogs.ShowMessage(result.Message, "Duplicate Preset", isError: true);
+            return;
+        }
+
+        _log.Success(result.Message);
+        RefreshPresets();
+
+        PresetItemViewModel? created = Presets.FirstOrDefault(
+            p => string.Equals(p.Name, request.Name.Trim(), StringComparison.Ordinal));
+        if (created is not null)
+        {
+            SetRestoringPresetSelection(created);
+            await SwitchPresetAsync(created.Name);
+        }
+    }
+
     private void RenamePreset()
     {
         string mapName = _typesConfig.CurrentMap;
@@ -1641,16 +1768,24 @@ public sealed class MapTypesViewModel : ViewModelBase
     private void RenameSave()
     {
         string? mapName = AppliedMapOrWarn();
-        string? saveName = SelectedSave;
-        if (mapName is null || saveName is null)
+        SaveListEntryViewModel? entry = SelectedSave;
+        if (mapName is null || entry is null)
         {
-            if (saveName is null)
+            if (entry is null)
             {
                 _log.Warning("Select a stored save first.");
             }
 
             return;
         }
+
+        if (entry.IsOrphaned)
+        {
+            _log.Warning("Unattached storage cannot be renamed; only stored saves can.");
+            return;
+        }
+
+        string saveName = entry.Name;
 
         if (RefuseWhileServerRunning("renaming a save"))
         {
@@ -1708,11 +1843,6 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             _log.Error(result.Message);
         }
-
-        foreach (string warning in result.Warnings)
-        {
-            _log.Warning(warning);
-        }
     }
 
     /// <summary>
@@ -1733,7 +1863,10 @@ public sealed class MapTypesViewModel : ViewModelBase
         return true;
     }
 
-    /// <summary>Rebuilds the stored-save list for the current map.</summary>
+    /// <summary>
+    /// Rebuilds the stored-save list for the current map, then appends any
+    /// unattached live storage folders that no preset owns.
+    /// </summary>
     private void RefreshSaves()
     {
         SaveNames.Clear();
@@ -1749,12 +1882,42 @@ public sealed class MapTypesViewModel : ViewModelBase
         {
             foreach (string save in _saveGameService.ListSaves(PresetSavesFolder(mapName)))
             {
-                SaveNames.Add(save);
+                SaveNames.Add(new SaveListEntryViewModel(save, isOrphaned: false));
+            }
+
+            foreach (int instanceId in FindOrphanStorageInstanceIds(mapName))
+            {
+                SaveNames.Add(new SaveListEntryViewModel($"storage_{instanceId}", isOrphaned: true, instanceId));
             }
         }
         catch (Exception ex)
         {
             _log.Error($"Failed to list progress saves: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Returns the instance IDs of live storage folders in the map's mission
+    /// folder that are not owned by any preset of that map (unattached/orphan
+    /// storage). Never throws.
+    /// </summary>
+    private IReadOnlyList<int> FindOrphanStorageInstanceIds(string mapName)
+    {
+        try
+        {
+            string dataDirectory = _dataDirectoryProvider.Current;
+            var managed = new HashSet<int>(
+                _presetService.ListPresetNames(dataDirectory, mapName)
+                    .Select(preset => _presetService.ReadInstanceId(dataDirectory, mapName, preset)));
+
+            return _saveGameService.ListStorageInstanceIds(_serverPath, mapName)
+                .Where(id => !managed.Contains(id))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to scan for unattached storage: {ex.Message}");
+            return Array.Empty<int>();
         }
     }
 
@@ -1867,6 +2030,7 @@ public sealed class MapTypesViewModel : ViewModelBase
         CleanInvalidCommand.RaiseCanExecuteChanged();
         RenameSaveCommand.RaiseCanExecuteChanged();
         AddPresetCommand.RaiseCanExecuteChanged();
+        DuplicatePresetCommand.RaiseCanExecuteChanged();
         RenamePresetCommand.RaiseCanExecuteChanged();
         DeletePresetCommand.RaiseCanExecuteChanged();
         NotifyTypesEditingChanged();
@@ -1883,7 +2047,7 @@ public sealed class MapTypesViewModel : ViewModelBase
             return false;
         }
 
-        _log.Warning($"Type files can only be configured before a world exists. Start a New Game before {action}.");
+        _log.Warning($"Type files can only be configured before a world exists. Wipe the current world before {action}.");
         return true;
     }
 

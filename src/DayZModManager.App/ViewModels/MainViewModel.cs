@@ -624,10 +624,10 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Clears the active map's server log files when the "auto-clean" feature is
+    /// Clears the active preset's server log files when the "auto-clean" feature is
     /// enabled. Runs once at app startup: when more than
     /// <see cref="ServerLogCleanupService.CleanupThreshold"/> <c>.rpt</c>/<c>.log</c>
-    /// files have accumulated in the profile folder, all of them are deleted.
+    /// files have accumulated in its profiles folder, all of them are deleted.
     /// </summary>
     private async Task CleanupOldLogsIfEnabledAsync(Settings settings)
     {

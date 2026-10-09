@@ -65,6 +65,16 @@ public interface IPresetService
     PresetResult CreatePreset(
         string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfilesFromDefault);
 
+    /// <summary>
+    /// Creates a new preset as a copy of an existing preset's environment: its
+    /// server configuration (with a fresh, dedicated instance ID), mod order, types
+    /// configuration and ModTypes files. Profiles are copied only when
+    /// <paramref name="copyProfiles"/> is set. Saves are never copied.
+    /// </summary>
+    PresetResult DuplicatePreset(
+        string serverPath, string dataDirectory, string mapName,
+        string sourcePresetName, string newPresetName, bool copyProfiles);
+
     /// <summary>Renames a user preset. The reserved default preset cannot be renamed.</summary>
     PresetResult RenamePreset(string dataDirectory, string mapName, string presetName, string newName);
 
@@ -208,6 +218,74 @@ public sealed class PresetService : IPresetService
         return CreatePresetCore(serverPath, dataDirectory, mapName, name, copyProfilesFromDefault);
     }
 
+    public PresetResult DuplicatePreset(
+        string serverPath, string dataDirectory, string mapName,
+        string sourcePresetName, string newPresetName, bool copyProfiles)
+    {
+        string? name = NormalizePresetName(newPresetName);
+        if (name is null)
+        {
+            return Failure("Preset name cannot be empty or contain invalid characters.");
+        }
+
+        if (PresetPaths.IsDefaultPreset(name))
+        {
+            return Failure("\"__default_preset__\" is reserved and is created automatically.");
+        }
+
+        string sourceFolder = PresetPaths.PresetFolder(dataDirectory, mapName, sourcePresetName);
+        if (!_fileSystem.DirectoryExists(sourceFolder))
+        {
+            return Failure($"Preset \"{sourcePresetName}\" was not found.");
+        }
+
+        string targetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, name);
+        if (_fileSystem.DirectoryExists(targetFolder))
+        {
+            return Failure($"A preset named \"{name}\" already exists for {mapName}.");
+        }
+
+        int instanceId = AllocateInstanceId(dataDirectory);
+        try
+        {
+            _fileSystem.CreateDirectory(targetFolder);
+            EnsureSubfolders(dataDirectory, mapName, name);
+            SeedServerConfig(serverPath, dataDirectory, mapName, name, instanceId, sourcePresetName);
+
+            CopyFileIfExists(
+                PresetPaths.ModOrderPath(dataDirectory, mapName, sourcePresetName),
+                PresetPaths.ModOrderPath(dataDirectory, mapName, name));
+            CopyFileIfExists(
+                PresetPaths.TypesConfigPath(dataDirectory, mapName, sourcePresetName),
+                PresetPaths.TypesConfigPath(dataDirectory, mapName, name));
+
+            CopyDirectoryIfExists(
+                PresetPaths.ModTypesFolder(dataDirectory, mapName, sourcePresetName),
+                PresetPaths.ModTypesFolder(dataDirectory, mapName, name));
+
+            if (copyProfiles)
+            {
+                CopyDirectoryIfExists(
+                    PresetPaths.ProfilesFolder(dataDirectory, mapName, sourcePresetName),
+                    PresetPaths.ProfilesFolder(dataDirectory, mapName, name));
+            }
+
+            var meta = new PresetMetaData
+            {
+                InstanceId = instanceId,
+                CreatedAtUtc = DateTime.UtcNow,
+            };
+            ConfigJson.Write(_fileSystem, PresetPaths.PresetMetaPath(dataDirectory, mapName, name), meta);
+        }
+        catch (Exception ex)
+        {
+            TryDelete(targetFolder);
+            return Failure($"Failed to duplicate preset: {ex.Message}");
+        }
+
+        return Success($"Duplicated preset \"{sourcePresetName}\" to \"{name}\" (instanceId {instanceId}).");
+    }
+
     public PresetResult RenamePreset(string dataDirectory, string mapName, string presetName, string newName)
     {
         if (PresetPaths.IsDefaultPreset(presetName))
@@ -316,18 +394,29 @@ public sealed class PresetService : IPresetService
     }
 
     /// <summary>
-    /// Seeds the preset's <c>serverDZ.cfg</c>: copied from the default preset (or
-    /// the server root for the default preset itself), then rewritten so its
+    /// Seeds the preset's <c>serverDZ.cfg</c>: copied from
+    /// <paramref name="sourcePreset"/> when given, otherwise from the default preset
+    /// (or the server root for the default preset itself), then rewritten so its
     /// <c>template</c> is the map and its <c>instanceId</c> is the preset's own.
     /// Falls back to a minimal valid config when no source file exists.
     /// </summary>
     private void SeedServerConfig(
-        string serverPath, string dataDirectory, string mapName, string presetName, int instanceId)
+        string serverPath, string dataDirectory, string mapName, string presetName, int instanceId,
+        string? sourcePreset = null)
     {
         string target = PresetPaths.ServerConfigPath(dataDirectory, mapName, presetName);
 
         string? source = null;
-        if (!PresetPaths.IsDefaultPreset(presetName))
+        if (!string.IsNullOrWhiteSpace(sourcePreset))
+        {
+            string sourceConfig = PresetPaths.ServerConfigPath(dataDirectory, mapName, sourcePreset);
+            if (_fileSystem.FileExists(sourceConfig))
+            {
+                source = sourceConfig;
+            }
+        }
+
+        if (source is null && !PresetPaths.IsDefaultPreset(presetName))
         {
             string defaultConfig = PresetPaths.ServerConfigPath(
                 dataDirectory, mapName, PresetPaths.DefaultPresetName);
@@ -376,6 +465,22 @@ public sealed class PresetService : IPresetService
 
         string targetProfiles = PresetPaths.ProfilesFolder(dataDirectory, mapName, presetName);
         _fileSystem.CopyDirectory(defaultProfiles, targetProfiles);
+    }
+
+    private void CopyFileIfExists(string source, string destination)
+    {
+        if (_fileSystem.FileExists(source))
+        {
+            _fileSystem.CopyFile(source, destination);
+        }
+    }
+
+    private void CopyDirectoryIfExists(string source, string destination)
+    {
+        if (_fileSystem.DirectoryExists(source))
+        {
+            _fileSystem.CopyDirectory(source, destination);
+        }
     }
 
     private void TryDelete(string path)

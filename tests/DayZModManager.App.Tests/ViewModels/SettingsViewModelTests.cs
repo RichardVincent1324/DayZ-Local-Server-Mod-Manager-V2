@@ -347,5 +347,7 @@ public class SettingsViewModelTests
             IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null) => null;
 
         public AddPresetRequest? AskAddPreset(string mapName) => null;
+
+        public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName) => null;
     }
 }

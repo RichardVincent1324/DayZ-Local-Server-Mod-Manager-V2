@@ -65,8 +65,8 @@ public sealed class SettingsViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// When enabled, all <c>.rpt</c>/<c>.log</c> files in the active map profile
-    /// folder are cleared on app startup once more than 20 have accumulated.
+    /// When enabled, all <c>.rpt</c>/<c>.log</c> files in the active preset's
+    /// profiles folder are cleared on app startup once more than 20 have accumulated.
     /// </summary>
     public bool AutoCleanServerLogs
     {

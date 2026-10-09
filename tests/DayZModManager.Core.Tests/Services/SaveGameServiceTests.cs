@@ -69,6 +69,58 @@ public class SaveGameServiceTests
     }
 
     [Fact]
+    public void ListStorageInstanceIds_ReturnsStorageFolders_ExcludingStaging()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(MissionPath, "storage_1", "storage_5", "storage_1.restore_aabbcc", "storage_1.old", "keep_me");
+        fs.AddFile($@"{LiveStorage(5)}\players.db", "five");
+
+        IReadOnlyList<int> ids = CreateService(fs).ListStorageInstanceIds(ServerPath, MapName);
+
+        Assert.Equal(new[] { 1, 5 }, ids);
+    }
+
+    [Fact]
+    public void ListStorageInstanceIds_ReturnsEmpty_WhenMissionMissing()
+    {
+        Assert.Empty(CreateService(new FakeFileSystem()).ListStorageInstanceIds(ServerPath, MapName));
+    }
+
+    [Fact]
+    public void DeleteStorage_RemovesFolder()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs, instanceId: 5);
+
+        SaveGameResult result = CreateService(fs).DeleteStorage(ServerPath, MapName, 5);
+
+        Assert.True(result.Success);
+        Assert.False(fs.DirectoryExists(LiveStorage(5)));
+    }
+
+    [Fact]
+    public void DeleteStorage_NoOp_WhenAbsent()
+    {
+        SaveGameResult result = CreateService(new FakeFileSystem()).DeleteStorage(ServerPath, MapName, 5);
+
+        Assert.True(result.Success);
+        Assert.True(result.Informational);
+    }
+
+    [Fact]
+    public void DeleteStorage_ReturnsFailure_WhenServerRunning()
+    {
+        var fs = new FakeFileSystem();
+        SeedLiveStorage(fs, instanceId: 5);
+
+        SaveGameResult result = CreateRunningService(fs).DeleteStorage(ServerPath, MapName, 5);
+
+        Assert.False(result.Success);
+        Assert.Contains("server is running", result.Message);
+        Assert.True(fs.DirectoryExists(LiveStorage(5)));
+    }
+
+    [Fact]
     public void AddSave_CopiesLiveStorageIntoLibrary_AndWritesSaveMeta()
     {
         var fs = new FakeFileSystem();
@@ -149,81 +201,23 @@ public class SaveGameServiceTests
     }
 
     [Fact]
-    public void AddSave_Overwrite_CopyFailure_PreservesExistingSave()
-    {
-        var inner = new FakeFileSystem();
-        SeedLiveStorage(inner);
-        SeedNestedStoredSave(inner, "Alpha", "old-world");
-        var fs = new FaultyFileSystem(inner)
-        {
-            CopyDirectoryThrowsWhen = path => path.Equals(LiveStorage(), StringComparison.OrdinalIgnoreCase),
-        };
-
-        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
-            .AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: true);
-
-        Assert.False(result.Success);
-        Assert.Equal("old-world", fs.TryGetFileContents($@"{SavePath("Alpha")}\storage_1\players.db"));
-        Assert.Empty(fs.GetDirectories(PresetFolder).Where(n => n.StartsWith(".save_", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    [Fact]
-    public void AddSave_MetaWriteFailure_PreservesExistingSave()
-    {
-        var inner = new FakeFileSystem();
-        SeedLiveStorage(inner);
-        SeedNestedStoredSave(inner, "Alpha", "old-world");
-        var fs = new FaultyFileSystem(inner)
-        {
-            WriteAllTextThrowsWhen = path => path.EndsWith("save-meta.json", StringComparison.OrdinalIgnoreCase),
-        };
-
-        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
-            .AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: true);
-
-        Assert.False(result.Success);
-        Assert.Equal("old-world", fs.TryGetFileContents($@"{SavePath("Alpha")}\storage_1\players.db"));
-        Assert.Empty(fs.GetDirectories(PresetFolder).Where(n => n.StartsWith(".save_", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    [Fact]
-    public void AddSave_Success_LeavesNoStagingOrBackupBehind()
+    public void AddSave_Overwrite_ReplacesStoredSave()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
         SaveGameService service = CreateService(fs);
 
-        SaveGameResult first = service.AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: false);
-        SaveGameResult second = service.AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: true);
+        Assert.True(service.AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: false).Success);
 
-        Assert.True(first.Success);
-        Assert.True(second.Success);
-        Assert.Equal("live-data", fs.TryGetFileContents($@"{SavePath("Alpha")}\storage_1\players.db"));
+        fs.AddFile($@"{LiveStorage()}\players.db", "updated-data");
+        Assert.True(service.AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: true).Success);
+
+        Assert.Equal("updated-data", fs.TryGetFileContents($@"{SavePath("Alpha")}\storage_1\players.db"));
         Assert.False(fs.DirectoryExists($@"{SavePath("Alpha")}.old"));
-        Assert.Empty(fs.GetDirectories(PresetFolder).Where(n => n.StartsWith(".save_", StringComparison.OrdinalIgnoreCase)));
     }
 
     [Fact]
-    public void AddSave_PromotionFailure_RollsBackPreviousSave()
-    {
-        var inner = new FakeFileSystem();
-        SeedLiveStorage(inner);
-        SeedNestedStoredSave(inner, "Alpha", "old-world");
-        var fs = new FaultyFileSystem(inner)
-        {
-            MoveThrowsWhen = path => path.Contains(".save_", StringComparison.OrdinalIgnoreCase),
-        };
-
-        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
-            .AddSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha", overwrite: true);
-
-        Assert.False(result.Success);
-        Assert.Equal("old-world", fs.TryGetFileContents($@"{SavePath("Alpha")}\storage_1\players.db"));
-        Assert.Empty(fs.GetDirectories(PresetFolder).Where(n => n.StartsWith(".save_", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    [Fact]
-    public void LoadSave_ReplacesLiveStorage_AndRemovesStaging()
+    public void LoadSave_ReplacesLiveStorage()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
@@ -233,8 +227,6 @@ public class SaveGameServiceTests
 
         Assert.True(result.Success);
         Assert.Equal("new-world", fs.TryGetFileContents($@"{LiveStorage()}\players.db"));
-        Assert.False(fs.DirectoryExists($@"{LiveStorage()}.old"));
-        Assert.False(fs.DirectoryExists($@"{LiveStorage()}.restore"));
     }
 
     [Fact]
@@ -274,25 +266,6 @@ public class SaveGameServiceTests
         Assert.False(result.Success);
         Assert.Contains("server is running", result.Message);
         Assert.Equal("live-data", fs.TryGetFileContents($@"{LiveStorage()}\players.db"));
-    }
-
-    [Fact]
-    public void LoadSave_RecoversInterruptedPromotion_FromDotOldBackup()
-    {
-        var fs = new FakeFileSystem();
-        SeedLiveStorage(fs);
-        // Interrupted AddSave overwrite: only the previous copy remains as .old.
-        fs.AddDirectory(SavesFolder, "Alpha.old");
-        fs.AddDirectory($@"{SavesFolder}\Alpha.old", "storage_1");
-        fs.AddFile($@"{SavesFolder}\Alpha.old\storage_1\players.db", "old-world");
-        fs.AddFile($@"{SavesFolder}\Alpha.old\save-meta.json", MetaJson());
-
-        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha");
-
-        Assert.True(result.Success);
-        Assert.Equal("old-world", fs.TryGetFileContents($@"{LiveStorage()}\players.db"));
-        Assert.True(fs.DirectoryExists(SavePath("Alpha")));
-        Assert.False(fs.DirectoryExists($@"{SavesFolder}\Alpha.old"));
     }
 
     [Fact]
@@ -341,85 +314,35 @@ public class SaveGameServiceTests
     }
 
     [Fact]
-    public void LoadSave_CleansStaleRestoreFolders()
-    {
-        var fs = new FakeFileSystem();
-        SeedLiveStorage(fs);
-        SeedNestedStoredSave(fs, "Alpha", "new-world");
-        fs.AddDirectory(MissionPath, "storage_1.restore_aabbcc", "storage_1.restore", "keep_me");
-        fs.AddFile($@"{MissionPath}\storage_1.restore_aabbcc\players.db", "stale");
-        fs.AddFile($@"{MissionPath}\storage_1.restore\players.db", "stale");
-        fs.AddFile($@"{MissionPath}\keep_me\players.db", "keep");
-
-        SaveGameResult result = CreateService(fs).LoadSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha");
-
-        Assert.True(result.Success);
-        Assert.False(fs.DirectoryExists($@"{MissionPath}\storage_1.restore_aabbcc"));
-        Assert.False(fs.DirectoryExists($@"{MissionPath}\storage_1.restore"));
-        Assert.True(fs.DirectoryExists($@"{MissionPath}\keep_me"));
-    }
-
-    [Fact]
-    public void LoadSave_ReportsSuccess_WhenBackupCleanupFails()
-    {
-        var inner = new FakeFileSystem();
-        SeedLiveStorage(inner);
-        SeedNestedStoredSave(inner, "Alpha", "new-world");
-        var fs = new FaultyFileSystem(inner) { DeleteThrowsWhen = path => path.EndsWith(".old", StringComparison.OrdinalIgnoreCase) };
-
-        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
-            .LoadSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha");
-
-        Assert.True(result.Success);
-        Assert.Equal("new-world", fs.TryGetFileContents($@"{LiveStorage()}\players.db"));
-    }
-
-    [Fact]
-    public void LoadSave_CleansStagingFolder_AndPreservesLive_WhenPromotionFails()
-    {
-        var inner = new FakeFileSystem();
-        SeedLiveStorage(inner);
-        SeedNestedStoredSave(inner, "Alpha", "new-world");
-        var fs = new FaultyFileSystem(inner) { MoveThrowsWhen = path => path.Contains(".restore", StringComparison.OrdinalIgnoreCase) };
-
-        SaveGameResult result = new SaveGameService(fs, new FakeServerProcessState())
-            .LoadSave(ServerPath, MapName, SavesFolder, InstanceId, "Alpha");
-
-        Assert.False(result.Success);
-        Assert.Equal("live-data", fs.TryGetFileContents($@"{LiveStorage()}\players.db"));
-        Assert.False(fs.DirectoryExists($@"{LiveStorage()}.restore"));
-    }
-
-    [Fact]
-    public void NewGame_DeletesLiveStorage()
+    public void WipeWorld_DeletesLiveStorage()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
 
-        SaveGameResult result = CreateService(fs).NewGame(ServerPath, MapName, InstanceId);
+        SaveGameResult result = CreateService(fs).WipeWorld(ServerPath, MapName, InstanceId);
 
         Assert.True(result.Success);
         Assert.False(fs.DirectoryExists(LiveStorage()));
     }
 
     [Fact]
-    public void NewGame_NoOp_WhenNoLiveStorage()
+    public void WipeWorld_NoOp_WhenNoLiveStorage()
     {
         var fs = new FakeFileSystem();
 
-        SaveGameResult result = CreateService(fs).NewGame(ServerPath, MapName, InstanceId);
+        SaveGameResult result = CreateService(fs).WipeWorld(ServerPath, MapName, InstanceId);
 
         Assert.True(result.Success);
         Assert.True(result.Informational);
     }
 
     [Fact]
-    public void NewGame_ReturnsFailure_WhenServerRunning()
+    public void WipeWorld_ReturnsFailure_WhenServerRunning()
     {
         var fs = new FakeFileSystem();
         SeedLiveStorage(fs);
 
-        SaveGameResult result = CreateRunningService(fs).NewGame(ServerPath, MapName, InstanceId);
+        SaveGameResult result = CreateRunningService(fs).WipeWorld(ServerPath, MapName, InstanceId);
 
         Assert.False(result.Success);
         Assert.Contains("server is running", result.Message);
@@ -432,20 +355,6 @@ public class SaveGameServiceTests
         var fs = new FakeFileSystem();
         SeedNestedStoredSave(fs, "Alpha");
         SeedNestedStoredSave(fs, "Beta");
-
-        IReadOnlyList<string> saves = CreateService(fs).ListSaves(SavesFolder);
-
-        Assert.Equal(new[] { "Alpha", "Beta" }, saves);
-    }
-
-    [Fact]
-    public void ListSaves_IgnoresPromotionBackupFolders()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddDirectory(SavesFolder, "Alpha", "Alpha.old", "Beta");
-        fs.AddFile($@"{SavesFolder}\Alpha\players.db", "a");
-        fs.AddFile($@"{SavesFolder}\Alpha.old\players.db", "old");
-        fs.AddFile($@"{SavesFolder}\Beta\players.db", "b");
 
         IReadOnlyList<string> saves = CreateService(fs).ListSaves(SavesFolder);
 
@@ -592,82 +501,4 @@ public class SaveGameServiceTests
         Assert.True(fs.DirectoryExists(SavePath("Alpha")));
     }
 
-    /// <summary>Wraps <see cref="FakeFileSystem"/> and can fail folder operations on demand.</summary>
-    private sealed class FaultyFileSystem : IFileSystem
-    {
-        private readonly FakeFileSystem _inner;
-
-        public FaultyFileSystem(FakeFileSystem inner) => _inner = inner;
-
-        public Func<string, bool>? MoveThrowsWhen { get; set; }
-
-        public Func<string, bool>? DeleteThrowsWhen { get; set; }
-
-        public Func<string, bool>? CopyDirectoryThrowsWhen { get; set; }
-
-        public Func<string, bool>? WriteAllTextThrowsWhen { get; set; }
-
-        public void AddFile(string path, string contents) => _inner.AddFile(path, contents);
-
-        public void AddDirectory(string path, params string[] childDirectoryNames) => _inner.AddDirectory(path, childDirectoryNames);
-
-        public bool DirectoryExists(string path) => _inner.DirectoryExists(path);
-
-        public IReadOnlyList<string> GetDirectories(string path) => _inner.GetDirectories(path);
-
-        public bool FileExists(string path) => _inner.FileExists(path);
-
-        public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive) =>
-            _inner.GetFiles(path, searchPattern, recursive);
-
-        public string? TryGetFileContents(string path) => _inner.TryGetFileContents(path);
-
-        public void CopyFile(string sourcePath, string destinationPath) => _inner.CopyFile(sourcePath, destinationPath);
-
-        public void DeleteFile(string path) => _inner.DeleteFile(path);
-
-        public string ReadAllText(string path) => _inner.ReadAllText(path);
-
-        public void WriteAllText(string path, string contents)
-        {
-            if (WriteAllTextThrowsWhen?.Invoke(path) == true)
-            {
-                throw new IOException("write failed");
-            }
-
-            _inner.WriteAllText(path, contents);
-        }
-
-        public void CreateDirectory(string path) => _inner.CreateDirectory(path);
-
-        public void CopyDirectory(string sourcePath, string destinationPath)
-        {
-            if (CopyDirectoryThrowsWhen?.Invoke(sourcePath) == true)
-            {
-                throw new IOException("copy failed");
-            }
-
-            _inner.CopyDirectory(sourcePath, destinationPath);
-        }
-
-        public void DeleteDirectory(string path, bool recursive)
-        {
-            if (DeleteThrowsWhen?.Invoke(path) == true)
-            {
-                throw new IOException("delete failed");
-            }
-
-            _inner.DeleteDirectory(path, recursive);
-        }
-
-        public void MoveDirectory(string sourcePath, string destinationPath)
-        {
-            if (MoveThrowsWhen?.Invoke(sourcePath) == true)
-            {
-                throw new IOException("move failed");
-            }
-
-            _inner.MoveDirectory(sourcePath, destinationPath);
-        }
-    }
 }

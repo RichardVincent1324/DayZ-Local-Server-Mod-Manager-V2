@@ -312,6 +312,9 @@ public class MapTypesViewModelTests
         return (vm, types, dialogs);
     }
 
+    private static void SelectSave(MapTypesViewModel vm, string name) =>
+        vm.SelectedSave = vm.SaveNames.First(entry => entry.Name == name && !entry.IsOrphaned);
+
     private static ModTypesEntry Entry(string modName, params string[] generatedFiles) =>
         new() { ModName = modName, GeneratedFiles = generatedFiles.ToList() };
 
@@ -668,7 +671,7 @@ public class MapTypesViewModelTests
 
         (MapTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
 
@@ -684,7 +687,7 @@ public class MapTypesViewModelTests
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
@@ -694,7 +697,7 @@ public class MapTypesViewModelTests
     }
 
     [Fact]
-    public async Task NewGame_AsksConfirmation_AndCallsService()
+    public async Task WipeWorld_AsksConfirmation_AndCallsService()
     {
         var dialogs = new FakeDialogs { ConfirmResult = false };
         var saves = new FakeSaveGameService();
@@ -702,13 +705,13 @@ public class MapTypesViewModelTests
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
 
-        vm.NewGameCommand.Execute(null);
-        Assert.Equal(0, saves.NewGameCalls);
+        vm.WipeWorldCommand.Execute(null);
+        Assert.Equal(0, saves.WipeWorldCalls);
 
         dialogs.ConfirmResult = true;
-        vm.NewGameCommand.Execute(null);
-        await WaitUntilAsync(() => saves.NewGameCalls == 1);
-        Assert.Equal(1, saves.NewGameCalls);
+        vm.WipeWorldCommand.Execute(null);
+        await WaitUntilAsync(() => saves.WipeWorldCalls == 1);
+        Assert.Equal(1, saves.WipeWorldCalls);
     }
 
     [Fact]
@@ -716,15 +719,15 @@ public class MapTypesViewModelTests
     {
         var saves = new FakeSaveGameService();
         var gate = new TaskCompletionSource();
-        saves.NewGameGate = gate;
+        saves.WipeWorldGate = gate;
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), new FakeDialogs(), saveGameService: saves);
 
         Assert.False(vm.IsBusy);
 
-        vm.NewGameCommand.Execute(null);
-        await WaitUntilAsync(() => saves.NewGameCalls == 1);
+        vm.WipeWorldCommand.Execute(null);
+        await WaitUntilAsync(() => saves.WipeWorldCalls == 1);
 
         // Start Server relies on IsBusy to avoid launching while a save operation
         // is still mutating (or deleting) the live storage folder.
@@ -744,7 +747,7 @@ public class MapTypesViewModelTests
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.DeleteSaveCommand.Execute(null);
         Assert.Equal(0, saves.DeleteSaveCalls);
@@ -778,7 +781,7 @@ public class MapTypesViewModelTests
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
@@ -798,7 +801,7 @@ public class MapTypesViewModelTests
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             config, types, dialogs, saveGameService: saves, typesConfigStore: store);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
@@ -811,7 +814,7 @@ public class MapTypesViewModelTests
     }
 
     [Fact]
-    public async Task NewGame_UsesThePresetInstanceId_AndLeavesTypesAlone()
+    public async Task WipeWorld_UsesThePresetInstanceId_AndLeavesTypesAlone()
     {
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var saves = new FakeSaveGameService();
@@ -820,8 +823,8 @@ public class MapTypesViewModelTests
         (MapTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), types, dialogs, saveGameService: saves);
 
-        vm.NewGameCommand.Execute(null);
-        await WaitUntilAsync(() => saves.NewGameCalls == 1);
+        vm.WipeWorldCommand.Execute(null);
+        await WaitUntilAsync(() => saves.WipeWorldCalls == 1);
 
         Assert.Equal(1, saves.LastInstanceId);
         Assert.Equal(0, types.SyncEconomyCoreCalls);
@@ -953,7 +956,7 @@ public class MapTypesViewModelTests
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
 
         (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
@@ -987,7 +990,7 @@ public class MapTypesViewModelTests
         var process = new FakeServerProcessState { Running = true };
 
         MapTypesViewModel vm = Create(AppliedConfig(), dialogs: dialogs, saveGameService: saves, serverProcess: process);
-        vm.SelectedSave = "Alpha";
+        vm.SelectedSave = new SaveListEntryViewModel("Alpha", isOrphaned: false);
 
         vm.LoadSaveCommand.Execute(null);
 
@@ -996,7 +999,7 @@ public class MapTypesViewModelTests
     }
 
     [Fact]
-    public void NewGame_Blocked_WhenServerRunning()
+    public void WipeWorld_Blocked_WhenServerRunning()
     {
         var dialogs = new FakeDialogs();
         var saves = new FakeSaveGameService();
@@ -1004,9 +1007,9 @@ public class MapTypesViewModelTests
 
         MapTypesViewModel vm = Create(AppliedConfig(), dialogs: dialogs, saveGameService: saves, serverProcess: process);
 
-        vm.NewGameCommand.Execute(null);
+        vm.WipeWorldCommand.Execute(null);
 
-        Assert.Equal(0, saves.NewGameCalls);
+        Assert.Equal(0, saves.WipeWorldCalls);
         Assert.Contains("server is running", dialogs.LastErrorMessage);
     }
 
@@ -1151,6 +1154,34 @@ public class MapTypesViewModelTests
     }
 
     [Fact]
+    public async Task DuplicatePreset_CopiesCurrentPreset_AndActivates()
+    {
+        var config = AppliedConfig();
+        var presets = new FakePresetService();
+        var dialogs = new FakeDialogs { AskDuplicatePresetResult = new DuplicatePresetRequest("HardcoreCopy", true) };
+        MapTypesViewModel vm = Create(config, presetService: presets, dialogs: dialogs);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        // The freshly refreshed selection is the reserved default preset.
+        Assert.True(vm.SelectedPreset!.IsDefault);
+
+        string? activated = null;
+        vm.ActivatePreset = (_, preset) =>
+        {
+            activated = preset;
+            vm.ActivePresetName = preset;
+            return Task.FromResult(true);
+        };
+
+        vm.DuplicatePresetCommand.Execute(null);
+        await WaitUntilAsync(() => activated is not null);
+
+        Assert.Contains((PresetPaths.DefaultPresetName, "HardcoreCopy", true), presets.Duplicated);
+        Assert.Contains(vm.Presets, p => p.Name == "HardcoreCopy");
+        Assert.Equal("HardcoreCopy", activated);
+    }
+
+    [Fact]
     public void DeletePreset_RefusesDefault()
     {
         var config = AppliedConfig();
@@ -1210,7 +1241,7 @@ public class MapTypesViewModelTests
         var dialogs = new FakeDialogs { AskTextResult = "Beta" };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
         (MapTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
-        vm.SelectedSave = "Alpha";
+        SelectSave(vm, "Alpha");
 
         vm.RenameSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.RenameSaveCalls == 1);
@@ -1218,6 +1249,60 @@ public class MapTypesViewModelTests
         Assert.Equal(PresetSavesFolder(MapName), saves.LastRenameSavesFolder);
         Assert.Equal("Alpha", saves.LastRenameOldName);
         Assert.Equal("Beta", saves.LastRenameNewName);
+    }
+
+    [Fact]
+    public void RefreshSaves_AppendsOrphanStorageEntries()
+    {
+        var saves = new FakeSaveGameService
+        {
+            StoredSaves = new[] { "Alpha" },
+            StorageInstanceIds = new[] { 1, 5 },
+        };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), new FakeDialogs(), saveGameService: saves);
+
+        Assert.Equal(new[] { "Alpha", "storage_5" }, vm.SaveNames.Select(entry => entry.Name));
+        Assert.False(vm.SaveNames.Single(entry => entry.Name == "Alpha").IsOrphaned);
+
+        SaveListEntryViewModel orphan = vm.SaveNames.Single(entry => entry.Name == "storage_5");
+        Assert.True(orphan.IsOrphaned);
+        Assert.Equal(5, orphan.InstanceId);
+        Assert.Equal("storage_5 (orphaned)", orphan.DisplayName);
+    }
+
+    [Fact]
+    public void OrphanEntry_DisablesLoadAndRename_ButAllowsDelete()
+    {
+        var saves = new FakeSaveGameService { StorageInstanceIds = new[] { 5 } };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), new FakeDialogs(), saveGameService: saves);
+
+        vm.SelectedSave = vm.SaveNames.Single(entry => entry.IsOrphaned);
+
+        Assert.False(vm.LoadSaveCommand.CanExecute(null));
+        Assert.False(vm.RenameSaveCommand.CanExecute(null));
+        Assert.True(vm.DeleteSaveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task DeleteSave_OnOrphan_DeletesStorage()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService { StorageInstanceIds = new[] { 5 } };
+
+        (MapTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+
+        vm.SelectedSave = vm.SaveNames.Single(entry => entry.IsOrphaned);
+
+        vm.DeleteSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.DeleteStorageCalls == 1);
+
+        Assert.Equal(5, saves.LastDeleteStorageInstanceId);
+        Assert.Equal(0, saves.DeleteSaveCalls);
     }
 
     private sealed class FakeMapService : IMapService
@@ -1425,10 +1510,10 @@ public class MapTypesViewModelTests
 
         public string? LastLoadSavesFolder { get; private set; }
 
-        public int NewGameCalls { get; private set; }
+        public int WipeWorldCalls { get; private set; }
 
-        /// <summary>When set, NewGame blocks on this gate so tests can observe the in-flight state.</summary>
-        public TaskCompletionSource? NewGameGate { get; set; }
+        /// <summary>When set, WipeWorld blocks on this gate so tests can observe the in-flight state.</summary>
+        public TaskCompletionSource? WipeWorldGate { get; set; }
 
         public int DeleteSaveCalls { get; private set; }
 
@@ -1440,6 +1525,21 @@ public class MapTypesViewModelTests
 
         public string GetStorageFolderPath(string serverPath, string mapName, int instanceId) =>
             Path.Combine(serverPath, "mpmissions", mapName, $"storage_{instanceId}");
+
+        public IReadOnlyList<int> StorageInstanceIds { get; set; } = Array.Empty<int>();
+
+        public int DeleteStorageCalls { get; private set; }
+
+        public int LastDeleteStorageInstanceId { get; private set; }
+
+        public IReadOnlyList<int> ListStorageInstanceIds(string serverPath, string mapName) => StorageInstanceIds;
+
+        public SaveGameResult DeleteStorage(string serverPath, string mapName, int instanceId)
+        {
+            DeleteStorageCalls++;
+            LastDeleteStorageInstanceId = instanceId;
+            return new SaveGameResult { Success = true, Message = $"Deleted storage_{instanceId}." };
+        }
 
         public IReadOnlyList<string> ListSaves(string savesFolder) => StoredSaves;
 
@@ -1470,12 +1570,12 @@ public class MapTypesViewModelTests
         public ConfigLoadResult<SaveMetaData> GetMeta(string savesFolder, string saveName) =>
             ConfigLoadResult<SaveMetaData>.Missing();
 
-        public SaveGameResult NewGame(string serverPath, string mapName, int instanceId)
+        public SaveGameResult WipeWorld(string serverPath, string mapName, int instanceId)
         {
-            NewGameCalls++;
+            WipeWorldCalls++;
             LastInstanceId = instanceId;
-            NewGameGate?.Task.GetAwaiter().GetResult();
-            return new SaveGameResult { Success = true, Message = "New game started." };
+            WipeWorldGate?.Task.GetAwaiter().GetResult();
+            return new SaveGameResult { Success = true, Message = "World wiped." };
         }
 
         public SaveGameResult DeleteSave(string savesFolder, string saveName)
@@ -1509,6 +1609,8 @@ public class MapTypesViewModelTests
         public List<string> PresetNames { get; } = new() { PresetPaths.DefaultPresetName };
 
         public List<(string Name, bool CopyProfiles)> Created { get; } = new();
+
+        public List<(string Source, string NewName, bool CopyProfiles)> Duplicated { get; } = new();
 
         public List<(string OldName, string NewName)> Renamed { get; } = new();
 
@@ -1550,6 +1652,20 @@ public class MapTypesViewModelTests
             PresetNames.Add(presetName);
             Created.Add((presetName, copyProfilesFromDefault));
             return new() { Success = true, Message = $"Created \"{presetName}\"." };
+        }
+
+        public PresetResult DuplicatePreset(
+            string serverPath, string dataDirectory, string mapName,
+            string sourcePresetName, string newPresetName, bool copyProfiles)
+        {
+            if (PresetNames.Any(n => string.Equals(n, newPresetName, StringComparison.OrdinalIgnoreCase)))
+            {
+                return new() { Success = false, Message = $"A preset named \"{newPresetName}\" already exists." };
+            }
+
+            PresetNames.Add(newPresetName);
+            Duplicated.Add((sourcePresetName, newPresetName, copyProfiles));
+            return new() { Success = true, Message = $"Duplicated \"{sourcePresetName}\" to \"{newPresetName}\"." };
         }
 
         public PresetResult RenamePreset(string dataDirectory, string mapName, string presetName, string newName)
@@ -1741,5 +1857,9 @@ public class MapTypesViewModelTests
         public AddPresetRequest? AskAddPresetResult { get; set; }
 
         public AddPresetRequest? AskAddPreset(string mapName) => AskAddPresetResult;
+
+        public DuplicatePresetRequest? AskDuplicatePresetResult { get; set; }
+
+        public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName) => AskDuplicatePresetResult;
     }
 }

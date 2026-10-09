@@ -238,4 +238,75 @@ public class PresetServiceTests
 
         Assert.Equal(new[] { PresetPaths.DefaultPresetName, "Alpha", "Zulu" }, names);
     }
+
+    [Fact]
+    public void DuplicatePreset_CopiesConfigAndModTypes_WithNewInstanceId()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
+
+        string sourceModTypes = PresetPaths.ModTypesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        fs.AddFile(Path.Combine(sourceModTypes, "CF_types.xml"), "<types/>");
+        fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
+        fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"currentMap\":\"x\"}");
+
+        PresetResult result = service.DuplicatePreset(
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Copy", copyProfiles: false);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, service.ReadInstanceId(DataDirectory, Map, "Copy"));
+        string cfg = fs.TryGetFileContents(ConfigPath("Copy"))!;
+        Assert.Contains("instanceId=2;", cfg);
+        Assert.Contains($"template=\"{Map}\"", cfg);
+        Assert.True(fs.FileExists(Path.Combine(PresetPaths.ModTypesFolder(DataDirectory, Map, "Copy"), "CF_types.xml")));
+        Assert.True(fs.FileExists(PresetPaths.ModOrderPath(DataDirectory, Map, "Copy")));
+        Assert.True(fs.FileExists(PresetPaths.TypesConfigPath(DataDirectory, Map, "Copy")));
+    }
+
+    [Fact]
+    public void DuplicatePreset_CopiesProfiles_OnlyWhenRequested()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        string sourceProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        fs.AddFile(Path.Combine(sourceProfiles, "player.db"), "data");
+
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "WithProfiles", copyProfiles: true);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "WithoutProfiles", copyProfiles: false);
+
+        Assert.True(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithProfiles"), "player.db")));
+        Assert.False(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithoutProfiles"), "player.db")));
+    }
+
+    [Fact]
+    public void DuplicatePreset_DoesNotCopySaves()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        string sourceSaves = PresetPaths.SavesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        fs.AddFile(Path.Combine(sourceSaves, "Alpha", "save-meta.json"), "{}");
+
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Copy", copyProfiles: false);
+
+        string targetSaves = PresetPaths.SavesFolder(DataDirectory, Map, "Copy");
+        Assert.True(fs.DirectoryExists(targetSaves));
+        Assert.False(fs.FileExists(Path.Combine(targetSaves, "Alpha", "save-meta.json")));
+    }
+
+    [Fact]
+    public void DuplicatePreset_RejectsBadRequests()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Existing", false);
+
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, PresetPaths.DefaultPresetName, false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, "Missing", "Copy", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Existing", false).Success);
+    }
 }

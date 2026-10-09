@@ -49,7 +49,22 @@ public sealed class UiDialogService : IDialogService
     public AddPresetRequest? AskAddPreset(string mapName)
     {
         var window = new AddPresetWindow(mapName);
-        return window.ShowDialog() == true ? window.Result : null;
+        return window.ShowDialog() == true && window.Result is { } input
+            ? new AddPresetRequest(input.Name, input.CopyProfiles)
+            : null;
+    }
+
+    public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName)
+    {
+        var window = new AddPresetWindow(
+            "Duplicate Preset",
+            $"Name for the copy of \"{sourcePresetName}\":",
+            "Also copy profiles data from the current preset",
+            checkboxDefault: false,
+            "Duplicate");
+        return window.ShowDialog() == true && window.Result is { } input
+            ? new DuplicatePresetRequest(input.Name, input.CopyProfiles)
+            : null;
     }
 
     public string? PickFolder(string title = "Select a folder")

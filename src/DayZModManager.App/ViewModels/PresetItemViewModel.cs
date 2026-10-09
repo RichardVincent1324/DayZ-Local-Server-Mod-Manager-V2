@@ -1,9 +1,9 @@
-using DayZModManager.Core;
+﻿using DayZModManager.Core;
 
 namespace DayZModManager.App.ViewModels;
 
 /// <summary>
-/// A preset row in the Map &amp; Types "Presets" list. Presets are the unit of
+/// A preset row in the Preset &amp; Types "Presets" list. Presets are the unit of
 /// server environment; selecting one makes it the active preset.
 /// </summary>
 public sealed class PresetItemViewModel : ViewModelBase

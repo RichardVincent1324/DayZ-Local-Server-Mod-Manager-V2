@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
@@ -101,16 +101,16 @@ public sealed class MainViewModel : ViewModelBase
 
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
-        MapTypes = new MapTypesViewModel(
+        PresetTypes = new PresetTypesViewModel(
             mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher,
             presetService, _junctions)
         {
             ActivePresetName = activePreset,
         };
-        MapTypes.EnsureApplied = EnsureApplied;
-        MapTypes.ActivatePreset = ActivatePresetAsync;
-        MapTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
+        PresetTypes.EnsureApplied = EnsureApplied;
+        PresetTypes.ActivatePreset = ActivatePresetAsync;
+        PresetTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
         Settings = new SettingsViewModel(dialogs);
         Settings.ApplyRequested += async () => await ApplyAsync();
 
@@ -165,8 +165,8 @@ public sealed class MainViewModel : ViewModelBase
                 return;
             }
 
-            MapTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
-            MapTypes.ReconcileAppliedMap();
+            PresetTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
+            PresetTypes.ReconcileAppliedMap();
             Mods.MarkApplied();
             UpdateDirty();
             await CleanupOldLogsIfEnabledAsync(_settings);
@@ -190,7 +190,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public ModsViewModel Mods { get; }
 
-    public MapTypesViewModel MapTypes { get; }
+    public PresetTypesViewModel PresetTypes { get; }
 
     public SettingsViewModel Settings { get; }
 
@@ -209,10 +209,10 @@ public sealed class MainViewModel : ViewModelBase
     public AsyncRelayCommand ApplyCommand { get; }
     public AsyncRelayCommand StartServerCommand { get; }
 
-    /// <summary>Refreshes the Map &amp; Types mod dropdown from the current in-memory loaded mods.</summary>
-    public void OnMapTypesTabActivated()
+    /// <summary>Refreshes the Preset &amp; Types mod dropdown from the current in-memory loaded mods.</summary>
+    public void OnPresetTypesTabActivated()
     {
-        MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+        PresetTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
     }
 
     /// <summary>Resolves the preset active for a map, defaulting to the reserved default preset.</summary>
@@ -241,7 +241,7 @@ public sealed class MainViewModel : ViewModelBase
     /// <summary>
     /// Makes <paramref name="presetName"/> the active preset for a map: loads its
     /// mod order and types configuration, persists the selection, and applies the
-    /// preset's environment. Invoked by the Map &amp; Types page.
+    /// preset's environment. Invoked by the Preset &amp; Types page.
     /// </summary>
     private async Task<bool> ActivatePresetAsync(string mapName, string presetName)
     {
@@ -278,7 +278,7 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         _settings = WithActiveSelection(_settings, mapName, presetName);
-        MapTypes.ActivePresetName = presetName;
+        PresetTypes.ActivePresetName = presetName;
 
         bool applied = await ApplyAsync();
         if (!applied)
@@ -391,7 +391,7 @@ public sealed class MainViewModel : ViewModelBase
             // The active preset is the environment being applied. Its folder and
             // launch variables are derived from the applied map and active preset.
             string mapName = TypesConfig.CurrentMap;
-            string activePreset = MapTypes.ActivePresetName;
+            string activePreset = PresetTypes.ActivePresetName;
             string? presetFolder = null;
             string? serverProfile = null;
             string? serverConfig = null;
@@ -476,15 +476,15 @@ public sealed class MainViewModel : ViewModelBase
                 // serverProfile into the previously selected batch.
                 if (workshopOrServerChanged || batchChanged)
                 {
-                    MapTypes.Refresh(newSettings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
-                    MapTypes.ReconcileAppliedMap();
+                    PresetTypes.Refresh(newSettings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
+                    PresetTypes.ReconcileAppliedMap();
                 }
                 else
                 {
-                    MapTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+                    PresetTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
                 }
 
-                MapTypes.SyncEconomyCore();
+                PresetTypes.SyncEconomyCore();
             }
             catch (Exception ex)
             {
@@ -549,7 +549,7 @@ public sealed class MainViewModel : ViewModelBase
         // Never launch while a map switch or types operation is in flight: it may
         // be rewriting the launch batch file / mission files under us. Wait for it
         // to settle (bounded) before proceeding.
-        if (!await WaitUntilMapTypesIdleAsync())
+        if (!await WaitUntilPresetTypesIdleAsync())
         {
             ShowLaunchBlocked("A map or types operation is still in progress.");
             return;
@@ -562,7 +562,7 @@ public sealed class MainViewModel : ViewModelBase
 
         // An Apply can itself trigger a first-time map switch (ReconcileAppliedMap);
         // let any in-flight operation finish writing the batch file before launch.
-        if (!await WaitUntilMapTypesIdleAsync())
+        if (!await WaitUntilPresetTypesIdleAsync())
         {
             ShowLaunchBlocked("A map or types operation is still in progress.");
             return;
@@ -606,15 +606,15 @@ public sealed class MainViewModel : ViewModelBase
     /// launch batch and mission files are stable before the server is started.
     /// Returns false when the wait timed out.
     /// </summary>
-    private async Task<bool> WaitUntilMapTypesIdleAsync(int timeoutMs = 30000)
+    private async Task<bool> WaitUntilPresetTypesIdleAsync(int timeoutMs = 30000)
     {
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (MapTypes.IsBusy && DateTime.UtcNow < deadline)
+        while (PresetTypes.IsBusy && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
 
-        return !MapTypes.IsBusy;
+        return !PresetTypes.IsBusy;
     }
 
     private void ShowLaunchBlocked(string reason)
@@ -651,7 +651,7 @@ public sealed class MainViewModel : ViewModelBase
 
         // The active preset's profiles folder is where DayZ writes the .RPT and
         // .log files.
-        string activePreset = MapTypes.ActivePresetName;
+        string activePreset = PresetTypes.ActivePresetName;
         string folder = PresetPaths.ProfilesFolder(_dataDirectoryProvider.Current, mapName, activePreset);
 
         ServerLogCleanupResult result = await Task.Run(() => _logCleanup.Cleanup(folder));

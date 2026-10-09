@@ -1,4 +1,4 @@
-<Window x:Class="DayZModManager.App.MainWindow"
+﻿<Window x:Class="DayZModManager.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayZModManager.App.ViewModels"
@@ -283,7 +283,7 @@
                 </Grid>
             </TabItem>
 
-            <TabItem x:Name="MapTypesTab" Header="Preset &amp; Types" DataContext="{Binding MapTypes}">
+            <TabItem x:Name="PresetTypesTab" Header="Preset &amp; Types" DataContext="{Binding PresetTypes}">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />

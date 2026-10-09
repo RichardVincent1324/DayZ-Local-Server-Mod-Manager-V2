@@ -1,4 +1,4 @@
-# DayZ Local Server Mod Manager V2
+﻿# DayZ Local Server Mod Manager V2
 
 > **A Windows desktop mod manager for heavily modded DayZ local servers and single-player PvE.**
 
@@ -13,7 +13,7 @@ V2 is the successor to the original [DayZ Local Server Mod Manager](https://gith
 <img width="500" alt="Mod Manage Tab" src="assets/ModManageTab.png" />
 
 
-<img width="500" alt="Map Types Tab" src="assets/MapTypesTab.png" />
+<img width="500" alt="Preset Types Tab" src="assets/MapTypesTab.png" />
 
 ---
 
@@ -174,7 +174,7 @@ verifySignatures = 0;
 - Detect untracked XML files in `db/ModTypes` so orphaned files are visible instead of silently remaining active.
 - Ask for confirmation before overwriting or deleting configured types files.
 - Support `Remove Selected` and `Clean Invalid` maintenance operations.
-- Lock types editing once a world exists (`storage_<instanceId>` present), because DayZ only reads these files when a new world is created; `Wipe World` unlocks it.
+- Warn before types edits when the preset already has a saved world (or a live world), because DayZ only reads these files when a new world is created; edits only affect future spawns and newly created saves.
 - Open the active mission's `db/ModTypes` folder, or the active preset's `profiles` folder, directly in File Explorer from the buttons beside **Config XML** and **Current Map**.
 
 ### Presets and progress saves

@@ -1,7 +1,7 @@
-namespace DayZModManager.App.ViewModels;
+﻿namespace DayZModManager.App.ViewModels;
 
 /// <summary>
-/// A row in the Map &amp; Types "Progress Saves" list. It is either a stored save
+/// A row in the Preset &amp; Types "Progress Saves" list. It is either a stored save
 /// snapshot (<see cref="IsOrphaned"/> false) or a live <c>storage_&lt;id&gt;</c>
 /// folder that no preset owns (orphan/unattached storage).
 /// </summary>

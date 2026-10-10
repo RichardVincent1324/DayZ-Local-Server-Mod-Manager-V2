@@ -24,6 +24,37 @@
             </TextBlock>
         </DataTemplate>
 
+        <DataTemplate x:Key="LoadedModItemTemplate" DataType="{x:Type vm:ModItemViewModel}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Drag handle: passive glyph (not a Button) so the whole row keeps
+                     initiating the drag. -->
+                <TextBlock Grid.Column="0" Text="&#xE700;" FontFamily="Segoe MDL2 Assets"
+                           FontSize="12" Foreground="#FF9A9A9A" VerticalAlignment="Center"
+                           Margin="0,0,6,0" />
+
+                <TextBlock Grid.Column="1" Text="{Binding Name}" Padding="2" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsMissing}" Value="True">
+                                    <Setter Property="Foreground" Value="Gray" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <TextBlock Grid.Column="2" Text="{Binding Position, StringFormat=#{0}}"
+                           Foreground="#FF9A9A9A" VerticalAlignment="Center" Margin="6,0,2,0" />
+            </Grid>
+        </DataTemplate>
+
         <DataTemplate x:Key="LogEntryTemplate" DataType="{x:Type vm:LogEntry}">
             <TextBox Text="{Binding Message}" IsReadOnly="True" IsHitTestVisible="False" Focusable="False"
                      FontFamily="Consolas" FontSize="12"
@@ -120,6 +151,11 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- Loaded-list rows stretch so the load-order number can right-align. -->
+        <Style x:Key="LoadedModListItemStyle" TargetType="ListBoxItem" BasedOn="{StaticResource ModListItemStyle}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
 
         <Style x:Key="ModActionButton" TargetType="Button">
@@ -241,11 +277,11 @@
                         <DockPanel Grid.Column="0">
                             <TextBlock DockPanel.Dock="Top" Text="{Binding LoadedCountText}" FontWeight="Bold" Margin="0,0,0,4" />
                             <ListBox x:Name="LoadedListBox" ItemsSource="{Binding LoadedItems}" SelectionMode="Extended"
-                                     ItemContainerStyle="{StaticResource ModListItemStyle}"
+                                     ItemContainerStyle="{StaticResource LoadedModListItemStyle}"
                                      beh:ListBoxSelection.SelectedItems="{Binding SelectedLoadedItems}"
                                      beh:MouseDoubleClickBehavior.Command="{Binding UnloadSelectedCommand}"
                                      beh:ListBoxDragDropReorder.ReorderCommand="{Binding ReorderCommand}"
-                                     ItemTemplate="{StaticResource ModItemTemplate}" />
+                                     ItemTemplate="{StaticResource LoadedModItemTemplate}" />
                         </DockPanel>
 
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0">
@@ -298,8 +334,8 @@
                             <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,5,0" Width="80" />
                             <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
                                       VerticalAlignment="Center"
-                                      ScrollViewer.CanContentScroll="False"
-                                      VirtualizingStackPanel.IsVirtualizing="False"
+									  ScrollViewer.CanContentScroll="False"
+									  VirtualizingStackPanel.IsVirtualizing="False"
                                       MaxDropDownHeight="300" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
                                     Command="{Binding OpenMapProfilesFolderCommand}"
@@ -316,8 +352,8 @@
                             <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}"
                                       DisplayMemberPath="DisplayName" Width="240"
                                       VerticalAlignment="Center"
-                                      ScrollViewer.CanContentScroll="False"
-                                      VirtualizingStackPanel.IsVirtualizing="False"
+									  ScrollViewer.CanContentScroll="False"
+									  VirtualizingStackPanel.IsVirtualizing="False"
                                       MaxDropDownHeight="300" />
                         </StackPanel>
                     </DockPanel>
@@ -329,8 +365,8 @@
                             <Grid Width="280" VerticalAlignment="Center">
                                 <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}"
                                           VerticalAlignment="Center"
-                                          ScrollViewer.CanContentScroll="False"
-                                          VirtualizingStackPanel.IsVirtualizing="False"
+										  ScrollViewer.CanContentScroll="False"
+										  VirtualizingStackPanel.IsVirtualizing="False"
                                           MaxDropDownHeight="300" />
                                 <TextBlock Text="Select the mod to be configured"
                                            IsHitTestVisible="False" Foreground="Gray"
@@ -338,8 +374,8 @@
                                            Visibility="{Binding IsModSelectionEmpty, Converter={StaticResource BoolToVis}}" />
                             </Grid>
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding OpenModTypesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="{Binding OpenModTypesFolderToolTip}"
+                                    Command="{Binding OpenTypeFilesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
+                                    ToolTip="{Binding OpenTypeFilesFolderToolTip}"
                                     ToolTipService.ShowOnDisabled="True">
                                 <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
                                            VerticalAlignment="Center" HorizontalAlignment="Center" />
@@ -449,8 +485,8 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Orientation="Horizontal">
-                            <Button Content="Remove Selected" Command="{Binding RemoveSelectedCommand}" Width="120" />
-                            <Button Content="Clean Invalid" Command="{Binding CleanInvalidCommand}" Width="120" Margin="8,0,0,0" />
+                            <Button Content="Remove Selected" Command="{Binding RemoveSelectedCommand}" Width="120" Height="22" />
+                            <Button Content="Clean Invalid" Command="{Binding CleanInvalidCommand}" Width="120" Height="22" Margin="8,0,0,0" />
                         </StackPanel>
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Style="{StaticResource FolderIconButtonStyle}"
@@ -479,7 +515,7 @@
                             </Button>
                             <Button Style="{StaticResource FolderIconButtonStyle}"
 									Command="{Binding WipeWorldCommand}" Width="30" Height="26" Margin="12,0,0,0"
-									ToolTip="Wipe world" ToolTipService.ShowOnDisabled="True">
+									ToolTip="Wipe current world" ToolTipService.ShowOnDisabled="True">
 								<TextBlock Text="&#xE75C;" FontFamily="Segoe MDL2 Assets" FontSize="14"
 											VerticalAlignment="Center" HorizontalAlignment="Center" />
 							</Button>

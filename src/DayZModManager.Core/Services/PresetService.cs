@@ -18,8 +18,8 @@ public sealed record PresetResult
 /// Manages the preset hierarchy under <c>&lt;dataDirectory&gt;\Presets\&lt;map&gt;</c>.
 /// A preset is one complete DayZ server environment: it owns a dedicated
 /// <c>instanceId</c> (persisted in <c>preset-meta.json</c>), its own
-/// <c>serverDZ.cfg</c>, mod order, types configuration, ModTypes, profiles and
-/// world saves. <c>__default_preset__</c> is a normal preset with a reserved name
+/// <c>serverDZ.cfg</c>, mod order, types configuration, generated type files,
+/// profiles and world saves. <c>__default_preset__</c> is a normal preset with a reserved name
 /// that is auto-created for every map and cannot be renamed or deleted.
 /// </summary>
 public interface IPresetService
@@ -40,16 +40,23 @@ public interface IPresetService
     IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName);
 
     /// <summary>
-    /// Reads a preset's dedicated instance ID from its <c>preset-meta.json</c>,
-    /// defaulting to 1 when the metadata is missing or unreadable.
+    /// Reads a preset's dedicated instance ID. The authoritative value lives in
+    /// <c>preset-meta.json</c>; when that is missing or unreadable, the preset's
+    /// own <c>serverDZ.cfg</c> (the value DayZ actually uses) is read as a
+    /// fallback. Returns 0 when neither can supply a valid ID - never a made-up
+    /// value that could collide with an existing world's storage slot.
     /// </summary>
     int ReadInstanceId(string dataDirectory, string mapName, string presetName);
 
     /// <summary>
-    /// Allocates the next instance ID as <c>max(existing) + 1</c> across every
-    /// preset of every map, or 1 when none exist.
+    /// Allocates the next free instance ID for <paramref name="mapName"/> as
+    /// <c>max(reserved) + 1</c>. Reserved IDs are every preset's ID across every
+    /// map (IDs key the shared <c>ModList</c> junction folder, so they must be
+    /// globally unique) plus every live <c>storage_&lt;id&gt;</c> folder already
+    /// present in the map's mission folder. Reserving the live storage IDs ensures
+    /// a new preset is never bound to a world this tool did not create.
     /// </summary>
-    int AllocateInstanceId(string dataDirectory);
+    int AllocateInstanceId(string dataDirectory, string serverPath, string mapName);
 
     /// <summary>
     /// Creates <c>__default_preset__</c> for a map when it does not yet exist,
@@ -68,7 +75,7 @@ public interface IPresetService
     /// <summary>
     /// Creates a new preset as a copy of an existing preset's environment: its
     /// server configuration (with a fresh, dedicated instance ID), mod order, types
-    /// configuration and ModTypes files. Profiles are copied only when
+    /// configuration and generated type files. Profiles are copied only when
     /// <paramref name="copyProfiles"/> is set. Saves are never copied.
     /// </summary>
     PresetResult DuplicatePreset(
@@ -138,37 +145,82 @@ public sealed class PresetService : IPresetService
     {
         string metaPath = PresetPaths.PresetMetaPath(dataDirectory, mapName, presetName);
         ConfigLoadResult<PresetMetaData> loaded = ConfigJson.Read<PresetMetaData>(_fileSystem, metaPath);
-        return loaded.Status == ConfigLoadStatus.Success && loaded.Value is { InstanceId: > 0 }
-            ? loaded.Value.InstanceId
-            : 1;
-    }
-
-    public int AllocateInstanceId(string dataDirectory)
-    {
-        int max = 0;
-        string root = PresetPaths.PresetsRoot(dataDirectory);
-        if (!_fileSystem.DirectoryExists(root))
+        if (loaded.Status == ConfigLoadStatus.Success && loaded.Value is { InstanceId: > 0 })
         {
-            return 1;
+            return loaded.Value.InstanceId;
         }
 
-        foreach (string map in _fileSystem.GetDirectories(root))
+        // The metadata is missing or corrupt. Fall back to the preset's own
+        // serverDZ.cfg, which is the value DayZ reads to locate storage_<id>.
+        // This keeps the preset attached to its real world instead of silently
+        // claiming storage_1 and colliding with the default preset.
+        string configPath = PresetPaths.ServerConfigPath(dataDirectory, mapName, presetName);
+        int? fromConfig = _serverConfig.TryReadInstanceId(configPath);
+        if (fromConfig is > 0)
         {
-            string mapRoot = Path.Combine(root, map);
-            if (!_fileSystem.DirectoryExists(mapRoot))
-            {
-                continue;
-            }
+            return fromConfig.Value;
+        }
 
-            foreach (string preset in _fileSystem.GetDirectories(mapRoot))
+        // Neither metadata nor config can identify the preset: report 0 rather
+        // than inventing an ID. 0 is not a valid storage slot, so no pre-existing
+        // world can be mistaken for this preset's.
+        return 0;
+    }
+
+    public int AllocateInstanceId(string dataDirectory, string serverPath, string mapName) =>
+        ReserveInstanceId(dataDirectory, serverPath, mapName, preferred: null);
+
+    /// <summary>
+    /// Reserves every in-use instance ID (presets across all maps plus the live
+    /// storage folders of <paramref name="mapName"/>) and returns a free one,
+    /// honoring <paramref name="preferred"/> when it is valid and unused.
+    /// </summary>
+    private int ReserveInstanceId(string dataDirectory, string serverPath, string mapName, int? preferred)
+    {
+        var presetIds = new HashSet<int>();
+        string root = PresetPaths.PresetsRoot(dataDirectory);
+        if (_fileSystem.DirectoryExists(root))
+        {
+            foreach (string map in _fileSystem.GetDirectories(root))
             {
-                string metaPath = Path.Combine(mapRoot, preset, ConfigFileNames.PresetMeta);
-                ConfigLoadResult<PresetMetaData> meta = ConfigJson.Read<PresetMetaData>(_fileSystem, metaPath);
-                if (meta.Status == ConfigLoadStatus.Success && meta.Value is { InstanceId: > 0 })
+                string mapRoot = Path.Combine(root, map);
+                if (!_fileSystem.DirectoryExists(mapRoot))
                 {
-                    max = Math.Max(max, meta.Value.InstanceId);
+                    continue;
+                }
+
+                foreach (string preset in _fileSystem.GetDirectories(mapRoot))
+                {
+                    int id = ReadInstanceId(dataDirectory, map, preset);
+                    if (id > 0)
+                    {
+                        presetIds.Add(id);
+                    }
                 }
             }
+        }
+
+        // Live storage folders on this map are reserved so a fresh preset is never
+        // bound to a world this tool did not create. The default preset is exempt
+        // for its preferred ID below: adopting the server root's own instance ID
+        // is exactly how an existing world stays attached to the default preset.
+        var storageIds = new HashSet<int>(
+            StorageFolders.ListInstanceIds(_fileSystem, serverPath, mapName).Where(id => id > 0));
+
+        if (preferred is > 0 && !presetIds.Contains(preferred.Value))
+        {
+            return preferred.Value;
+        }
+
+        int max = 0;
+        foreach (int id in presetIds)
+        {
+            max = Math.Max(max, id);
+        }
+
+        foreach (int id in storageIds)
+        {
+            max = Math.Max(max, id);
         }
 
         return max + 1;
@@ -245,7 +297,7 @@ public sealed class PresetService : IPresetService
             return Failure($"A preset named \"{name}\" already exists for {mapName}.");
         }
 
-        int instanceId = AllocateInstanceId(dataDirectory);
+        int instanceId = AllocateInstanceId(dataDirectory, serverPath, mapName);
         try
         {
             _fileSystem.CreateDirectory(targetFolder);
@@ -260,8 +312,8 @@ public sealed class PresetService : IPresetService
                 PresetPaths.TypesConfigPath(dataDirectory, mapName, name));
 
             CopyDirectoryIfExists(
-                PresetPaths.ModTypesFolder(dataDirectory, mapName, sourcePresetName),
-                PresetPaths.ModTypesFolder(dataDirectory, mapName, name));
+                PresetPaths.TypeFilesFolder(dataDirectory, mapName, sourcePresetName),
+                PresetPaths.TypeFilesFolder(dataDirectory, mapName, name));
 
             if (copyProfiles)
             {
@@ -356,7 +408,14 @@ public sealed class PresetService : IPresetService
     private PresetResult CreatePresetCore(
         string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfiles)
     {
-        int instanceId = AllocateInstanceId(dataDirectory);
+        // The default preset deliberately adopts the server root's existing
+        // instance ID when one is configured, so a world the user already played
+        // (storage_<rootId>) stays attached to the default preset instead of
+        // being orphaned. Named presets always get a fresh, collision-free ID.
+        int? preferred = PresetPaths.IsDefaultPreset(presetName)
+            ? _serverConfig.TryReadInstanceId(Path.Combine(serverPath, ConfigFileNames.ServerConfig))
+            : null;
+        int instanceId = ReserveInstanceId(dataDirectory, serverPath, mapName, preferred);
         string presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, presetName);
 
         try
@@ -388,7 +447,7 @@ public sealed class PresetService : IPresetService
 
     private void EnsureSubfolders(string dataDirectory, string mapName, string presetName)
     {
-        _fileSystem.CreateDirectory(PresetPaths.ModTypesFolder(dataDirectory, mapName, presetName));
+        _fileSystem.CreateDirectory(PresetPaths.TypeFilesFolder(dataDirectory, mapName, presetName));
         _fileSystem.CreateDirectory(PresetPaths.ProfilesFolder(dataDirectory, mapName, presetName));
         _fileSystem.CreateDirectory(PresetPaths.SavesFolder(dataDirectory, mapName, presetName));
     }

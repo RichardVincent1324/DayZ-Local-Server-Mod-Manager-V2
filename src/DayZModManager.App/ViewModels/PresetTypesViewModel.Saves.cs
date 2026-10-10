@@ -39,9 +39,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
 		string message =
 			$"Load save \"{saveName}\" (map: {mapName})?\n\n" +
-			$"This will overwrite your current progress in {StorageLabel(mapName)} and replace the mission's type file configuration with the stored copy, " +
-			$"and set the loaded mod list to this save's. " +
-			$"Your configured type settings are preserved until you wipe the world. " +
+			$"This will overwrite the preset's current world in {StorageLabel(mapName)} with the stored world data. " +
+			$"The preset's mod list, types configuration and profiles are left unchanged. " +
 			$"The current progress will be lost.";
 	
         bool confirmed = _dialogs.Confirm(message, "Load Save");

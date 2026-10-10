@@ -8,7 +8,7 @@
         <TextBlock x:Name="PromptText" Margin="0,0,0,10" TextWrapping="Wrap" />
         <TextBox x:Name="NameBox" VerticalContentAlignment="Center" Padding="4" />
         <CheckBox x:Name="CopyProfilesBox"
-                  IsChecked="True"
+                  IsChecked="False"
                   Margin="0,14,0,0" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
             <Button x:Name="ConfirmButton" Content="Create" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Create_Click" />

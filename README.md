@@ -166,20 +166,20 @@ verifySignatures = 0;
 - Files whose names contain `type` or `spawnable` are **recognized** and classified automatically. All other files are listed separately at the bottom of the picker, where you assign each one a **Types** or **Spawnable** role.
 - A mod may include any number of `types` and `spawnable` files.
 - Use the picker's **Open mod folder** button to inspect unrecognized files in File Explorer before assigning a role.
-- Copy the selected files into the active mission's `db/ModTypes` directory.
+- Copy the selected files into the active preset's `type_files` folder.
 - Store each file's role in `types_config.json`; the role drives the `type` attribute and the types-before-spawnable ordering in `cfgeconomycore.xml`.
 - The types grid shows **Mod Name**, **Configured File**, and **File Type** (`type` or `spawnable`), so the assigned role is visible at a glance.
 - Keep `cfgeconomycore.xml` synchronized with manager-owned types entries.
 - Preserve entries that V2 does not own.
-- Detect untracked XML files in `db/ModTypes` so orphaned files are visible instead of silently remaining active.
+- Detect untracked XML files in `type_files` so orphaned files are visible instead of silently remaining active.
 - Ask for confirmation before overwriting or deleting configured types files.
 - Support `Remove Selected` and `Clean Invalid` maintenance operations.
 - Warn before types edits when the preset already has a saved world (or a live world), because DayZ only reads these files when a new world is created; edits only affect future spawns and newly created saves.
-- Open the active mission's `db/ModTypes` folder, or the active preset's `profiles` folder, directly in File Explorer from the buttons beside **Config XML** and **Current Map**.
+- Open the active preset's `type_files` folder, or its `profiles` folder, directly in File Explorer from the buttons beside **Config XML** and **Current Map**.
 
 ### Presets and progress saves
 
-V2 is **preset-driven**: a *preset* is one complete, independent DayZ server environment (server configuration, mod order, types configuration, `ModTypes`, profiles and a dedicated instance ID). A *save* is only a point-in-time snapshot of the world belonging to a preset.
+V2 is **preset-driven**: a *preset* is one complete, independent DayZ server environment (server configuration, mod order, types configuration, `type_files`, profiles and a dedicated instance ID). A *save* is only a point-in-time snapshot of the world belonging to a preset.
 
 - Each map has an automatically created `__default_preset__` that cannot be renamed or deleted.
 - Add a named preset with **[Add Preset]**; optionally copy the default preset's profile data as the starting point.
@@ -221,7 +221,7 @@ DayZ-Mod-Manager-V2\
       │  ├─ serverDZ.cfg
       │  ├─ mod_order.json
       │  ├─ types_config.json
-      │  ├─ ModTypes\
+      │  ├─ type_files\
       │  ├─ profiles\
       │  └─ saves\
       │     └─ <saveName>\
@@ -314,7 +314,7 @@ A configured server may look similar to this:
 │           ├─ serverDZ.cfg
 │           ├─ mod_order.json
 │           ├─ types_config.json
-│           ├─ ModTypes\
+│           ├─ type_files\
 │           ├─ profiles\
 │           └─ saves\
 ├─ LocalServer.bat
@@ -331,7 +331,7 @@ A configured server may look similar to this:
 └─ DayZServer_x64.exe
 ```
 
-The launch batch file's `modList`, `serverProfile` and `serverConfig` lines are pointed at the active preset (its `profiles` and `serverDZ.cfg`), and `cfgeconomycore.xml` references the active preset's `ModTypes` folder.
+The launch batch file's `modList`, `serverProfile` and `serverConfig` lines are pointed at the active preset (its `profiles` and `serverDZ.cfg`), and `cfgeconomycore.xml` references the active preset's `type_files` folder.
 
 ---
 
@@ -439,7 +439,7 @@ V2 is a full rewrite rather than only a visual refresh.
 | Script-oriented architecture | Structured application architecture |
 | Root-level mod junction workflow | Dedicated `ModList` junction folder |
 | Basic map/types workflow | Integrated map, types, untracked-file, and safety handling |
-| Limited save management | Named progress saves with metadata and `ModTypes` snapshots |
+| Limited save management | Named progress saves with metadata and `type_files` snapshots |
 | Limited testability | Dedicated Core/App test projects |
 
 The original repository remains important because it currently hosts the required `LocalServer.example.bat` template used to prepare V2's launch workflow.
@@ -477,7 +477,7 @@ Check that:
 
 ### Custom items do not spawn
 
-Check the **Preset & Types** configuration and confirm that the required XML files are present in the active mission's `db/ModTypes` folder and referenced by `cfgeconomycore.xml`.
+Check the **Preset & Types** configuration and confirm that the required XML files are present in the active preset's `type_files` folder and referenced by `cfgeconomycore.xml`.
 
 ### Save / Load / Wipe World is unavailable
 

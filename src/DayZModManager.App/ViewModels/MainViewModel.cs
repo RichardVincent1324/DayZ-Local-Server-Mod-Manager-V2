@@ -69,6 +69,23 @@ public sealed class MainViewModel : ViewModelBase
         // --- Load persistent state ---
         _settings = LoadOrCreateSettings();
 
+        // Correct a workshop path that points at the DayZ game folder instead of
+        // its "!Workshop" subfolder, and persist the correction so discovery,
+        // junctions and validation all use the right location.
+        string resolvedWorkshop = WorkshopPathResolver.Resolve(fileSystem, _settings.WorkshopPath);
+        if (!string.Equals(resolvedWorkshop, _settings.WorkshopPath, StringComparison.OrdinalIgnoreCase))
+        {
+            _settings = _settings with { WorkshopPath = resolvedWorkshop };
+            try
+            {
+                _settingsService.Save(_dataDirectoryProvider.Current, _settings);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to persist the corrected workshop path: {ex.Message}");
+            }
+        }
+
         // Preset-scoped configuration: mod order and types live in the active
         // preset's folder. Until a map is applied there is no active preset.
         string activePreset = ResolveActivePreset(_settings, _settings.ActiveMap);
@@ -111,7 +128,8 @@ public sealed class MainViewModel : ViewModelBase
         PresetTypes.EnsureApplied = EnsureApplied;
         PresetTypes.ActivatePreset = ActivatePresetAsync;
         PresetTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
-        Settings = new SettingsViewModel(dialogs);
+        PresetTypes.PersistActiveSelection = PersistActiveSelection;
+        Settings = new SettingsViewModel(dialogs, fileSystem);
         Settings.ApplyRequested += async () => await ApplyAsync();
 
         ApplyCommand = new AsyncRelayCommand(async () => await ApplyAsync());
@@ -239,6 +257,29 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Records the map/preset that a map apply just made active and persists it, so
+    /// the next startup can locate the preset's mod order and types configuration.
+    /// Invoked by the Preset &amp; Types page after a successful map apply.
+    /// </summary>
+    private void PersistActiveSelection(string mapName, string presetName)
+    {
+        if (string.IsNullOrWhiteSpace(mapName) || string.IsNullOrWhiteSpace(presetName))
+        {
+            return;
+        }
+
+        _settings = WithActiveSelection(_settings, mapName, presetName);
+        try
+        {
+            _settingsService.Save(_dataDirectoryProvider.Current, _settings);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to persist the active map/preset selection: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Makes <paramref name="presetName"/> the active preset for a map: loads its
     /// mod order and types configuration, persists the selection, and applies the
     /// preset's environment. Invoked by the Preset &amp; Types page.
@@ -273,7 +314,7 @@ public sealed class MainViewModel : ViewModelBase
         }
         else
         {
-            TypesConfig.Maps.Clear();
+            TypesConfig.Maps.Remove(mapName);
             TypesConfig.CurrentMap = mapName;
         }
 
@@ -332,16 +373,7 @@ public sealed class MainViewModel : ViewModelBase
     private static bool HasNoConfiguredPaths(Settings settings) =>
         string.IsNullOrWhiteSpace(settings.WorkshopPath) && string.IsNullOrWhiteSpace(settings.ServerPath);
 
-    private void ApplyLoadedTypes(TypesConfig loaded)
-    {
-        TypesConfig.Maps.Clear();
-        foreach (KeyValuePair<string, MapTypesConfig> pair in loaded.Maps)
-        {
-            TypesConfig.Maps[pair.Key] = pair.Value;
-        }
-
-        TypesConfig.CurrentMap = loaded.CurrentMap;
-    }
+    private void ApplyLoadedTypes(TypesConfig loaded) => TypesConfig.MergeFrom(loaded);
 
     /// <summary>Applies pending changes if any. Used when leaving the Mods tab or closing the window.</summary>
     public async Task ApplyIfDirtyAsync()

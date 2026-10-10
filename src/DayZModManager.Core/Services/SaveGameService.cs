@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 
@@ -24,7 +23,7 @@ public sealed record SaveGameResult
 /// preset's metadata); each stored save lives under
 /// <c>&lt;presetFolder&gt;\saves\&lt;saveName&gt;</c> and holds a nested copy of the
 /// storage folder plus a <c>save-meta.json</c> identity. A save is only world
-/// state: the mod list, types configuration, ModTypes and instance ID belong to
+/// state: the mod list, types configuration, generated type files and instance ID belong to
 /// the parent preset.
 /// </summary>
 public interface ISaveGameService
@@ -92,9 +91,6 @@ public sealed class SaveGameService : ISaveGameService
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
 
-    /// <summary>Matches a live storage folder leaf exactly, e.g. "storage_1".</summary>
-    private static readonly Regex StorageFolderNameRegex = new(@"^storage_(\d+)$", RegexOptions.Compiled);
-
     private readonly IFileSystem _fileSystem;
     private readonly IDayZServerProcessState _processState;
 
@@ -107,39 +103,8 @@ public sealed class SaveGameService : ISaveGameService
     public string GetStorageFolderPath(string serverPath, string mapName, int instanceId) =>
         Path.Combine(serverPath, "mpmissions", mapName, $"storage_{instanceId}");
 
-    public IReadOnlyList<int> ListStorageInstanceIds(string serverPath, string mapName)
-    {
-        if (string.IsNullOrWhiteSpace(serverPath) || string.IsNullOrWhiteSpace(mapName))
-        {
-            return Array.Empty<int>();
-        }
-
-        string missionPath = Path.Combine(serverPath, "mpmissions", mapName);
-        if (!_fileSystem.DirectoryExists(missionPath))
-        {
-            return Array.Empty<int>();
-        }
-
-        var ids = new List<int>();
-        try
-        {
-            foreach (string name in _fileSystem.GetDirectories(missionPath))
-            {
-                Match match = StorageFolderNameRegex.Match(name);
-                if (match.Success && int.TryParse(match.Groups[1].Value, out int id))
-                {
-                    ids.Add(id);
-                }
-            }
-        }
-        catch (Exception)
-        {
-            return Array.Empty<int>();
-        }
-
-        ids.Sort();
-        return ids;
-    }
+    public IReadOnlyList<int> ListStorageInstanceIds(string serverPath, string mapName) =>
+        StorageFolders.ListInstanceIds(_fileSystem, serverPath, mapName);
 
     public SaveGameResult DeleteStorage(string serverPath, string mapName, int instanceId)
     {

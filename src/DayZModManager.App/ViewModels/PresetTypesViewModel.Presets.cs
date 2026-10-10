@@ -145,7 +145,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// <summary>
     /// Creates a copy of the currently selected preset so the user can experiment
     /// with mods and types without touching the original. The copy always inherits
-    /// the source's server config, mod order, types config and ModTypes; profiles
+    /// the source's server config, mod order, types config and type_files; profiles
     /// are copied only when the user opts in.
     /// </summary>
     private async void DuplicatePreset()

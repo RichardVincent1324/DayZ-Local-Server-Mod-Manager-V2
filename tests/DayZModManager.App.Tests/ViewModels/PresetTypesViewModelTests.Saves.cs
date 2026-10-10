@@ -183,7 +183,7 @@ public partial class PresetTypesViewModelTests
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
         var types = new FakeTypesService();
         var store = new FakeTypesConfigStore();
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
             config, types, dialogs, saveGameService: saves, typesConfigStore: store);

@@ -210,6 +210,25 @@ public class ApplyServiceTests
         Assert.Equal(ConfigLoadStatus.Missing, new ModOrderStore(fs).Load(PresetDir).Status);
     }
 
+    [Fact]
+    public void Apply_ValidatesActivePresetConfig_NotServerRoot()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        // Only the active preset's config exists; the server root has none. The
+        // batch file points the server at the preset config, so that is what must
+        // be validated.
+        fs.DeleteFile($@"{ServerPath}\serverDZ.cfg");
+        fs.AddFile(
+            Path.Combine(ServerPath, "DayZ-Mod-Manager-V2", "Presets", "dayzOffline.chernarusplus", "__default_preset__", "serverDZ.cfg"),
+            "");
+
+        var (service, _, _) = CreateRealServices(fs);
+
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
+
+        Assert.True(result.Success);
+    }
+
     private sealed class ThrowingSettingsService : ISettingsService
     {
         private readonly ISettingsService _inner;

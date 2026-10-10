@@ -80,6 +80,83 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public void SelectingAMap_MergesTargetPresetConfig_WithoutLeakingOtherMaps()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Maps = { [MapName] = new MapTypesConfig() },
+        };
+        var store = new FakeTypesConfigStore
+        {
+            LoadResult = ConfigLoadResult<TypesConfig>.Success(new TypesConfig
+            {
+                CurrentMap = secondMap,
+                Maps = { [secondMap] = new MapTypesConfig { Mods = { new ModTypesEntry { ModName = "@B" } } } },
+            }),
+        };
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+
+        PresetTypesViewModel vm = Create(config, mapService: mapService, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = secondMap;
+
+        Assert.Equal(secondMap, config.CurrentMap);
+        Assert.Equal("@B", config.Maps[secondMap].Mods.Single().ModName);
+        Assert.True(config.Maps.ContainsKey(MapName), "the previous map's config must be preserved in memory");
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_PersistsActiveSelection()
+    {
+        var config = new TypesConfig();
+        string? capturedMap = null;
+        string? capturedPreset = null;
+
+        PresetTypesViewModel vm = Create(config);
+        vm.PersistActiveSelection = (map, preset) =>
+        {
+            capturedMap = map;
+            capturedPreset = preset;
+        };
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(MapName, capturedMap);
+        Assert.Equal(PresetPaths.DefaultPresetName, capturedPreset);
+    }
+
+    [Fact]
+    public void SelectingAMap_PersistsActiveSelection()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = new TypesConfig();
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+
+        string? capturedMap = null;
+        string? capturedPreset = null;
+
+        PresetTypesViewModel vm = Create(config, mapService: mapService);
+        vm.PersistActiveSelection = (map, preset) =>
+        {
+            capturedMap = map;
+            capturedPreset = preset;
+        };
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = secondMap;
+
+        Assert.Equal(secondMap, capturedMap);
+        Assert.Equal(PresetPaths.DefaultPresetName, capturedPreset);
+    }
+
+    [Fact]
     public void Refresh_WithNoMaps_LeavesCurrentMapEmpty()
     {
         var config = new TypesConfig();

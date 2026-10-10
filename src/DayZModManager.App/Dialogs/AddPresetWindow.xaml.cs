@@ -13,7 +13,7 @@ public partial class AddPresetWindow : Window
             "Add Preset",
             $"Preset name for {mapName}:",
             "Copy profiles data from __default_preset__",
-            checkboxDefault: true,
+            checkboxDefault: false,
             "Create")
     {
     }

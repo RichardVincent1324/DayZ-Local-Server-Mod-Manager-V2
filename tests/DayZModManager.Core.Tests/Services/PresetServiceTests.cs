@@ -43,7 +43,7 @@ public class PresetServiceTests
 
         Assert.True(result.Success);
         Assert.True(fs.DirectoryExists(PresetFolder(PresetPaths.DefaultPresetName)));
-        Assert.True(fs.DirectoryExists(PresetPaths.ModTypesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName)));
+        Assert.True(fs.DirectoryExists(PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName)));
         Assert.True(fs.DirectoryExists(PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName)));
         Assert.True(fs.DirectoryExists(PresetPaths.SavesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName)));
 
@@ -88,7 +88,39 @@ public class PresetServiceTests
         service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", copyProfilesFromDefault: false); // id 2
         service.CreatePreset(ServerPath, DataDirectory, "dayzOffline.sakhal", "Other", copyProfilesFromDefault: false); // id 3
 
-        Assert.Equal(4, service.AllocateInstanceId(DataDirectory));
+        Assert.Equal(4, service.AllocateInstanceId(DataDirectory, ServerPath, Map));
+    }
+
+    [Fact]
+    public void EnsureDefaultPreset_AdoptsRootInstanceId_SoExistingWorldStaysAttached()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs, instanceId: 7);
+        // The server already generated storage_7 before this tool was used.
+        fs.AddDirectory(Path.Combine(ServerPath, "mpmissions", Map), "storage_7", "storage_9");
+
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        // The default preset deliberately adopts 7 (the value in serverDZ.cfg)
+        // even though storage_7 exists, so the user's existing world is used.
+        Assert.Equal(7, service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName));
+        Assert.Contains("instanceId=7;", fs.TryGetFileContents(ConfigPath(PresetPaths.DefaultPresetName))!);
+    }
+
+    [Fact]
+    public void CreatePreset_NeverTakesOverPreExistingStorage()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs, instanceId: 1);
+        // Two live worlds the server created before this tool was used.
+        fs.AddDirectory(Path.Combine(ServerPath, "mpmissions", Map), "storage_1", "storage_2");
+
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // adopts 1
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Named", false);
+
+        // The named preset must skip the live storage_1/storage_2 slots.
+        Assert.Equal(3, service.ReadInstanceId(DataDirectory, Map, "Named"));
+        Assert.Contains("instanceId=3;", fs.TryGetFileContents(ConfigPath("Named"))!);
     }
 
     [Fact]
@@ -96,15 +128,17 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs, instanceId: 5);
-        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
-        fs.AddFile(ConfigPath(PresetPaths.DefaultPresetName), $"template=\"{Map}\";\ninstanceId=1;\n");
+        // The default preset adopts the server root's existing instance ID so it
+        // stays attached to the world the server already created.
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        Assert.Equal(5, service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName));
 
         PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
 
         Assert.True(result.Success);
-        Assert.Equal(2, service.ReadInstanceId(DataDirectory, Map, "Hardcore"));
+        Assert.Equal(6, service.ReadInstanceId(DataDirectory, Map, "Hardcore"));
         string cfg = fs.TryGetFileContents(ConfigPath("Hardcore"))!;
-        Assert.Contains("instanceId=2;", cfg);
+        Assert.Contains("instanceId=6;", cfg);
         Assert.Contains($"template=\"{Map}\"", cfg);
     }
 
@@ -218,11 +252,21 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void ReadInstanceId_DefaultsToOne_WhenMetaMissing()
+    public void ReadInstanceId_ReturnsZero_WhenMetaAndConfigMissing()
     {
         (PresetService service, _) = CreateService();
 
-        Assert.Equal(1, service.ReadInstanceId(DataDirectory, Map, "Nonexistent"));
+        // Never invent an ID: an unknown preset must not claim storage_1.
+        Assert.Equal(0, service.ReadInstanceId(DataDirectory, Map, "Nonexistent"));
+    }
+
+    [Fact]
+    public void ReadInstanceId_FallsBackToPresetServerConfig_WhenMetaMissing()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddFile(ConfigPath("Broken"), $"template=\"{Map}\";\ninstanceId=9;\n");
+
+        Assert.Equal(9, service.ReadInstanceId(DataDirectory, Map, "Broken"));
     }
 
     [Fact]
@@ -240,14 +284,14 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void DuplicatePreset_CopiesConfigAndModTypes_WithNewInstanceId()
+    public void DuplicatePreset_CopiesConfigAndTypeFiles_WithNewInstanceId()
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
 
-        string sourceModTypes = PresetPaths.ModTypesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
-        fs.AddFile(Path.Combine(sourceModTypes, "CF_types.xml"), "<types/>");
+        string sourceTypeFiles = PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        fs.AddFile(Path.Combine(sourceTypeFiles, "CF_types.xml"), "<types/>");
         fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
         fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"currentMap\":\"x\"}");
 
@@ -259,7 +303,7 @@ public class PresetServiceTests
         string cfg = fs.TryGetFileContents(ConfigPath("Copy"))!;
         Assert.Contains("instanceId=2;", cfg);
         Assert.Contains($"template=\"{Map}\"", cfg);
-        Assert.True(fs.FileExists(Path.Combine(PresetPaths.ModTypesFolder(DataDirectory, Map, "Copy"), "CF_types.xml")));
+        Assert.True(fs.FileExists(Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, Map, "Copy"), "CF_types.xml")));
         Assert.True(fs.FileExists(PresetPaths.ModOrderPath(DataDirectory, Map, "Copy")));
         Assert.True(fs.FileExists(PresetPaths.TypesConfigPath(DataDirectory, Map, "Copy")));
     }

@@ -15,7 +15,7 @@ public partial class PresetTypesViewModelTests
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
         const string hardcore = @"D:\workshop\@CF\hardcore_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
         var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { new TypeFileSelection(hardcore, TypesFileRole.Types) } };
 
@@ -33,7 +33,7 @@ public partial class PresetTypesViewModelTests
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
         const string hardcore = @"D:\workshop\@CF\hardcore_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
         var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { new TypeFileSelection(hardcore, TypesFileRole.Types) } };
 
@@ -50,7 +50,7 @@ public partial class PresetTypesViewModelTests
     public void ConfigureMod_Prompts_EvenWhenSameFileReSelected()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs { ConfirmResult = true, SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
@@ -66,7 +66,7 @@ public partial class PresetTypesViewModelTests
     public void ConfigureMod_Cancels_WhenSameFileReSelected()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs { ConfirmResult = false, SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
@@ -104,7 +104,7 @@ public partial class PresetTypesViewModelTests
     public void ConfigureMod_StacksSaveWarningAboveOverwriteWarning()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs
         {
@@ -155,7 +155,7 @@ public partial class PresetTypesViewModelTests
         {
             ModName = "@CF",
             SourceFiles = { "casual_types.xml" },
-            GeneratedFiles = { @"db\ModTypes\CF_casual_types.xml" },
+            GeneratedFiles = { @"db\type_files\CF_casual_types.xml" },
         });
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual, hardcore } };
         var dialogs = new FakeDialogs { SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
@@ -173,7 +173,7 @@ public partial class PresetTypesViewModelTests
     public void ConfigureMod_PassesModFolderPathToPicker()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs { SelectedFiles = new[] { new TypeFileSelection(casual, TypesFileRole.Types) } };
 
@@ -197,7 +197,7 @@ public partial class PresetTypesViewModelTests
     public async Task SelectingMod_TriggersConfigure_AndResetsToNone()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs
         {
@@ -220,7 +220,7 @@ public partial class PresetTypesViewModelTests
     public async Task SelectingMod_WithLiveWorld_ConfiguresAfterConfirmation()
     {
         const string casual = @"D:\workshop\@CF\casual_types.xml";
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_casual_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_casual_types.xml"));
         var types = new FakeTypesService { DiscoveryFiles = new[] { casual } };
         var dialogs = new FakeDialogs
         {
@@ -244,7 +244,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void RemoveSelected_AsksConfirmation_BeforeDeleting()
     {
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = false };
 
@@ -260,7 +260,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void RemoveSelected_Deletes_WhenConfirmed()
     {
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = true };
 
@@ -277,7 +277,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void RemoveSelected_ShowsSaveWarning_WhenPresetHasWorldData()
     {
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = false };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
@@ -295,7 +295,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void CleanInvalid_AsksConfirmation_WhenInvalidModsExist()
     {
-        var config = ConfigWithEntry(Entry("@Ghost", @"db\ModTypes\Ghost_types.xml"));
+        var config = ConfigWithEntry(Entry("@Ghost", @"db\type_files\Ghost_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = false };
 
@@ -312,7 +312,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void CleanInvalid_PrependsSaveWarning_WhenPresetHasWorldData()
     {
-        var config = ConfigWithEntry(Entry("@Ghost", @"db\ModTypes\Ghost_types.xml"));
+        var config = ConfigWithEntry(Entry("@Ghost", @"db\type_files\Ghost_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = false };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
@@ -344,11 +344,11 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void Sync_AddsUntrackedRows_ForFilesInModTypesNotInConfig()
+    public void Sync_AddsUntrackedRows_ForFilesInTypeFilesNotInConfig()
     {
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ModTypesFolderPath()}\Orphan_types.xml");
+        fs.AddFile($@"{TypeFilesFolderPath()}\Orphan_types.xml");
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(config, new FakeTypesService(), new FakeDialogs(), fileSystem: fs);
 
@@ -364,11 +364,11 @@ public partial class PresetTypesViewModelTests
         var config = ConfigWithEntry(new ModTypesEntry
         {
             ModName = "@CF",
-            GeneratedFiles = { @"db\ModTypes\CF_types.xml", @"db\ModTypes\CF_spawn.xml" },
+            GeneratedFiles = { @"db\type_files\CF_types.xml", @"db\type_files\CF_spawn.xml" },
             FileRoles = { { "CF_types.xml", "types" }, { "CF_spawn.xml", "spawnabletypes" } },
         });
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ModTypesFolderPath()}\Orphan_types.xml");
+        fs.AddFile($@"{TypeFilesFolderPath()}\Orphan_types.xml");
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(config, new FakeTypesService(), new FakeDialogs(), fileSystem: fs);
 
@@ -380,11 +380,11 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public async Task RemoveSelected_DeletesUntrackedRows_WithoutTouchingTrackedFiles()
     {
-        var config = ConfigWithEntry(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        var config = ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml"));
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{ModTypesFolderPath()}\Orphan_types.xml");
+        fs.AddFile($@"{TypeFilesFolderPath()}\Orphan_types.xml");
 
         (PresetTypesViewModel vm, FakeTypesService fakeTypes, _) = CreateTypesVm(config, types, dialogs, fileSystem: fs);
 
@@ -405,9 +405,9 @@ public partial class PresetTypesViewModelTests
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), new FakeDialogs());
 
         Assert.True(vm.ConfigureModCommand.CanExecute("@CF"));
-        Assert.True(vm.OpenModTypesFolderCommand.CanExecute(null));
+        Assert.True(vm.OpenTypeFilesFolderCommand.CanExecute(null));
         Assert.True(vm.CleanInvalidCommand.CanExecute(null));
-        Assert.Equal("Open ModTypes folder in File Explorer", vm.OpenModTypesFolderToolTip);
+        Assert.Equal("Open type_files folder in File Explorer", vm.OpenTypeFilesFolderToolTip);
     }
 
     [Fact]
@@ -423,25 +423,25 @@ public partial class PresetTypesViewModelTests
 
         // A world no longer disables the types operations; they warn instead.
         Assert.True(vm.ConfigureModCommand.CanExecute("@CF"));
-        Assert.True(vm.OpenModTypesFolderCommand.CanExecute(null));
+        Assert.True(vm.OpenTypeFilesFolderCommand.CanExecute(null));
         Assert.True(vm.CleanInvalidCommand.CanExecute(null));
 
-        vm.OpenModTypesFolderCommand.Execute(null);
+        vm.OpenTypeFilesFolderCommand.Execute(null);
         Assert.NotNull(launcher.LastOpenedFolder);
     }
 
     [Fact]
-    public void OpenModTypesFolderCommand_CreatesFolderAndOpensIt()
+    public void OpenTypeFilesFolderCommand_CreatesFolderAndOpensIt()
     {
         var fs = new FakeFileSystem();
         var launcher = new FakeProcessLauncher();
-        string expected = PresetModTypesFolder(MapName);
+        string expected = PresetTypeFilesFolder(MapName);
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
             AppliedConfig(), new FakeTypesService(), new FakeDialogs(),
             fileSystem: fs, processLauncher: launcher);
 
-        vm.OpenModTypesFolderCommand.Execute(null);
+        vm.OpenTypeFilesFolderCommand.Execute(null);
 
         Assert.True(fs.DirectoryExists(expected));
         Assert.Equal(expected, launcher.LastOpenedFolder);

@@ -22,6 +22,40 @@ public sealed class TypesConfig
     }
 
     public string CurrentMap { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Merges another configuration into this one: every map present in
+    /// <paramref name="loaded"/> replaces this config's entry for that map, and
+    /// <see cref="CurrentMap"/> follows <paramref name="loaded"/> when it is set.
+    /// Maps absent from <paramref name="loaded"/> are left untouched. Because a
+    /// preset's file is scoped to its own map, this lets preset activation and map
+    /// switching replace exactly one map without leaking or dropping another
+    /// map's settings.
+    /// </summary>
+    public void MergeFrom(TypesConfig loaded)
+    {
+        if (loaded is null)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<string, MapTypesConfig> pair in loaded.Maps)
+        {
+            Maps[pair.Key] = pair.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(loaded.CurrentMap))
+        {
+            // A scoped file for a map with no configured mods carries no map
+            // entry; clear any stale in-memory entry so the removal is reflected.
+            if (!loaded.Maps.ContainsKey(loaded.CurrentMap))
+            {
+                Maps.Remove(loaded.CurrentMap);
+            }
+
+            CurrentMap = loaded.CurrentMap;
+        }
+    }
 }
 
 /// <summary>Types configuration for a single map.</summary>

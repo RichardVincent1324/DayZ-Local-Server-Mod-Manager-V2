@@ -40,7 +40,18 @@ public sealed class TypesConfigStore : ITypesConfigStore
 
     public void Save(string presetFolder, TypesConfig config)
     {
+        // A preset is scoped to a single map, so persist only that map's
+        // configuration. Writing the whole in-memory dictionary would copy every
+        // other map's settings into this preset, letting them leak between
+        // presets and be dropped when a preset is reloaded.
+        var scoped = new TypesConfig { CurrentMap = config.CurrentMap };
+        if (!string.IsNullOrWhiteSpace(config.CurrentMap)
+            && config.Maps.TryGetValue(config.CurrentMap, out MapTypesConfig? map))
+        {
+            scoped.Maps[config.CurrentMap] = map;
+        }
+
         string path = Path.Combine(presetFolder, ConfigFileNames.TypesConfig);
-        ConfigJson.Write(_fileSystem, path, config);
+        ConfigJson.Write(_fileSystem, path, scoped);
     }
 }

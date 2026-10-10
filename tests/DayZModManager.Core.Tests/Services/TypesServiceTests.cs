@@ -10,9 +10,9 @@ public class TypesServiceTests
     private const string MissionPath = @"D:\DayZServer\mpmissions\dayzOffline.chernarusplus";
     private const string MapName = "dayzOffline.chernarusplus";
     private const string PresetRoot = @"D:\app\data\Presets\dayzOffline.chernarusplus\__default_preset__";
-    private const string ModTypesFolder = PresetRoot + @"\ModTypes";
+    private const string TypeFilesFolder = PresetRoot + @"\type_files";
 
-    private static TypesTarget Target() => new(MissionPath, ModTypesFolder, "./db/ModTypes");
+    private static TypesTarget Target() => new(MissionPath, TypeFilesFolder, "./db/type_files");
 
     private const string EconomyCoreXml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
@@ -87,7 +87,7 @@ public class TypesServiceTests
     public void GetActiveTypeFileNames_ReturnsLeavesInEconomyCoreOrder()
     {
         TypesConfig config = ConfigWith(
-            Entry("@CF", @"db\ModTypes\CF_cfgspawnabletypes.xml", @"db\ModTypes\CF_types.xml"));
+            Entry("@CF", @"db\type_files\CF_cfgspawnabletypes.xml", @"db\type_files\CF_types.xml"));
 
         IReadOnlyList<string> names = CreateService(Seed()).GetActiveTypeFileNames(config, MapName, Loaded("@CF"));
 
@@ -98,8 +98,8 @@ public class TypesServiceTests
     public void GetActiveTypeFileNames_FiltersToLoadedMods()
     {
         TypesConfig config = ConfigWith(
-            Entry("@CF", @"db\ModTypes\CF_types.xml", @"db\ModTypes\CF_cfgspawnabletypes.xml"),
-            Entry("@Other", @"db\ModTypes\Other_types.xml"));
+            Entry("@CF", @"db\type_files\CF_types.xml", @"db\type_files\CF_cfgspawnabletypes.xml"),
+            Entry("@Other", @"db\type_files\Other_types.xml"));
 
         IReadOnlyList<string> names = CreateService(Seed()).GetActiveTypeFileNames(config, MapName, Loaded("@CF"));
 
@@ -137,8 +137,8 @@ public class TypesServiceTests
             new[] { "CF_types.xml", "CF_cfgspawnabletypes.xml" },
             entry.GeneratedFiles);
 
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_types.xml"));
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_cfgspawnabletypes.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_cfgspawnabletypes.xml"));
 
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.Contains("CF_types.xml", economy);
@@ -155,7 +155,7 @@ public class TypesServiceTests
         service.ConfigureMod(config, MapName, Target(), WorkshopPath, "@CF",
             Select($@"{WorkshopPath}\@CF\types.xml"), Loaded("@CF"));
         string oldGenerated = config.Maps[MapName].Mods.Single().GeneratedFiles[0];
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\{oldGenerated}"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\{oldGenerated}"));
 
         // Reconfigure with only the spawnable file.
         service.ConfigureMod(config, MapName, Target(), WorkshopPath, "@CF",
@@ -163,8 +163,8 @@ public class TypesServiceTests
 
         ModTypesEntry entry = config.Maps[MapName].Mods.Single();
         Assert.Single(entry.GeneratedFiles);
-        Assert.Null(fs.TryGetFileContents($@"{ModTypesFolder}\{oldGenerated}"));
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\{entry.GeneratedFiles[0]}"));
+        Assert.Null(fs.TryGetFileContents($@"{TypeFilesFolder}\{oldGenerated}"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\{entry.GeneratedFiles[0]}"));
     }
 
     [Fact]
@@ -181,8 +181,8 @@ public class TypesServiceTests
         TypesOperationResult result = service.RemoveFiles(config, MapName, Target(), "@CF", leaves, Loaded("@CF"));
 
         Assert.True(result.Success);
-        Assert.Null(fs.TryGetFileContents($@"{ModTypesFolder}\CF_types.xml"));
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_cfgspawnabletypes.xml"));
+        Assert.Null(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_cfgspawnabletypes.xml"));
         Assert.Single(config.Maps[MapName].Mods.Single().GeneratedFiles);
     }
 
@@ -201,7 +201,7 @@ public class TypesServiceTests
 
         Assert.True(result.Success);
         Assert.Empty(config.Maps[MapName].Mods);
-        Assert.Null(fs.TryGetFileContents($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.Null(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class TypesServiceTests
         Assert.True(result.Success);
         Assert.Single(config.Maps[MapName].Mods);
         Assert.Equal("@CF", config.Maps[MapName].Mods.Single().ModName);
-        Assert.Null(fs.TryGetFileContents($@"{ModTypesFolder}\OtherMod_types.xml"));
+        Assert.Null(fs.TryGetFileContents($@"{TypeFilesFolder}\OtherMod_types.xml"));
 
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.Contains("CF_types.xml", economy);
@@ -305,7 +305,7 @@ public class TypesServiceTests
 
         ModTypesEntry entry = config.Maps[MapName].Mods.Single();
         Assert.Contains("CF_settings.xml", entry.GeneratedFiles);
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_settings.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_settings.xml"));
 
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.Contains("CF_settings.xml\" type=\"types\"", economy);
@@ -329,7 +329,7 @@ public class TypesServiceTests
 
         ModTypesEntry entry = config.Maps[MapName].Mods.Single();
         Assert.Contains("CF_settings.xml", entry.GeneratedFiles);
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_settings.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_settings.xml"));
 
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         int typesIndex = economy.IndexOf("CF_types.xml", StringComparison.Ordinal);
@@ -454,7 +454,7 @@ public class TypesServiceTests
         Assert.False(result.Success);
         Assert.Contains(result.Messages, m => m.Contains("same generated file"));
         Assert.Empty(config.Maps[MapName].Mods);
-        Assert.Null(fs.TryGetFileContents($@"{ModTypesFolder}\CF_a_b.xml"));
+        Assert.Null(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_a_b.xml"));
     }
 
     [Fact]
@@ -487,28 +487,28 @@ public class TypesServiceTests
     public void RemoveUntrackedFiles_DeletesFileAndDropsEconomyReference()
     {
         FakeFileSystem fs = Seed();
-        fs.AddDirectory(ModTypesFolder);
-        fs.AddFile($@"{ModTypesFolder}\CF_types.xml", "<types/>");
-        fs.AddFile($@"{ModTypesFolder}\Orphan_types.xml", "<types/>");
+        fs.AddDirectory(TypeFilesFolder);
+        fs.AddFile($@"{TypeFilesFolder}\CF_types.xml", "<types/>");
+        fs.AddFile($@"{TypeFilesFolder}\Orphan_types.xml", "<types/>");
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/ModTypes">
+            	<ce folder="./db/type_files">
             		<file name="CF_types.xml" type="types" />
             		<file name="Orphan_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        TypesConfig config = ConfigWith(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        TypesConfig config = ConfigWith(Entry("@CF", @"db\type_files\CF_types.xml"));
         TypesService service = CreateService(fs);
 
         TypesOperationResult result = service.RemoveUntrackedFiles(
             config, MapName, Target(), new HashSet<string> { "Orphan_types.xml" });
 
         Assert.True(result.Success);
-        Assert.False(fs.FileExists($@"{ModTypesFolder}\Orphan_types.xml"));
-        Assert.True(fs.FileExists($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.False(fs.FileExists($@"{TypeFilesFolder}\Orphan_types.xml"));
+        Assert.True(fs.FileExists($@"{TypeFilesFolder}\CF_types.xml"));
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.DoesNotContain("Orphan_types.xml", economy);
         Assert.Contains("CF_types.xml", economy);
@@ -519,20 +519,20 @@ public class TypesServiceTests
     public void RemoveUntrackedFiles_NeverTouchesTrackedFiles()
     {
         FakeFileSystem fs = Seed();
-        fs.AddDirectory(ModTypesFolder);
-        fs.AddFile($@"{ModTypesFolder}\CF_types.xml", "<types/>");
-        fs.AddFile($@"{ModTypesFolder}\Orphan_types.xml", "<types/>");
+        fs.AddDirectory(TypeFilesFolder);
+        fs.AddFile($@"{TypeFilesFolder}\CF_types.xml", "<types/>");
+        fs.AddFile($@"{TypeFilesFolder}\Orphan_types.xml", "<types/>");
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/ModTypes">
+            	<ce folder="./db/type_files">
             		<file name="CF_types.xml" type="types" />
             		<file name="Orphan_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        TypesConfig config = ConfigWith(Entry("@CF", @"db\ModTypes\CF_types.xml"));
+        TypesConfig config = ConfigWith(Entry("@CF", @"db\type_files\CF_types.xml"));
         TypesService service = CreateService(fs);
 
         // Requesting a tracked file must be ignored; only the orphan is removed.
@@ -540,8 +540,8 @@ public class TypesServiceTests
             config, MapName, Target(), new HashSet<string> { "CF_types.xml", "Orphan_types.xml" });
 
         Assert.True(result.Success);
-        Assert.True(fs.FileExists($@"{ModTypesFolder}\CF_types.xml"));
-        Assert.False(fs.FileExists($@"{ModTypesFolder}\Orphan_types.xml"));
+        Assert.True(fs.FileExists($@"{TypeFilesFolder}\CF_types.xml"));
+        Assert.False(fs.FileExists($@"{TypeFilesFolder}\Orphan_types.xml"));
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.Contains("CF_types.xml", economy);
         Assert.DoesNotContain("Orphan_types.xml", economy);
@@ -551,8 +551,8 @@ public class TypesServiceTests
     public void RemoveUntrackedFiles_ReturnsFailure_WhenEconomyCoreMalformed()
     {
         FakeFileSystem fs = Seed();
-        fs.AddDirectory(ModTypesFolder);
-        fs.AddFile($@"{ModTypesFolder}\Orphan_types.xml", "<types/>");
+        fs.AddDirectory(TypeFilesFolder);
+        fs.AddFile($@"{TypeFilesFolder}\Orphan_types.xml", "<types/>");
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
         TypesConfig config = ConfigWith();
         TypesService service = CreateService(fs);
@@ -563,7 +563,7 @@ public class TypesServiceTests
         Assert.False(result.Success);
         Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
         // The physical file is only deleted after the economy update succeeds.
-        Assert.True(fs.FileExists($@"{ModTypesFolder}\Orphan_types.xml"));
+        Assert.True(fs.FileExists($@"{TypeFilesFolder}\Orphan_types.xml"));
     }
 
     [Fact]
@@ -580,7 +580,7 @@ public class TypesServiceTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
-        Assert.False(fs.FileExists($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.False(fs.FileExists($@"{TypeFilesFolder}\CF_types.xml"));
         Assert.Empty(config.Maps[MapName].Mods);
     }
 
@@ -605,7 +605,7 @@ public class TypesServiceTests
         Assert.False(result.Success);
         // The rollback must not delete a file that existed before the failed
         // attempt; the restored entry still references it.
-        Assert.True(fs.FileExists($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.True(fs.FileExists($@"{TypeFilesFolder}\CF_types.xml"));
         Assert.Contains(config.Maps[MapName].Mods.Single().GeneratedFiles, f => f.EndsWith("CF_types.xml"));
     }
 
@@ -625,7 +625,7 @@ public class TypesServiceTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
         Assert.Single(config.Maps[MapName].Mods.Single().GeneratedFiles);
     }
 
@@ -644,7 +644,7 @@ public class TypesServiceTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
-        Assert.NotNull(fs.TryGetFileContents($@"{ModTypesFolder}\CF_types.xml"));
+        Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
         Assert.Single(config.Maps[MapName].Mods);
     }
 }

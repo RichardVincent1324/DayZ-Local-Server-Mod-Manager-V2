@@ -4,8 +4,8 @@ namespace DayZModManager.Core;
 /// Well-known paths for the preset-driven data model. A preset is one complete,
 /// independent DayZ server environment stored under
 /// <c>&lt;dataDirectory&gt;\Presets\&lt;mapName&gt;\&lt;presetName&gt;</c> and owning its
-/// own server configuration, mod order, types configuration, ModTypes, profiles
-/// and world saves. This type is the single source of truth for that layout, in
+/// own server configuration, mod order, types configuration, its generated type
+/// files, profiles and world saves. This type is the single source of truth for that layout, in
 /// the same spirit as <see cref="AppPaths"/> and
 /// <c>DayZModManager.Core.Services.ModListFolder</c>.
 /// </summary>
@@ -18,7 +18,7 @@ public static class PresetPaths
     public const string DefaultPresetName = "__default_preset__";
 
     /// <summary>Folder inside a preset that holds its generated types XML files.</summary>
-    public const string ModTypesDirectoryName = "ModTypes";
+    public const string TypeFilesDirectoryName = "type_files";
 
     /// <summary>Folder inside a preset that holds its DayZ server profile data.</summary>
     public const string ProfilesDirectoryName = "profiles";
@@ -54,9 +54,9 @@ public static class PresetPaths
     public static string TypesConfigPath(string dataDirectory, string mapName, string presetName) =>
         Path.Combine(PresetFolder(dataDirectory, mapName, presetName), ConfigFileNames.TypesConfig);
 
-    /// <summary>Preset ModTypes folder path.</summary>
-    public static string ModTypesFolder(string dataDirectory, string mapName, string presetName) =>
-        Path.Combine(PresetFolder(dataDirectory, mapName, presetName), ModTypesDirectoryName);
+    /// <summary>Preset type_files folder path.</summary>
+    public static string TypeFilesFolder(string dataDirectory, string mapName, string presetName) =>
+        Path.Combine(PresetFolder(dataDirectory, mapName, presetName), TypeFilesDirectoryName);
 
     /// <summary>Preset profiles folder path.</summary>
     public static string ProfilesFolder(string dataDirectory, string mapName, string presetName) =>

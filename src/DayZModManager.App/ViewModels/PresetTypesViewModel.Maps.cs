@@ -336,6 +336,10 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         // Commit: only after the server files were updated successfully.
+        // Load the target preset's own (single-map) types configuration so a map
+        // switch shows that preset's settings rather than carrying the previous
+        // map's config over.
+        MergePresetTypesConfig(mapName, _activePresetName);
         _typesConfig.CurrentMap = mapName;
         try
         {
@@ -366,7 +370,33 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         RefreshPresets();
         RefreshSaves();
         _log.Success($"Map switched to: {mapName}");
+
+        // Let the shell persist the now-active map/preset so the next startup can
+        // locate this preset's mod order and types configuration.
+        PersistActiveSelection?.Invoke(mapName, _activePresetName);
         return true;
+    }
+
+    /// <summary>
+    /// Loads the types configuration owned by a preset for a map and merges it
+    /// into the shared config, replacing only that map's entry. A preset-scoped
+    /// file never carries another map, so switching maps or presets cannot leak
+    /// or drop other maps' settings.
+    /// </summary>
+    private void MergePresetTypesConfig(string mapName, string presetName)
+    {
+        string presetFolder = PresetPaths.PresetFolder(_dataDirectoryProvider.Current, mapName, presetName);
+        ConfigLoadResult<TypesConfig> loaded = _typesConfigStore.Load(presetFolder);
+        if (loaded.Status == ConfigLoadStatus.Success && loaded.Value is not null)
+        {
+            _typesConfig.MergeFrom(loaded.Value);
+        }
+        else
+        {
+            // No usable config for this preset: this map starts with an empty one.
+            _typesConfig.Maps.Remove(mapName);
+            _typesConfig.CurrentMap = mapName;
+        }
     }
 
     /// <summary>

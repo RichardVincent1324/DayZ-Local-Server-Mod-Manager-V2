@@ -38,6 +38,21 @@ public class ModsViewModelTests
     }
 
     [Fact]
+    public void Refresh_WithNoMods_WarnsAboutWorkshopPath()
+    {
+        var state = new ModState();
+        var log = new LogViewModel();
+        var vm = new ModsViewModel(state, new FakeDiscovery(Array.Empty<string>()), log);
+        vm.Initialize();
+
+        Refresh(vm, @"D:\SteamLibrary\steamapps\common\DayZ");
+
+        Assert.Contains(
+            log.Entries,
+            entry => entry.Level == LogLevel.Warning && entry.Message.Contains("!Workshop"));
+    }
+
+    [Fact]
     public void LoadSelected_MovesModsToLoaded_AndMarksDirty()
     {
         ModsViewModel vm = Create(new[] { "@A", "@B" }, Array.Empty<string>());
@@ -89,6 +104,7 @@ public class ModsViewModelTests
         vm.ReorderCommand.Execute(new ReorderRequest("@B", 2));
 
         Assert.Equal(new[] { "@A", "@C", "@B", "@D" }, Names(vm.LoadedItems));
+        Assert.Equal(new[] { 1, 2, 3, 4 }, vm.LoadedItems.Select(i => i.Position));
     }
 
     [Fact]

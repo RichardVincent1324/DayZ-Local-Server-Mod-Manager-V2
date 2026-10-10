@@ -384,29 +384,45 @@ public static class ListBoxDragDropReorder
         ReleaseCapture(listBox);
     }
 
-    private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
-    {
-        if (state.Indicator is not { } indicator)
-        {
-            return;
-        }
-
-        int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox));
-        double y = -1;
-
-        if (index >= 0)
-        {
-            y = index < listBox.Items.Count
-                ? GetContainerTopY(listBox, index)
-                : GetListBottomY(listBox);
-
-            if (y < 0) y = 0;
-            if (y > listBox.ActualHeight) y = listBox.ActualHeight;
-        }
-
-        indicator.Y = y;
-        indicator.InvalidateVisual();
-    }
+	private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
+	{
+		if (state.Indicator is not { } indicator) return;
+	
+		int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox));
+		indicator.InsertPositionKind = InsertKind.None;
+	
+		if (index < 0)
+		{
+			indicator.Y = -1;
+			indicator.InvalidateVisual();
+			return;
+		}
+	
+		double y = index < listBox.Items.Count
+			? GetContainerTopY(listBox, index)
+			: GetListBottomY(listBox);
+	
+		// 关键：位置算不出来 → 直接隐藏，而不是兜底到 0
+		if (y < 0)
+		{
+			indicator.Y = -1;
+			indicator.InvalidateVisual();
+			return;
+		}
+	
+		// 底部指示线夹在视口内，避免被 AdornerLayer 裁掉
+		if (y > listBox.ActualHeight) y = listBox.ActualHeight;
+	
+		if (index == 0)
+			indicator.InsertPositionKind = InsertKind.TopOfList;
+		else if (index == listBox.Items.Count)
+			indicator.InsertPositionKind = InsertKind.BottomOfList;
+		else
+			indicator.InsertPositionKind = InsertKind.BetweenItems;
+	
+		indicator.Y = y;
+		indicator.InvalidateVisual();
+	}
 
     private static double GetContainerTopY(ListBox listBox, int index)
     {
@@ -432,7 +448,7 @@ public static class ListBoxDragDropReorder
             }
         }
 
-        return 0;
+        return -1;
     }
 
     private static double GetListBottomY(ListBox listBox)
@@ -445,7 +461,7 @@ public static class ListBoxDragDropReorder
             }
         }
 
-        return listBox.ActualHeight;
+        return -1;
     }
 
     private static int ComputeInsertIndex(ListBox listBox, Point position)
@@ -553,7 +569,6 @@ public static class ListBoxDragDropReorder
         public DragGhost? Ghost;
         public AdornerLayer? IndicatorLayer;
         public InsertionIndicatorAdorner? Indicator;
-
         public void Reset()
         {
             DraggedItem = null;
@@ -566,11 +581,19 @@ public static class ListBoxDragDropReorder
         }
     }
 
+    private enum InsertKind
+    {
+        None,
+        BetweenItems,
+        TopOfList,
+        BottomOfList
+    }
+
     private sealed class InsertionIndicatorAdorner : Adorner
     {
         private static readonly Pen LinePen = CreateLinePen();
-
         public double Y = -1;
+        public InsertKind InsertPositionKind { get; set; } = InsertKind.None;
 
         public InsertionIndicatorAdorner(UIElement adornedElement) : base(adornedElement)
         {
@@ -580,19 +603,40 @@ public static class ListBoxDragDropReorder
         private static Pen CreateLinePen()
         {
             var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x2D, 0x9C, 0xD8)), 2.0);
+            pen.StartLineCap = PenLineCap.Round;
+            pen.EndLineCap = PenLineCap.Round;
             pen.Freeze();
             return pen;
         }
 
-        protected override void OnRender(DrawingContext drawingContext)
-        {
-            if (Y < 0)
-            {
-                return;
-            }
-
-            drawingContext.DrawLine(LinePen, new Point(0, Y), new Point(AdornedElement.RenderSize.Width, Y));
-        }
+		protected override void OnRender(DrawingContext drawingContext)
+		{
+			if (Y < 0 || InsertPositionKind == InsertKind.None)
+			{
+				return;
+			}
+		
+			var totalWidth = AdornedElement.RenderSize.Width;
+			double leftPadding = AdornedElement is Control control ? control.Padding.Left : 0;
+			double scrollBarWidth = SystemParameters.VerticalScrollBarWidth;
+			double contentRight = totalWidth - scrollBarWidth;
+		
+			Point p1, p2;
+			if (InsertPositionKind == InsertKind.BetweenItems)
+			{
+				const double rightGap = 20;
+				p1 = new Point(leftPadding, Y);
+				p2 = new Point(contentRight - rightGap, Y);
+			}
+			else
+			{
+				double sideMargin = 80;
+				p1 = new Point(leftPadding + sideMargin, Y);
+				p2 = new Point(contentRight - sideMargin, Y);
+			}
+		
+			drawingContext.DrawLine(LinePen, p1, p2);
+		}
     }
 
     private sealed class DragGhost : Window
@@ -607,7 +651,6 @@ public static class ListBoxDragDropReorder
             Topmost = true;
             ShowActivated = false;
             SizeToContent = SizeToContent.WidthAndHeight;
-
             Content = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x2D, 0x4A, 0x6B)),
@@ -623,7 +666,6 @@ public static class ListBoxDragDropReorder
                 },
             };
         }
-
         public void Position(Point screen)
         {
             Left = screen.X + 4;

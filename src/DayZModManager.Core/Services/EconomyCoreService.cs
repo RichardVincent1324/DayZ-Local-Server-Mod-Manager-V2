@@ -6,15 +6,15 @@ using DayZModManager.Core.Abstractions;
 namespace DayZModManager.Core.Services;
 
 /// <summary>
-/// Maintains the <c>&lt;ce folder="./db/ModTypes"&gt;</c> block inside a map's
+/// Maintains the <c>&lt;ce folder="./db/type_files"&gt;</c> block inside a map's
 /// <c>cfgeconomycore.xml</c>. Uses XML parsing (not text regexes) for robustness.
 /// </summary>
 public interface IEconomyCoreService
 {
     /// <summary>
-    /// Rewrites the ModTypes reference block to reference the given file names
+    /// Rewrites the type_files reference block to reference the given file names
     /// (leaf names only, e.g. "CF_types.xml"). <paramref name="folder"/> is the
-    /// path written to the block's <c>folder</c> attribute — <c>./db/ModTypes</c>
+    /// path written to the block's <c>folder</c> attribute — <c>./db/type_files</c>
     /// for the configured types, or a path into the data directory for a loaded
     /// save. <paramref name="desiredFileNames"/> is the set that should be
     /// referenced; <paramref name="ownedFileNames"/> is the set of leaf names
@@ -25,7 +25,7 @@ public interface IEconomyCoreService
     /// (keyed case-insensitively); a missing entry is treated as a types file.
     /// Returns false if the file is missing or malformed.
     /// </summary>
-    bool UpdateModTypes(
+    bool UpdateTypeFiles(
         string missionPath,
         string folder,
         IReadOnlyList<string> desiredFileNames,
@@ -33,25 +33,25 @@ public interface IEconomyCoreService
         IReadOnlyDictionary<string, string> fileTypes);
 
     /// <summary>
-    /// Returns the <c>folder</c> value of the manager-owned ModTypes block in a
+    /// Returns the <c>folder</c> value of the manager-owned type_files block in a
     /// map's cfgeconomycore.xml, or null when there is no such block. Used to
     /// rediscover which types folder (configured or a loaded save) is active.
     /// </summary>
-    string? GetModTypesFolder(string missionPath);
+    string? GetTypeFilesFolder(string missionPath);
 
     /// <summary>
-    /// Removes the ModTypes references for the given leaf names from
+    /// Removes the type_files references for the given leaf names from
     /// cfgeconomycore.xml regardless of whether this manager owns them. Used to
     /// clean up orphaned files the manager does not track. Other references are
     /// preserved. Returns false if the file is missing or malformed.
     /// </summary>
-    bool RemoveModTypesFiles(string missionPath, IReadOnlySet<string> fileNames);
+    bool RemoveTypeFiles(string missionPath, IReadOnlySet<string> fileNames);
 }
 
 public sealed class EconomyCoreService : IEconomyCoreService
 {
     /// <summary>The <c>folder</c> value used for the configured (world-less) types folder.</summary>
-    public const string ConfiguredFolder = "./db/ModTypes";
+    public const string ConfiguredFolder = "./db/type_files";
 
     private readonly IFileSystem _fileSystem;
 
@@ -60,7 +60,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public bool UpdateModTypes(string missionPath, string folder, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes)
+    public bool UpdateTypeFiles(string missionPath, string folder, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
         if (doc?.Root is null)
@@ -84,7 +84,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
 
         if (desired.Count > 0)
         {
-            XElement? existing = doc.Root.Descendants("ce").FirstOrDefault(IsModTypesCe);
+            XElement? existing = doc.Root.Descendants("ce").FirstOrDefault(IsTypeFilesCe);
             if (existing is not null)
             {
                 // The block may already exist for a different active source (e.g.
@@ -174,18 +174,18 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return !changed || SaveEconomyCore(missionPath, doc);
     }
 
-    public string? GetModTypesFolder(string missionPath)
+    public string? GetTypeFilesFolder(string missionPath)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
-        XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsModTypesCe);
+        XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsTypeFilesCe);
         return ce is null ? null : (string?)ce.Attribute("folder");
     }
 
-    /// <summary>Convenience overload that targets the configured <c>./db/ModTypes</c> folder.</summary>
-    public bool UpdateModTypes(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes) =>
-        UpdateModTypes(missionPath, ConfiguredFolder, desiredFileNames, ownedFileNames, fileTypes);
+    /// <summary>Convenience overload that targets the configured <c>./db/type_files</c> folder.</summary>
+    public bool UpdateTypeFiles(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes) =>
+        UpdateTypeFiles(missionPath, ConfiguredFolder, desiredFileNames, ownedFileNames, fileTypes);
 
-    public bool RemoveModTypesFiles(string missionPath, IReadOnlySet<string> fileNames)
+    public bool RemoveTypeFiles(string missionPath, IReadOnlySet<string> fileNames)
     {
         if (fileNames.Count == 0)
         {
@@ -204,7 +204,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
 
     /// <summary>
     /// Removes the <c>&lt;file&gt;</c> entries whose leaf name is in
-    /// <paramref name="names"/> from every ModTypes <c>ce</c> block, dropping a
+    /// <paramref name="names"/> from every type_files <c>ce</c> block, dropping a
     /// block (and its surrounding whitespace) once empty. Returns whether the
     /// document changed.
     /// </summary>
@@ -216,7 +216,7 @@ public sealed class EconomyCoreService : IEconomyCoreService
         }
 
         bool changed = false;
-        foreach (XElement ce in doc.Root.Descendants("ce").Where(IsModTypesCe).ToList())
+        foreach (XElement ce in doc.Root.Descendants("ce").Where(IsTypeFilesCe).ToList())
         {
             foreach (XElement file in ce.Elements("file")
                          .Where(f => names.Contains((string?)f.Attribute("name") ?? string.Empty))
@@ -242,23 +242,23 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return changed;
     }
 
-    private static bool IsModTypesCe(XElement ce)
+    private static bool IsTypeFilesCe(XElement ce)
     {
         string? folder = (string?)ce.Attribute("folder");
-        return !string.IsNullOrWhiteSpace(folder) && IsManagerModTypesFolder(folder);
+        return !string.IsNullOrWhiteSpace(folder) && IsManagerTypeFilesFolder(folder);
     }
 
     /// <summary>
     /// True when a <c>folder</c> value belongs to this manager: either the
-    /// configured types folder (<c>./db/ModTypes</c>) or one of the per-save
+    /// configured types folder (<c>./db/type_files</c>) or one of the per-save
     /// folders under the data directory that a loaded save points at.
     /// </summary>
-    internal static bool IsManagerModTypesFolder(string folder)
+    internal static bool IsManagerTypeFilesFolder(string folder)
     {
         string normalized = folder.Trim().Replace('\\', '/');
         return normalized.Equals(ConfiguredFolder, StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("db/ModTypes", StringComparison.OrdinalIgnoreCase)
-            || (normalized.EndsWith("/ModTypes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("db/type_files", StringComparison.OrdinalIgnoreCase)
+            || (normalized.EndsWith("/type_files", StringComparison.OrdinalIgnoreCase)
                 && normalized.Contains("DayZ-Mod-Manager-V2", StringComparison.OrdinalIgnoreCase));
     }
 

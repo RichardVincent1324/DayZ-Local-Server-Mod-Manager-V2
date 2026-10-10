@@ -22,6 +22,15 @@ public interface IServerConfigService
     /// carries the preset's dedicated ID. Returns false when the file is missing.
     /// </summary>
     bool WriteInstanceId(string serverConfigPath, int instanceId);
+
+    /// <summary>
+    /// Reads the <c>instanceId</c> from a server configuration file, returning null
+    /// when the file is missing/unreadable, the line is absent, or the value is not
+    /// a positive integer. This is the value DayZ itself uses to locate
+    /// <c>storage_&lt;instanceId&gt;</c>, so it is authoritative when a preset's
+    /// metadata is unavailable.
+    /// </summary>
+    int? TryReadInstanceId(string serverConfigPath);
 }
 
 public sealed partial class ServerConfigService : IServerConfigService
@@ -81,9 +90,35 @@ public sealed partial class ServerConfigService : IServerConfigService
         return true;
     }
 
+    public int? TryReadInstanceId(string serverConfigPath)
+    {
+        if (string.IsNullOrWhiteSpace(serverConfigPath) || !_fileSystem.FileExists(serverConfigPath))
+        {
+            return null;
+        }
+
+        string content;
+        try
+        {
+            content = _fileSystem.ReadAllText(serverConfigPath);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        Match match = InstanceIdValueRegex().Match(content);
+        return match.Success && int.TryParse(match.Groups[1].Value, out int id) && id > 0
+            ? id
+            : null;
+    }
+
     [GeneratedRegex(@"^\s*template\s*=\s*""[^""]*""", RegexOptions.Multiline)]
     private static partial Regex TemplateRegex();
 
     [GeneratedRegex(@"^\s*instanceId\s*=\s*\d+\s*;?", RegexOptions.Multiline)]
     private static partial Regex InstanceIdRegex();
+
+    [GeneratedRegex(@"^\s*instanceId\s*=\s*(\d+)\s*;?", RegexOptions.Multiline)]
+    private static partial Regex InstanceIdValueRegex();
 }

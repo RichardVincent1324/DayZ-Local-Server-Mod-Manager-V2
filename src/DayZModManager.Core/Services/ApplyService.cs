@@ -100,6 +100,7 @@ public sealed class ApplyService : IApplyService
         {
             Settings = context.Settings,
             LoadedMods = context.LoadedMods,
+            ActiveServerConfigPath = ResolveActiveServerConfigPath(context),
         });
 
         if (errors.Count > 0)
@@ -246,6 +247,29 @@ public sealed class ApplyService : IApplyService
         logs.Add($"Junctions: {created} created, {removed} removed, {skipped} skipped.");
         logs.Add("Apply complete.");
         return new ApplyResult { Success = true, Logs = logs };
+    }
+
+    /// <summary>
+    /// Resolves the absolute path of the active preset's <c>serverDZ.cfg</c> so
+    /// validation checks the configuration the server will actually load. Returns
+    /// null (the server-root config is validated instead) when no preset is active
+    /// or its config is not present yet - e.g. the very first Apply, before the
+    /// preset has been relocated from the bootstrap data directory to the path the
+    /// batch file references.
+    /// </summary>
+    private string? ResolveActiveServerConfigPath(ApplyContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.ServerConfig)
+            || string.IsNullOrWhiteSpace(context.Settings.ServerPath))
+        {
+            return null;
+        }
+
+        string path = Path.IsPathRooted(context.ServerConfig)
+            ? context.ServerConfig
+            : Path.Combine(context.Settings.ServerPath, context.ServerConfig);
+
+        return _fileSystem.FileExists(path) ? path : null;
     }
 
     /// <summary>

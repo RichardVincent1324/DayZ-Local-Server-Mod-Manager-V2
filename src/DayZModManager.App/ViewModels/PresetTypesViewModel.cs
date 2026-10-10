@@ -14,7 +14,7 @@ namespace DayZModManager.App.ViewModels;
 /// </summary>
 public sealed partial class PresetTypesViewModel : ViewModelBase
 {
-    /// <summary>Mod-name label shown for files in db\ModTypes that are not tracked by the config.</summary>
+    /// <summary>Mod-name label shown for files in type_files that are not tracked by the config.</summary>
     private const string UntrackedLabel = "(untracked)";
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
@@ -84,7 +84,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _junctions = junctions;
 
         ConfigureModCommand = new RelayCommand<string>(ConfigureMod, () => MapApplied);
-        OpenModTypesFolderCommand = new RelayCommand(OpenModTypesFolder, () => MapApplied);
+        OpenTypeFilesFolderCommand = new RelayCommand(OpenTypeFilesFolder, () => MapApplied);
         OpenMapProfilesFolderCommand = new RelayCommand(OpenMapProfilesFolder);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => MapApplied && CanRemoveSelected);
         CleanInvalidCommand = new RelayCommand(CleanInvalid, () => MapApplied);
@@ -126,9 +126,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private string PresetFolder(string mapName) =>
         PresetPaths.PresetFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
 
-    /// <summary>Preset ModTypes folder for the given map.</summary>
-    private string PresetModTypesFolder(string mapName) =>
-        PresetPaths.ModTypesFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
+    /// <summary>Preset type_files folder for the given map.</summary>
+    private string PresetTypeFilesFolder(string mapName) =>
+        PresetPaths.TypeFilesFolder(_dataDirectoryProvider.Current, mapName, _activePresetName);
 
     /// <summary>Preset saves folder for the given map.</summary>
     private string PresetSavesFolder(string mapName) =>
@@ -147,6 +147,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     /// <summary>Invoked to resolve the persisted active preset for a map. Provided by the shell.</summary>
     public Func<string, string>? ResolvePresetForMap { get; set; }
+
+    /// <summary>
+    /// Invoked after a map and its active preset have been successfully applied so
+    /// the shell can persist the selection. Provided by the shell.
+    /// </summary>
+    public Action<string, string>? PersistActiveSelection { get; set; }
 
     /// <summary>The presets available for the current map.</summary>
     public ObservableCollection<PresetItemViewModel> Presets { get; } = new();
@@ -275,8 +281,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// <summary>True when a map is applied (types operations require a map).</summary>
     private bool MapApplied => !string.IsNullOrWhiteSpace(_typesConfig.CurrentMap);
 
-    /// <summary>Tooltip for the ModTypes folder button.</summary>
-    public string OpenModTypesFolderToolTip => "Open ModTypes folder in File Explorer";
+    /// <summary>Tooltip for the type_files folder button.</summary>
+    public string OpenTypeFilesFolderToolTip => "Open type_files folder in File Explorer";
 
     /// <summary>Tooltip for the always-available preset profiles folder button.</summary>
     public string MapProfilesFolderToolTip => "Open the preset profiles folder in File Explorer";
@@ -299,7 +305,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     public RelayCommand<string> ConfigureModCommand { get; }
 
-    public RelayCommand OpenModTypesFolderCommand { get; }
+    public RelayCommand OpenTypeFilesFolderCommand { get; }
 
     public RelayCommand OpenMapProfilesFolderCommand { get; }
 
@@ -379,7 +385,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private void NotifyCommandStates()
     {
         ConfigureModCommand.RaiseCanExecuteChanged();
-        OpenModTypesFolderCommand.RaiseCanExecuteChanged();
+        OpenTypeFilesFolderCommand.RaiseCanExecuteChanged();
         RemoveSelectedCommand.RaiseCanExecuteChanged();
         CleanInvalidCommand.RaiseCanExecuteChanged();
         RenameSaveCommand.RaiseCanExecuteChanged();

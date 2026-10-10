@@ -61,8 +61,8 @@ public partial class PresetTypesViewModelTests
     private static string PresetFolder(string mapName) =>
         Path.Combine(@"D:\data", "Presets", mapName, "__default_preset__");
 
-    private static string PresetModTypesFolder(string mapName) =>
-        Path.Combine(PresetFolder(mapName), "ModTypes");
+    private static string PresetTypeFilesFolder(string mapName) =>
+        Path.Combine(PresetFolder(mapName), "type_files");
 
     private static string PresetProfilesFolder(string mapName) =>
         Path.Combine(PresetFolder(mapName), "profiles");
@@ -123,8 +123,8 @@ public partial class PresetTypesViewModelTests
     private static TypesConfig AppliedConfig() =>
         new() { CurrentMap = MapName, Maps = { [MapName] = new MapTypesConfig() } };
 
-    private static string ModTypesFolderPath() =>
-        PresetModTypesFolder(MapName);
+    private static string TypeFilesFolderPath() =>
+        PresetTypeFilesFolder(MapName);
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 3000)
     {
@@ -278,7 +278,9 @@ public partial class PresetTypesViewModelTests
     {
         public bool SaveCalled { get; private set; }
 
-        public ConfigLoadResult<TypesConfig> Load(string dataDirectory) => ConfigLoadResult<TypesConfig>.Missing();
+        public ConfigLoadResult<TypesConfig> LoadResult { get; set; } = ConfigLoadResult<TypesConfig>.Missing();
+
+        public ConfigLoadResult<TypesConfig> Load(string dataDirectory) => LoadResult;
 
         public void Save(string dataDirectory, TypesConfig config) => SaveCalled = true;
     }
@@ -288,6 +290,8 @@ public partial class PresetTypesViewModelTests
         public bool UpdateTemplate(string serverPath, string missionFolderName) => true;
 
         public bool WriteInstanceId(string serverConfigPath, int instanceId) => true;
+
+        public int? TryReadInstanceId(string serverConfigPath) => null;
     }
 
     private sealed class FakeProcessLauncher : IProcessLauncher
@@ -459,7 +463,7 @@ public partial class PresetTypesViewModelTests
 
         public int ReadInstanceId(string dataDirectory, string mapName, string presetName) => 1;
 
-        public int AllocateInstanceId(string dataDirectory) => 1;
+        public int AllocateInstanceId(string dataDirectory, string serverPath, string mapName) => 1;
 
         public PresetResult EnsureDefaultPreset(string serverPath, string dataDirectory, string mapName)
         {

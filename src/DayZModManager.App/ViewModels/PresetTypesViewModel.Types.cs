@@ -12,7 +12,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 {
     /// <summary>Where the current types operation writes files and economy references.</summary>
     private TypesTarget ActiveTypesTarget(string missionPath) =>
-        new(missionPath, PresetModTypesFolder(_typesConfig.CurrentMap), ActiveCeFolderValue(missionPath));
+        new(missionPath, PresetTypeFilesFolder(_typesConfig.CurrentMap), ActiveCeFolderValue(missionPath));
 
     /// <summary>
     /// Warning shown before a types edit when the preset already holds world data:
@@ -99,9 +99,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Regenerates the manager-owned ModTypes block in cfgeconomycore.xml for the
+    /// Regenerates the manager-owned type_files block in cfgeconomycore.xml for the
     /// applied map. The block points at whichever types are active: the configured
-    /// <c>db\ModTypes</c>, or the loaded save's own ModTypes folder.
+    /// <c>type_files</c>, or the loaded save's own type_files folder.
     /// </summary>
     public bool SyncEconomyCore(IReadOnlySet<string>? previouslyOwned = null)
     {
@@ -140,12 +140,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return null;
         }
 
-        return PresetModTypesFolder(_typesConfig.CurrentMap);
+        return PresetTypeFilesFolder(_typesConfig.CurrentMap);
     }
 
     /// <summary>
     /// The <c>folder</c> value for the manager-owned cfgeconomycore.xml block: the
-    /// active preset's ModTypes folder relative to the mission (forward slashes).
+    /// active preset's type_files folder relative to the mission (forward slashes).
     /// </summary>
     private string ActiveCeFolderValue(string missionPath)
     {
@@ -224,7 +224,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
 
             // Reconfiguring a mod that is already configured overwrites its files
-            // in db/ModTypes; never do that silently, even when the same file is
+            // in type_files; never do that silently, even when the same file is
             // selected again. When the preset already holds world data, the save
             // warning is stacked on top of the overwrite warning in one dialog.
             string? overwriteWarning = null;
@@ -242,7 +242,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                         ? configured.SourceRelative
                         : configured.GeneratedLeaf)
                     .ToList();
-                overwriteWarning = $"Mod {modName} already has configured type file(s). Reconfiguring will overwrite its current configuration in db/ModTypes with the newly selected file(s).";
+                overwriteWarning = $"Mod {modName} already has configured type file(s). Reconfiguring will overwrite its current configuration in type_files with the newly selected file(s).";
                 if (removed.Count > 0)
                 {
                     string list = string.Join("\n", removed.Select(name => "  \u2022 " + name));
@@ -317,10 +317,10 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             var untrackedLeaves = new HashSet<string>(
                 rows.Where(r => r.IsUntracked).Select(r => r.FileName), StringComparer.Ordinal);
 
-            string confirm = $"Delete the selected {rows.Count} type file(s) from db/ModTypes?";
+            string confirm = $"Delete the selected {rows.Count} type file(s) from type_files?";
             if (untrackedLeaves.Count > 0)
             {
-                confirm += $"\n\n{untrackedLeaves.Count} of them are untracked (present in db/ModTypes but not managed by this app). Removing them also deletes their entries from cfgeconomycore.xml.";
+                confirm += $"\n\n{untrackedLeaves.Count} of them are untracked (present in type_files but not managed by this app). Removing them also deletes their entries from cfgeconomycore.xml.";
             }
 
             confirm += "\n\nThis permanently removes the file(s) from the mission folder.";
@@ -434,7 +434,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             if (invalidMods.Count > 0)
             {
                 string list = string.Join("\n", invalidMods.Select(name => "  \u2022 " + name));
-                string message = $"The following mod(s) are no longer active (not loaded or missing from the workshop) and their generated type file(s) will be DELETED from db/ModTypes:\n\n{list}";
+                string message = $"The following mod(s) are no longer active (not loaded or missing from the workshop) and their generated type file(s) will be DELETED from type_files:\n\n{list}";
                 string? saveWarning = SaveWarning();
                 if (saveWarning is not null)
                 {
@@ -548,7 +548,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     /// <summary>
     /// Appends rows for XML files that physically exist in the mission's
-    /// <c>db\ModTypes</c> folder but are not tracked by the types configuration,
+    /// <c>type_files</c> folder but are not tracked by the types configuration,
     /// so orphaned files cannot silently linger. File system failures are ignored
     /// so they never break the grid.
     /// </summary>
@@ -585,19 +585,19 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Opens the active preset's <c>ModTypes</c> folder in File Explorer. The
+    /// Opens the active preset's <c>type_files</c> folder in File Explorer. The
     /// folder is created when missing; failures are logged, never thrown.
     /// </summary>
-    private void OpenModTypesFolder()
+    private void OpenTypeFilesFolder()
     {
-        string folder = PresetModTypesFolder(_typesConfig.CurrentMap);
+        string folder = PresetTypeFilesFolder(_typesConfig.CurrentMap);
         try
         {
             _fileSystem.CreateDirectory(folder);
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to open the ModTypes folder: {ex.Message}");
+            _log.Error($"Failed to open the type_files folder: {ex.Message}");
             return;
         }
 
@@ -607,7 +607,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            _log.Error($"Failed to open the ModTypes folder: {ex.Message}");
+            _log.Error($"Failed to open the type_files folder: {ex.Message}");
         }
     }
 }

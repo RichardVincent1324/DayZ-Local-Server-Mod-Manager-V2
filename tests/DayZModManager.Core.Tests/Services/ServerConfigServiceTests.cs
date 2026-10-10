@@ -108,4 +108,32 @@ public class ServerConfigServiceTests
 
         Assert.False(service.WriteInstanceId(ConfigPath, 1));
     }
+
+    [Fact]
+    public void TryReadInstanceId_ReturnsValue()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(ConfigPath, "instanceId=7;\nhostname=\"x\";");
+        var service = new ServerConfigService(fs);
+
+        Assert.Equal(7, service.TryReadInstanceId(ConfigPath));
+    }
+
+    [Fact]
+    public void TryReadInstanceId_ReturnsNull_WhenLineMissing()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(ConfigPath, "hostname=\"x\";");
+        var service = new ServerConfigService(fs);
+
+        Assert.Null(service.TryReadInstanceId(ConfigPath));
+    }
+
+    [Fact]
+    public void TryReadInstanceId_ReturnsNull_WhenFileMissing()
+    {
+        var service = new ServerConfigService(new FakeFileSystem());
+
+        Assert.Null(service.TryReadInstanceId(ConfigPath));
+    }
 }

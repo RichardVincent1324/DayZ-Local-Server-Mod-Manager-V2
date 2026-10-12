@@ -68,15 +68,85 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void EnsureDefaultPreset_WorksWithoutServerConfig()
+    public void EnsureDefaultPreset_MissingServerConfig_ReportsFailureWithoutCopying()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
+
+        fs.DeleteFile(ConfigPath(PresetPaths.DefaultPresetName));
+        Assert.False(service.PresetExists(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        PresetResult result = service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        Assert.False(result.Success);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        // The config is never re-seeded from the server root; the user restores it.
+        Assert.False(fs.FileExists(ConfigPath(PresetPaths.DefaultPresetName)));
+        Assert.False(service.PresetExists(DataDirectory, Map, PresetPaths.DefaultPresetName));
+    }
+
+    [Fact]
+    public void EnsureDefaultPreset_RepairsMissingMeta_PreservingInstanceId()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        int instanceId = service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName);
+
+        fs.DeleteFile(MetaPath(PresetPaths.DefaultPresetName));
+        Assert.False(service.PresetExists(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        PresetResult result = service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        Assert.True(result.Success);
+        Assert.True(fs.FileExists(MetaPath(PresetPaths.DefaultPresetName)));
+        Assert.Equal(instanceId, service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName));
+        Assert.True(service.PresetExists(DataDirectory, Map, PresetPaths.DefaultPresetName));
+    }
+
+    [Fact]
+    public void DescribeIncompletePreset_NamesTheMissingPart()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        Assert.Null(service.DescribeIncompletePreset(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        fs.DeleteFile(ConfigPath(PresetPaths.DefaultPresetName));
+        Assert.Contains("serverDZ.cfg", service.DescribeIncompletePreset(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        fs.DeleteFile(MetaPath(PresetPaths.DefaultPresetName));
+        Assert.Contains("preset-meta.json", service.DescribeIncompletePreset(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        Assert.Contains("preset folder", service.DescribeIncompletePreset(DataDirectory, Map, "Missing"));
+    }
+
+    [Fact]
+    public void EnsureDefaultPreset_FailsWithoutServerConfig()
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
 
         PresetResult result = service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
 
-        Assert.True(result.Success);
-        Assert.Contains($"template=\"{Map}\"", fs.TryGetFileContents(ConfigPath(PresetPaths.DefaultPresetName))!);
-        Assert.Contains("instanceId=1;", fs.TryGetFileContents(ConfigPath(PresetPaths.DefaultPresetName))!);
+        Assert.False(result.Success);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        // Nothing is fabricated: no preset folder or stub config is left behind.
+        Assert.False(fs.DirectoryExists(PresetFolder(PresetPaths.DefaultPresetName)));
+        Assert.Null(fs.TryGetFileContents(ConfigPath(PresetPaths.DefaultPresetName)));
+    }
+
+    [Fact]
+    public void CreatePreset_FailsWithoutAnyServerConfig()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+
+        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+
+        Assert.False(result.Success);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        Assert.False(fs.DirectoryExists(PresetFolder("Hardcore")));
     }
 
     [Fact]
@@ -191,11 +261,29 @@ public class PresetServiceTests
     [InlineData("   ")]
     [InlineData("bad/name")]
     [InlineData("bad\\name")]
+    [InlineData("bad name")]
+    [InlineData("bad(name)")]
+    [InlineData("bad&name")]
+    [InlineData("name!")]
+    [InlineData("@name")]
     public void CreatePreset_RejectsInvalidName(string name)
     {
         (PresetService service, _) = CreateService();
 
         Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, name, false).Success);
+    }
+
+    [Theory]
+    [InlineData("Hardcore", true)]
+    [InlineData("PvP-1", true)]
+    [InlineData("a_b+c.d", true)]
+    [InlineData("a b", false)]
+    [InlineData("a(b)", false)]
+    [InlineData("a&b", false)]
+    [InlineData("", false)]
+    public void IsValidPresetName_EnforcesWhitelist(string name, bool expected)
+    {
+        Assert.Equal(expected, PresetService.IsValidPresetName(name));
     }
 
     [Fact]
@@ -284,6 +372,35 @@ public class PresetServiceTests
     }
 
     [Fact]
+    public void PresetExists_RequiresFolderMetadataAndServerConfig()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+
+        // A tool-created preset is usable.
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        Assert.True(service.PresetExists(DataDirectory, Map, PresetPaths.DefaultPresetName));
+
+        // A bare folder is not a preset.
+        fs.AddDirectory(PresetFolder("Bare"));
+        Assert.False(service.PresetExists(DataDirectory, Map, "Bare"));
+
+        // Metadata alone is not enough.
+        fs.AddDirectory(PresetFolder("MetaOnly"));
+        fs.AddFile(MetaPath("MetaOnly"), "{}");
+        Assert.False(service.PresetExists(DataDirectory, Map, "MetaOnly"));
+
+        // Server config alone is not enough.
+        fs.AddDirectory(PresetFolder("ConfigOnly"));
+        fs.AddFile(ConfigPath("ConfigOnly"), $"template=\"{Map}\";\ninstanceId=9;\n");
+        Assert.False(service.PresetExists(DataDirectory, Map, "ConfigOnly"));
+
+        // Folder + metadata + config is usable.
+        fs.AddFile(MetaPath("ConfigOnly"), "{}");
+        Assert.True(service.PresetExists(DataDirectory, Map, "ConfigOnly"));
+    }
+
+    [Fact]
     public void DuplicatePreset_CopiesConfigAndTypeFiles_WithNewInstanceId()
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
@@ -296,7 +413,7 @@ public class PresetServiceTests
         fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"currentMap\":\"x\"}");
 
         PresetResult result = service.DuplicatePreset(
-            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Copy", copyProfiles: false);
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
 
         Assert.True(result.Success);
         Assert.Equal(2, service.ReadInstanceId(DataDirectory, Map, "Copy"));
@@ -317,8 +434,8 @@ public class PresetServiceTests
         string sourceProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceProfiles, "player.db"), "data");
 
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "WithProfiles", copyProfiles: true);
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "WithoutProfiles", copyProfiles: false);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "WithProfiles", copyProfiles: true);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "WithoutProfiles", copyProfiles: false);
 
         Assert.True(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithProfiles"), "player.db")));
         Assert.False(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithoutProfiles"), "player.db")));
@@ -333,7 +450,7 @@ public class PresetServiceTests
         string sourceSaves = PresetPaths.SavesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceSaves, "Alpha", "save-meta.json"), "{}");
 
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Copy", copyProfiles: false);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
 
         string targetSaves = PresetPaths.SavesFolder(DataDirectory, Map, "Copy");
         Assert.True(fs.DirectoryExists(targetSaves));
@@ -348,9 +465,77 @@ public class PresetServiceTests
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
         service.CreatePreset(ServerPath, DataDirectory, Map, "Existing", false);
 
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "", false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, PresetPaths.DefaultPresetName, false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, "Missing", "Copy", false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, "Existing", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, PresetPaths.DefaultPresetName, false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, "Missing", Map, "Copy", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Existing", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy Name", false).Success);
+    }
+
+    [Fact]
+    public void DuplicatePreset_FailsWithoutAnyServerConfig()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        // Remove both the default preset's config and the server-root config.
+        fs.DeleteFile(ConfigPath(PresetPaths.DefaultPresetName));
+        fs.DeleteFile(RootConfig);
+
+        PresetResult result = service.DuplicatePreset(
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
+
+        Assert.False(result.Success);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        Assert.False(fs.DirectoryExists(PresetFolder("Copy")));
+    }
+
+    [Fact]
+    public void DuplicatePreset_ToAnotherMap_RewritesMapScopedSettings()
+    {
+        const string otherMap = "dayzOffline.sakhal";
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // map A default, id 1
+
+        // Source preset content that is map-scoped and must be adapted.
+        fs.AddFile(ConfigPath(PresetPaths.DefaultPresetName), $"template=\"{Map}\";\ninstanceId=1;\n");
+        fs.AddFile(
+            PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName),
+            "{\"currentMap\":\"" + Map + "\",\"maps\":{\"" + Map + "\":{\"mods\":[]}}}");
+        fs.AddFile(
+            Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName), "CF_types.xml"),
+            "<types/>");
+        fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
+
+        PresetResult result = service.DuplicatePreset(
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, otherMap, "Copy", copyProfiles: false);
+
+        Assert.True(result.Success);
+
+        // Created under the destination map with a fresh instance ID.
+        string targetFolder = PresetPaths.PresetFolder(DataDirectory, otherMap, "Copy");
+        Assert.True(fs.DirectoryExists(targetFolder));
+        int instanceId = service.ReadInstanceId(DataDirectory, otherMap, "Copy");
+        Assert.True(instanceId > 0);
+        Assert.NotEqual(1, instanceId);
+
+        // serverDZ.cfg template points at the destination map and uses the new ID.
+        string cfg = fs.TryGetFileContents(PresetPaths.ServerConfigPath(DataDirectory, otherMap, "Copy"))!;
+        Assert.Contains($"template=\"{otherMap}\"", cfg);
+        Assert.Contains($"instanceId={instanceId};", cfg);
+
+        // Types config is rewritten to the destination map key/CurrentMap.
+        string types = fs.TryGetFileContents(PresetPaths.TypesConfigPath(DataDirectory, otherMap, "Copy"))!;
+        Assert.Contains($"\"currentMap\": \"{otherMap}\"", types);
+        Assert.Contains($"\"{otherMap}\"", types);
+        Assert.DoesNotContain($"\"{Map}\"", types);
+
+        // Map-agnostic content is copied; saves never are.
+        Assert.True(fs.FileExists(
+            Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, otherMap, "Copy"), "CF_types.xml")));
+        Assert.True(fs.FileExists(PresetPaths.ModOrderPath(DataDirectory, otherMap, "Copy")));
+        Assert.Empty(fs.GetDirectories(PresetPaths.SavesFolder(DataDirectory, otherMap, "Copy")));
     }
 }

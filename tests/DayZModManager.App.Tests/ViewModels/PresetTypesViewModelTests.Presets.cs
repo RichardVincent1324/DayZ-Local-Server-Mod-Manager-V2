@@ -53,6 +53,34 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public async Task SelectingPreset_FailedActivation_RevertsSelection()
+    {
+        var config = AppliedConfig();
+        var presets = new FakePresetService();
+        presets.PresetNames.Add("Hardcore");
+        PresetTypesViewModel vm = Create(config, presetService: presets);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.Equal(PresetPaths.DefaultPresetName, vm.ActivePresetName);
+
+        // Mimic the real activation, which moves the active preset before the apply
+        // and then fails (e.g. validation). The selection must revert.
+        vm.ActivatePreset = (_, preset) =>
+        {
+            vm.ActivePresetName = preset;
+            return Task.FromResult(false);
+        };
+
+        vm.SelectedPreset = vm.Presets.First(p => p.Name == "Hardcore");
+        await WaitUntilAsync(() =>
+            string.Equals(vm.ActivePresetName, PresetPaths.DefaultPresetName, StringComparison.Ordinal)
+            && string.Equals(vm.SelectedPreset?.Name, PresetPaths.DefaultPresetName, StringComparison.Ordinal));
+
+        Assert.Equal(PresetPaths.DefaultPresetName, vm.ActivePresetName);
+        Assert.Equal(PresetPaths.DefaultPresetName, vm.SelectedPreset!.Name);
+    }
+
+    [Fact]
     public async Task AddPreset_CreatesWithCopyProfiles_AndActivates()
     {
         var config = AppliedConfig();
@@ -82,7 +110,7 @@ public partial class PresetTypesViewModelTests
     {
         var config = AppliedConfig();
         var presets = new FakePresetService();
-        var dialogs = new FakeDialogs { AskDuplicatePresetResult = new DuplicatePresetRequest("HardcoreCopy", true) };
+        var dialogs = new FakeDialogs { AskDuplicatePresetResult = new DuplicatePresetRequest("HardcoreCopy", true, MapName) };
         PresetTypesViewModel vm = Create(config, presetService: presets, dialogs: dialogs);
         vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
 
@@ -100,8 +128,41 @@ public partial class PresetTypesViewModelTests
         vm.DuplicatePresetCommand.Execute(null);
         await WaitUntilAsync(() => activated is not null);
 
-        Assert.Contains((PresetPaths.DefaultPresetName, "HardcoreCopy", true), presets.Duplicated);
+        Assert.Contains((MapName, PresetPaths.DefaultPresetName, MapName, "HardcoreCopy", true), presets.Duplicated);
         Assert.Contains(vm.Presets, p => p.Name == "HardcoreCopy");
+        Assert.Equal("HardcoreCopy", activated);
+    }
+
+    [Fact]
+    public async Task DuplicatePreset_ToOtherMap_SwitchesMapAndActivatesCopy()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = AppliedConfig();
+        var presets = new FakePresetService();
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+        var dialogs = new FakeDialogs
+        {
+            AskDuplicatePresetResult = new DuplicatePresetRequest("HardcoreCopy", false, secondMap),
+        };
+        PresetTypesViewModel vm = Create(
+            config, mapService: mapService, presetService: presets, dialogs: dialogs);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        string? activated = null;
+        vm.ActivatePreset = (_, preset) =>
+        {
+            activated = preset;
+            vm.ActivePresetName = preset;
+            return Task.FromResult(true);
+        };
+
+        vm.DuplicatePresetCommand.Execute(null);
+        await WaitUntilAsync(() => activated is not null);
+
+        Assert.Contains((MapName, PresetPaths.DefaultPresetName, secondMap, "HardcoreCopy", false), presets.Duplicated);
+        Assert.Equal(secondMap, config.CurrentMap);
         Assert.Equal("HardcoreCopy", activated);
     }
 

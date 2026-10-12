@@ -444,7 +444,7 @@ public partial class PresetTypesViewModelTests
 
         public List<(string Name, bool CopyProfiles)> Created { get; } = new();
 
-        public List<(string Source, string NewName, bool CopyProfiles)> Duplicated { get; } = new();
+        public List<(string SourceMap, string Source, string TargetMap, string NewName, bool CopyProfiles)> Duplicated { get; } = new();
 
         public List<(string OldName, string NewName)> Renamed { get; } = new();
 
@@ -457,6 +457,11 @@ public partial class PresetTypesViewModelTests
 
         public bool PresetExists(string dataDirectory, string mapName, string presetName) =>
             PresetNames.Any(n => string.Equals(n, presetName, StringComparison.Ordinal));
+
+        public string? DescribeIncompletePreset(string dataDirectory, string mapName, string presetName) =>
+            PresetExists(dataDirectory, mapName, presetName)
+                ? null
+                : $"serverDZ.cfg is missing for {presetName}";
 
         public IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName) =>
             PresetNames.ToList();
@@ -489,8 +494,9 @@ public partial class PresetTypesViewModelTests
         }
 
         public PresetResult DuplicatePreset(
-            string serverPath, string dataDirectory, string mapName,
-            string sourcePresetName, string newPresetName, bool copyProfiles)
+            string serverPath, string dataDirectory,
+            string sourceMapName, string sourcePresetName,
+            string targetMapName, string newPresetName, bool copyProfiles)
         {
             if (PresetNames.Any(n => string.Equals(n, newPresetName, StringComparison.OrdinalIgnoreCase)))
             {
@@ -498,7 +504,7 @@ public partial class PresetTypesViewModelTests
             }
 
             PresetNames.Add(newPresetName);
-            Duplicated.Add((sourcePresetName, newPresetName, copyProfiles));
+            Duplicated.Add((sourceMapName, sourcePresetName, targetMapName, newPresetName, copyProfiles));
             return new() { Success = true, Message = $"Duplicated \"{sourcePresetName}\" to \"{newPresetName}\"." };
         }
 
@@ -694,7 +700,17 @@ public partial class PresetTypesViewModelTests
 
         public DuplicatePresetRequest? AskDuplicatePresetResult { get; set; }
 
-        public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName) => AskDuplicatePresetResult;
+        public IReadOnlyList<string>? AskDuplicatePresetMaps { get; private set; }
+
+        public string? AskDuplicatePresetDefaultMap { get; private set; }
+
+        public DuplicatePresetRequest? AskDuplicatePreset(
+            string sourcePresetName, IReadOnlyList<string> maps, string defaultMap)
+        {
+            AskDuplicatePresetMaps = maps;
+            AskDuplicatePresetDefaultMap = defaultMap;
+            return AskDuplicatePresetResult;
+        }
     }
 }
 

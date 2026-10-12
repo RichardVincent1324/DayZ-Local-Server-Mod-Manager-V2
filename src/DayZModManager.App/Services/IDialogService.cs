@@ -10,7 +10,8 @@ public sealed record AddPresetRequest(string Name, bool CopyProfilesFromDefault)
 /// <summary>Input gathered by the Duplicate Preset dialog.</summary>
 /// <param name="Name">The new (duplicated) preset's name.</param>
 /// <param name="CopyProfiles">True to also copy the current preset's profiles data.</param>
-public sealed record DuplicatePresetRequest(string Name, bool CopyProfiles);
+/// <param name="DestinationMap">The map the copy is created under.</param>
+public sealed record DuplicatePresetRequest(string Name, bool CopyProfiles, string DestinationMap);
 
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
 public interface IDialogService
@@ -69,9 +70,10 @@ public interface IDialogService
     AddPresetRequest? AskAddPreset(string mapName);
 
     /// <summary>
-    /// Opens the Duplicate Preset dialog for an existing preset. Returns the
-    /// requested name and whether to copy the current preset's profiles, or null
-    /// when cancelled.
+    /// Opens the Duplicate Preset dialog for an existing preset. <paramref name="maps"/>
+    /// is the same map collection as the Current Map ComboBox; <paramref name="defaultMap"/>
+    /// is preselected. Returns the requested name, whether to copy the current preset's
+    /// profiles, and the destination map, or null when cancelled.
     /// </summary>
-    DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName);
+    DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName, IReadOnlyList<string> maps, string defaultMap);
 }

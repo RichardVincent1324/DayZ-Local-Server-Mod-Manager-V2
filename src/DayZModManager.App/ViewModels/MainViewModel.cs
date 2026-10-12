@@ -27,6 +27,7 @@ public sealed class MainViewModel : ViewModelBase
 
     private Settings _settings = new();
     private bool _isDirty;
+	private bool _startupFellBackToDefaultPreset;
     private string _statusText = "Configuration applied";
     private Task<bool>? _pendingApply;
 
@@ -89,6 +90,34 @@ public sealed class MainViewModel : ViewModelBase
         // Preset-scoped configuration: mod order and types live in the active
         // preset's folder. Until a map is applied there is no active preset.
         string activePreset = ResolveActivePreset(_settings, _settings.ActiveMap);
+		
+		// A persisted active preset may point at a folder that is missing or
+		// incomplete (for example, a folder created by hand, or one whose config was
+		// removed). Fall back to the map's default preset so the session loads a
+		// usable environment; ApplyMapCore then persists the corrected selection.
+		if (!string.IsNullOrWhiteSpace(_settings.ActiveMap)
+			&& !_presetService.PresetExists(_dataDirectoryProvider.Current, _settings.ActiveMap, activePreset))
+		{
+			string? problem = _presetService.DescribeIncompletePreset(
+				_dataDirectoryProvider.Current, _settings.ActiveMap, activePreset);
+		
+			if (PresetPaths.IsDefaultPreset(activePreset))
+			{
+				// The default preset cannot fall back any further; surface the exact
+				// problem so the user can restore it themselves.
+				Log.Warning(
+					$"The default preset for {_settings.ActiveMap} is incomplete: {problem}. " +
+					"restore it by deleting the __default_preset__ folder, and the program will generate a new one.");
+			}
+			else
+			{
+				Log.Warning($"Previously active preset \"{activePreset}\" for {_settings.ActiveMap} was not found or is incomplete. Switching to the default preset.");
+				activePreset = PresetPaths.DefaultPresetName;
+				_startupFellBackToDefaultPreset = true;
+			}
+		}
+
+
         string? presetFolder = string.IsNullOrWhiteSpace(_settings.ActiveMap)
             ? null
             : PresetPaths.PresetFolder(_dataDirectoryProvider.Current, _settings.ActiveMap, activePreset);
@@ -149,7 +178,8 @@ public sealed class MainViewModel : ViewModelBase
                 UpdateDirty();
             }
         };
-
+		
+		
         // --- Initial setup ---
         Settings.Load(_settings);
         Mods.Initialize();
@@ -187,6 +217,12 @@ public sealed class MainViewModel : ViewModelBase
             PresetTypes.ReconcileAppliedMap();
             Mods.MarkApplied();
             UpdateDirty();
+			
+			    if (_startupFellBackToDefaultPreset)
+				{
+					await ApplyStartupFallbackAsync();
+				}
+
             await CleanupOldLogsIfEnabledAsync(_settings);
         }
         catch (Exception ex)
@@ -297,9 +333,27 @@ public sealed class MainViewModel : ViewModelBase
         if (!PresetPaths.IsDefaultPreset(presetName)
             && !_presetService.PresetExists(dataDirectory, mapName, presetName))
         {
-            Log.Error($"Preset \"{presetName}\" does not exist for {mapName}.");
+            Log.Error($"Preset \"{presetName}\" does not exist or is incomplete for {mapName}.");
             return false;
         }
+
+        // Let any in-flight apply finish so this activation's own apply is not
+        // silently merged with it (ApplyAsync de-duplicates concurrent calls, which
+        // would otherwise leave this preset's mod order unwritten).
+        if (_pendingApply is not null)
+        {
+            await _pendingApply;
+        }
+
+        // Snapshot the current selection and preset-scoped state so a failed apply
+        // can restore them. Activating a preset mutates the active selection before
+        // the apply (the apply reads it to know what to write), so without a rollback
+        // a failure would leave the tool pointing at a preset it never applied.
+        string previousPreset = PresetTypes.ActivePresetName;
+        Settings previousSettings = _settings;
+        IReadOnlyList<string> previousMods = ModState.LoadedMods.ToList();
+        var previousMaps = new Dictionary<string, MapTypesConfig>(TypesConfig.Maps, StringComparer.OrdinalIgnoreCase);
+        string previousCurrentMap = TypesConfig.CurrentMap;
 
         ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(presetFolder);
         IReadOnlyList<string> mods = order.Status == ConfigLoadStatus.Success
@@ -324,11 +378,50 @@ public sealed class MainViewModel : ViewModelBase
         bool applied = await ApplyAsync();
         if (!applied)
         {
-            Log.Error($"Failed to apply preset \"{presetName}\".");
+            _settings = previousSettings;
+            Mods.ReplaceLoadedMods(previousMods);
+            TypesConfig.Maps = previousMaps;
+            TypesConfig.CurrentMap = previousCurrentMap;
+            PresetTypes.ActivePresetName = previousPreset;
+            Log.Error($"Failed to apply preset \"{presetName}\"; restored the previous preset.");
         }
 
         return applied;
     }
+	
+	/// <summary>
+	/// Repairs a startup fallback. When the previously active preset was missing or
+	/// incomplete, the in-memory selection was moved to the default preset, but the
+	/// launch batch and cfgeconomycore still referenced the old preset, so Start
+	/// Server would launch an environment whose config no longer exists. Switch to
+	/// the default preset through the normal activation path (the same path a manual
+	/// preset switch uses) so the batch, economy and persisted selection are all
+	/// corrected before the server can be launched.
+	/// </summary>
+	private async Task ApplyStartupFallbackAsync()
+	{
+		string mapName = _settings.ActiveMap;
+		if (string.IsNullOrWhiteSpace(mapName))
+		{
+			return;
+		}
+	
+		// Without a server path and launch batch file an Apply cannot run; the
+		// in-memory fallback remains, so tell the user how to complete it.
+		if (!Settings.CanApply)
+		{
+			Log.Warning(
+				"The default preset was selected because the previous preset is unavailable, " +
+				"but it could not be applied: set the server path and launch batch file, then select a preset.");
+			return;
+		}
+	
+		if (await ActivatePresetAsync(mapName, PresetPaths.DefaultPresetName))
+		{
+			PersistActiveSelection(mapName, PresetPaths.DefaultPresetName);
+			Log.Success($"Default preset applied for {mapName}.");
+		}
+	}
 
     private Settings LoadOrCreateSettings()
     {
@@ -430,6 +523,34 @@ public sealed class MainViewModel : ViewModelBase
             string? modListKey = null;
             if (!string.IsNullOrWhiteSpace(mapName))
             {
+                // Validate the active preset before applying. A preset missing its
+                // serverDZ.cfg would otherwise pass validation (which falls back to
+                // the server-root config) and leave the server pointed at a config
+                // that does not exist. The tool-managed default preset is healed
+                // from the server root; any other incomplete preset aborts.
+                string presetDataDirectory = _dataDirectoryProvider.Current;
+                if (!_presetService.PresetExists(presetDataDirectory, mapName, activePreset))
+                {
+                    if (PresetPaths.IsDefaultPreset(activePreset))
+                    {
+                        PresetResult healed = _presetService.EnsureDefaultPreset(
+                            newSettings.ServerPath, presetDataDirectory, mapName);
+                        if (!healed.Success)
+                        {
+                            Log.Error(healed.Message);
+                            return false;
+                        }
+                    }
+
+                    if (!_presetService.PresetExists(presetDataDirectory, mapName, activePreset))
+                    {
+                        Log.Error(
+                            $"The active preset \"{activePreset}\" for {mapName} is incomplete (its serverDZ.cfg is missing); " +
+							"the map was not applied. Restore it or select another preset.");
+                        return false;
+                    }
+                }
+
                 presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, activePreset);
                 serverProfile = PresetPaths.RelativeToServer(
                     newSettings.ServerPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, activePreset));

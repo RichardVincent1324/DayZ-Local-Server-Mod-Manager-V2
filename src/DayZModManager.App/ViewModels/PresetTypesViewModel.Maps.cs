@@ -142,7 +142,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        if (_isSwitching || _typesBusy)
+        if (_isSwitching || _typesBusy || _isSwitchingPreset)
         {
             // A switch or a types operation is in flight; queue the latest
             // selection so it is applied once the current operation finishes.
@@ -158,6 +158,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _isSwitching = true;
         _typesBusy = true;
         NotifyBusyChanged();
+
+        // Defer past the Current Map ComboBox's selection event. A synchronous
+        // reverting write to SelectedMap is ignored by WPF while the ComboBox is
+        // still processing the change, leaving the dropdown stuck on a map whose
+        // switch failed.
+        await Task.Yield();
+
         try
         {
             string? missionPath = ResolveMapPathForName(mapName);
@@ -179,6 +186,17 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 // Refused (server running) or the server files could not be
                 // updated; keep the dropdown on the actually-applied map.
+                SetRestoringSelection(_typesConfig.CurrentMap);
+                return;
+            }
+
+            // A successful map switch selects that map's active preset, so load its
+            // mod order/types and apply its environment. Without this the in-memory
+            // mod list would still belong to the previous preset, and the next Apply
+            // would persist it into the wrong preset's mod_order.json.
+            if (ActivatePreset is not null && !await ActivatePreset(mapName, _activePresetName))
+            {
+                _log.Error($"Map switched to {mapName}, but its preset environment could not be applied.");
                 SetRestoringSelection(_typesConfig.CurrentMap);
                 return;
             }
@@ -232,7 +250,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// </summary>
     private void DrainPendingMapSwitch()
     {
-        if (_typesBusy || _isSwitching)
+        if (_typesBusy || _isSwitching || _isSwitchingPreset)
         {
             return;
         }
@@ -309,7 +327,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         if (!_serverConfig.UpdateTemplate(presetConfig, mapName))
         {
-            _log.Error("Failed to update the preset server template (serverDZ.cfg); the map was not switched.");
+            _log.Error($"Failed to set the mission template in {presetConfig}; the map was not switched.");
             return false;
         }
 

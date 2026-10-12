@@ -66,27 +66,42 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         string mapName = _typesConfig.CurrentMap;
-        if (string.IsNullOrWhiteSpace(mapName) || _isSwitchingPreset)
+        if (string.IsNullOrWhiteSpace(mapName) || _isSwitchingPreset || _isSwitching || _typesBusy)
         {
-            return;
-        }
-
-        if (RefuseWhileServerRunning("switching presets"))
-        {
-            SetRestoringPresetSelection(
-                Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal)));
+            // A map switch or a types operation is in flight; keep the dropdown on
+            // the actually-active preset so selection never diverges from it.
+            RestorePresetSelection();
             return;
         }
 
         _isSwitchingPreset = true;
         NotifyBusyChanged();
+
+        // Defer past the Preset ComboBox's selection event so a reverting write to
+        // SelectedPreset is honored (see SwitchMapAsync for the same WPF pitfall).
+        await Task.Yield();
+
         try
         {
+            if (RefuseWhileServerRunning("switching presets"))
+            {
+                RestorePresetSelection();
+                return;
+            }
+
+            string previousActive = _activePresetName;
             bool ok = ActivatePreset is not null && await ActivatePreset(mapName, presetName);
             if (!ok)
             {
-                SetRestoringPresetSelection(
-                    Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal)));
+                // Activation may have moved the active preset before its apply
+                // failed; restore it so the dropdown (and later refreshes) show the
+                // actually-active preset instead of the failed one.
+                if (!string.Equals(_activePresetName, previousActive, StringComparison.Ordinal))
+                {
+                    ActivePresetName = previousActive;
+                }
+
+                RestorePresetSelection();
                 return;
             }
 
@@ -103,8 +118,14 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         {
             _isSwitchingPreset = false;
             NotifyBusyChanged();
+            DrainPendingMapSwitch();
         }
     }
+
+    /// <summary>Restores the preset dropdown to the actually-active preset.</summary>
+    private void RestorePresetSelection() =>
+        SetRestoringPresetSelection(
+            Presets.FirstOrDefault(p => string.Equals(p.Name, _activePresetName, StringComparison.Ordinal)));
 
     private async void AddPreset()
     {
@@ -143,29 +164,39 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Creates a copy of the currently selected preset so the user can experiment
-    /// with mods and types without touching the original. The copy always inherits
-    /// the source's server config, mod order, types config and type_files; profiles
-    /// are copied only when the user opts in.
+    /// Creates a copy of the currently selected preset under a chosen destination
+    /// map so the user can experiment with mods and types without touching the
+    /// original. The copy always inherits the source's server config, mod order,
+    /// types config and type_files; profiles are copied only when the user opts in.
+    /// When the destination differs from the current map, the active map is switched
+    /// to the destination so the copy can be activated.
     /// </summary>
     private async void DuplicatePreset()
     {
-        string? mapName = AppliedMapOrWarn();
+        string? sourceMap = AppliedMapOrWarn();
         PresetItemViewModel? source = SelectedPreset;
-        if (mapName is null || source is null)
+        if (sourceMap is null || source is null)
         {
             return;
         }
 
-        DuplicatePresetRequest? request = _dialogs.AskDuplicatePreset(source.Name);
+        DuplicatePresetRequest? request = _dialogs.AskDuplicatePreset(
+            source.Name, MapNames.ToList(), _typesConfig.CurrentMap);
         if (request is null || string.IsNullOrWhiteSpace(request.Name))
         {
             return;
         }
 
+        string targetMap = request.DestinationMap;
+        if (string.IsNullOrWhiteSpace(targetMap) || !ContainsIgnoreCase(MapNames, targetMap))
+        {
+            _log.Error("The selected destination map is not available.");
+            return;
+        }
+
         PresetResult result = _presetService.DuplicatePreset(
-            _serverPath, _dataDirectoryProvider.Current, mapName, source.Name,
-            request.Name, request.CopyProfiles);
+            _serverPath, _dataDirectoryProvider.Current, sourceMap, source.Name,
+            targetMap, request.Name, request.CopyProfiles);
         if (!result.Success)
         {
             _log.Error(result.Message);
@@ -174,6 +205,19 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         _log.Success(result.Message);
+
+        // A cross-map copy is not in the current map's preset list; switch the active
+        // map to the destination first so the copy can be selected and activated.
+        if (!string.Equals(targetMap, sourceMap, StringComparison.Ordinal))
+        {
+            await SwitchMapAsync(targetMap);
+            if (!string.Equals(_typesConfig.CurrentMap, targetMap, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.Warning($"The copy was created for {targetMap}, but the active map could not be switched to it.");
+                return;
+            }
+        }
+
         RefreshPresets();
 
         PresetItemViewModel? created = Presets.FirstOrDefault(
@@ -210,6 +254,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         if (!result.Success)
         {
             _log.Error(result.Message);
+            _dialogs.ShowMessage(result.Message, "Rename Preset", isError: true);
             return;
         }
 

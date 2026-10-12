@@ -60,7 +60,7 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SelectingAMap_AppliesItImmediately()
+    public async Task SelectingAMap_AppliesItImmediately()
     {
         const string secondMap = "dayzOffline.deerisle";
         var config = new TypesConfig();
@@ -73,6 +73,7 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
 
         vm.SelectedMap = secondMap;
+        await WaitUntilAsync(() => string.Equals(config.CurrentMap, secondMap, StringComparison.Ordinal));
 
         Assert.Equal(secondMap, config.CurrentMap);
         Assert.Equal(secondMap, vm.SelectedMap);
@@ -80,7 +81,36 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SelectingAMap_MergesTargetPresetConfig_WithoutLeakingOtherMaps()
+    public async Task SelectingAMap_ActivatesTheMapsActivePreset()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = new TypesConfig();
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+
+        PresetTypesViewModel vm = Create(config, mapService: mapService);
+        string? activatedMap = null;
+        string? activatedPreset = null;
+        vm.ActivatePreset = (map, preset) =>
+        {
+            activatedMap = map;
+            activatedPreset = preset;
+            return Task.FromResult(true);
+        };
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = secondMap;
+        await WaitUntilAsync(() => activatedMap is not null);
+
+        // The map switch must load the target map's active preset (its mod order and
+        // types), otherwise the mod list stays owned by the previous preset.
+        Assert.Equal(secondMap, activatedMap);
+        Assert.Equal(PresetPaths.DefaultPresetName, activatedPreset);
+    }
+
+    [Fact]
+    public async Task SelectingAMap_MergesTargetPresetConfig_WithoutLeakingOtherMaps()
     {
         const string secondMap = "dayzOffline.deerisle";
         var config = new TypesConfig
@@ -104,6 +134,7 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
 
         vm.SelectedMap = secondMap;
+        await WaitUntilAsync(() => string.Equals(config.CurrentMap, secondMap, StringComparison.Ordinal));
 
         Assert.Equal(secondMap, config.CurrentMap);
         Assert.Equal("@B", config.Maps[secondMap].Mods.Single().ModName);
@@ -131,7 +162,7 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SelectingAMap_PersistsActiveSelection()
+    public async Task SelectingAMap_PersistsActiveSelection()
     {
         const string secondMap = "dayzOffline.deerisle";
         var config = new TypesConfig();
@@ -151,6 +182,7 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
 
         vm.SelectedMap = secondMap;
+        await WaitUntilAsync(() => capturedMap is not null);
 
         Assert.Equal(secondMap, capturedMap);
         Assert.Equal(PresetPaths.DefaultPresetName, capturedPreset);
@@ -180,6 +212,24 @@ public partial class PresetTypesViewModelTests
 
         Assert.Equal(MapName, config.CurrentMap);
         Assert.True(store.SaveCalled);
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_UnusablePersistedPreset_FallsBackToDefault()
+    {
+        var config = new TypesConfig();
+        var presets = new FakePresetService();
+        string? persistedPreset = null;
+
+        PresetTypesViewModel vm = Create(config, presetService: presets);
+        // The persisted active preset no longer exists / is incomplete.
+        vm.ResolvePresetForMap = _ => "Missing Preset";
+        vm.PersistActiveSelection = (_, preset) => persistedPreset = preset;
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.Equal(MapName, config.CurrentMap);
+        Assert.Equal(PresetPaths.DefaultPresetName, persistedPreset);
     }
 
     [Fact]
@@ -233,7 +283,7 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SelectingAMap_NoBatchFile_DoesNotSwitch()
+    public async Task SelectingAMap_NoBatchFile_DoesNotSwitch()
     {
         const string secondMap = "dayzOffline.deerisle";
         var config = new TypesConfig();
@@ -248,6 +298,8 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings() with { BatFileName = string.Empty }, Array.Empty<string>(), Array.Empty<string>());
 
         vm.SelectedMap = secondMap;
+        // The failed switch reverts the dropdown to the applied map.
+        await WaitUntilAsync(() => string.Equals(vm.SelectedMap, MapName, StringComparison.Ordinal));
 
         Assert.NotEqual(secondMap, config.CurrentMap);
         Assert.False(store.SaveCalled, "a map switch must be refused without a launch batch file");
@@ -269,7 +321,7 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SelectingAMap_NotDiscoverable_RevertsToAppliedMap()
+    public async Task SelectingAMap_NotDiscoverable_RevertsToAppliedMap()
     {
         const string deadMap = "dayzOffline.deerisle";
         var config = new TypesConfig
@@ -287,6 +339,7 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
 
         vm.SelectedMap = deadMap;
+        await WaitUntilAsync(() => string.Equals(vm.SelectedMap, MapName, StringComparison.Ordinal));
 
         Assert.Equal(MapName, config.CurrentMap);
         Assert.Equal(MapName, vm.SelectedMap);
@@ -370,7 +423,9 @@ public partial class PresetTypesViewModelTests
         vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
 
         vm.SelectedMap = other;
-        await WaitUntilAsync(() => dialogs.LastErrorMessage is not null);
+        // Wait for both the refusal and the dropdown revert to the applied map.
+        await WaitUntilAsync(() => dialogs.LastErrorMessage is not null
+            && string.Equals(vm.SelectedMap, MapName, StringComparison.Ordinal));
 
         Assert.Contains("server is running", dialogs.LastErrorMessage);
         // The switch was refused: the applied map, the dropdown and the persisted

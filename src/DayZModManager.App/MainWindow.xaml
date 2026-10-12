@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayZModManager.App.ViewModels"
         xmlns:beh="clr-namespace:DayZModManager.App.Behaviors"
-        Title="DayZ Mod Manager v2.0.2"
+        Title="DayZ Mod Manager v2.1.0"
         Icon="Resources/app.ico"
         Height="700" Width="1020"
         MinHeight="520" MinWidth="760"

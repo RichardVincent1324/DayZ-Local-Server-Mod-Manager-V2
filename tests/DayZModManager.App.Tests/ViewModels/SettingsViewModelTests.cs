@@ -375,7 +375,8 @@ public class SettingsViewModelTests
 
         public AddPresetRequest? AskAddPreset(string mapName) => null;
 
-        public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName) => null;
+        public DuplicatePresetRequest? AskDuplicatePreset(
+            string sourcePresetName, IReadOnlyList<string> maps, string defaultMap) => null;
     }
 
     private sealed class FakeFileSystem : IFileSystem

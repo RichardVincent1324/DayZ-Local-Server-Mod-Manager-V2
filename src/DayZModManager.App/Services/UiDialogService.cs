@@ -54,16 +54,18 @@ public sealed class UiDialogService : IDialogService
             : null;
     }
 
-    public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName)
+    public DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName, IReadOnlyList<string> maps, string defaultMap)
     {
         var window = new AddPresetWindow(
             "Duplicate Preset",
             $"Name for the copy of \"{sourcePresetName}\":",
             "Also copy profiles data from the current preset",
             checkboxDefault: false,
-            "Duplicate");
+            "Duplicate",
+            maps,
+            defaultMap);
         return window.ShowDialog() == true && window.Result is { } input
-            ? new DuplicatePresetRequest(input.Name, input.CopyProfiles)
+            ? new DuplicatePresetRequest(input.Name, input.CopyProfiles, window.SelectedDestinationMap ?? string.Empty)
             : null;
     }
 

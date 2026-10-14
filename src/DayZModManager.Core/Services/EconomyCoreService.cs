@@ -5,45 +5,58 @@ using DayZModManager.Core.Abstractions;
 
 namespace DayZModManager.Core.Services;
 
+/// <summary>Outcome of rewriting the manager-owned type_files block, plus any warnings.</summary>
+public sealed record EconomyCoreUpdateResult(
+    bool Success,
+    IReadOnlyList<string> Warnings,
+    bool UnmanagedLegacyBlockDetected = false)
+{
+    public static EconomyCoreUpdateResult Ok(params string[] warnings) => new(true, warnings);
+
+    public static EconomyCoreUpdateResult Failed() => new(false, Array.Empty<string>());
+}
+
 /// <summary>
-/// Maintains the <c>&lt;ce folder="./db/type_files"&gt;</c> block inside a map's
+/// Maintains the manager-owned <c>&lt;ce&gt;</c> block inside a map's
 /// <c>cfgeconomycore.xml</c>. Uses XML parsing (not text regexes) for robustness.
+/// <para>
+/// Ownership is declared by the <c>dzmmv2-managed-by="DayZ-Mod-Manager-V2"</c>
+/// attribute: the manager fully rewrites the children of the block carrying that
+/// marker and never touches any other <c>ce</c> block. This survives tool
+/// reinstalls (the marker lives in the server's own file) and needs no external
+/// ownership tracking.
+/// </para>
 /// </summary>
 public interface IEconomyCoreService
 {
     /// <summary>
-    /// Rewrites the type_files reference block to reference the given file names
-    /// (leaf names only, e.g. "CF_types.xml"). <paramref name="folder"/> is the
-    /// path written to the block's <c>folder</c> attribute — <c>./db/type_files</c>
-    /// for the configured types, or a path into the data directory for a loaded
-    /// save. <paramref name="desiredFileNames"/> is the set that should be
-    /// referenced; <paramref name="ownedFileNames"/> is the set of leaf names
-    /// this manager has previously generated for the map, so entries it owns but
-    /// no longer wants can be removed while entries it does not own (the map's own
-    /// files, entries added by other tools/mods) are preserved.
-    /// <paramref name="fileTypes"/> assigns each desired leaf its economy type
-    /// (keyed case-insensitively); a missing entry is treated as a types file.
-    /// Returns false if the file is missing or malformed.
+    /// Rewrites the manager-owned <c>&lt;ce&gt;</c> block to reference exactly
+    /// <paramref name="desiredFileNames"/> (leaf names only, e.g. "CF_types.xml").
+    /// <paramref name="folder"/> is written to the block's <c>folder</c> attribute
+    /// and is rewritten on every call (the active preset's <c>type_files</c> folder,
+    /// or a save's). The block's children are fully replaced; the element, its
+    /// marker and its <c>folder</c> are preserved. When no marked block exists, a
+    /// new one is created; an existing unmarked <c>ce</c> block is left untouched
+    /// and reported as a warning. <paramref name="fileTypes"/> assigns each desired
+    /// leaf its economy type (keyed case-insensitively); a missing entry is treated
+    /// as a types file.
     /// </summary>
-    bool UpdateTypeFiles(
+    EconomyCoreUpdateResult UpdateTypeFiles(
         string missionPath,
         string folder,
         IReadOnlyList<string> desiredFileNames,
-        IReadOnlySet<string> ownedFileNames,
         IReadOnlyDictionary<string, string> fileTypes);
 
     /// <summary>
-    /// Returns the <c>folder</c> value of the manager-owned type_files block in a
-    /// map's cfgeconomycore.xml, or null when there is no such block. Used to
-    /// rediscover which types folder (configured or a loaded save) is active.
+    /// Returns the <c>folder</c> value of the manager-owned (marked) type_files
+    /// block, or null when there is no such block.
     /// </summary>
     string? GetTypeFilesFolder(string missionPath);
 
     /// <summary>
-    /// Removes the type_files references for the given leaf names from
-    /// cfgeconomycore.xml regardless of whether this manager owns them. Used to
-    /// clean up orphaned files the manager does not track. Other references are
-    /// preserved. Returns false if the file is missing or malformed.
+    /// Removes the named <c>&lt;file&gt;</c> entries from the manager-owned (marked)
+    /// block only; other blocks are preserved. The marked block itself is kept even
+    /// when it becomes empty. Returns false if the file is missing or malformed.
     /// </summary>
     bool RemoveTypeFiles(string missionPath, IReadOnlySet<string> fileNames);
 }
@@ -53,6 +66,12 @@ public sealed class EconomyCoreService : IEconomyCoreService
     /// <summary>The <c>folder</c> value used for the configured (world-less) types folder.</summary>
     public const string ConfiguredFolder = "./db/type_files";
 
+    /// <summary>Attribute marking a <c>&lt;ce&gt;</c> block as fully owned by this manager.</summary>
+    public const string ManagerMarkerAttribute = "dzmmv2-managed-by";
+
+    /// <summary>Exact value of <see cref="ManagerMarkerAttribute"/> identifying this manager.</summary>
+    public const string ManagerMarkerValue = "DayZ-Mod-Manager-V2";
+
     private readonly IFileSystem _fileSystem;
 
     public EconomyCoreService(IFileSystem fileSystem)
@@ -60,12 +79,13 @@ public sealed class EconomyCoreService : IEconomyCoreService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public bool UpdateTypeFiles(string missionPath, string folder, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes)
+    public EconomyCoreUpdateResult UpdateTypeFiles(
+        string missionPath, string folder, IReadOnlyList<string> desiredFileNames, IReadOnlyDictionary<string, string> fileTypes)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
         if (doc?.Root is null)
         {
-            return false;
+            return EconomyCoreUpdateResult.Failed();
         }
 
         // Preserve the caller's ordering (mod load order, types before
@@ -75,115 +95,49 @@ public sealed class EconomyCoreService : IEconomyCoreService
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
-        var stale = new HashSet<string>(
-            ownedFileNames.Where(name => !desiredSet.Contains(name)),
-            StringComparer.OrdinalIgnoreCase);
 
-        bool changed = RemoveFileEntries(doc, stale);
+        var warnings = new List<string>();
+        XElement? classes = doc.Root.Descendants("classes").FirstOrDefault();
+        (string newline, string indent) = DetectFormatting(classes);
 
-        if (desired.Count > 0)
+        XElement? managed = doc.Root.Descendants("ce").FirstOrDefault(IsManagedCe);
+        bool changed;
+        bool unmanagedLegacyBlock = false;
+        if (managed is not null)
         {
-            XElement? existing = doc.Root.Descendants("ce").FirstOrDefault(IsTypeFilesCe);
-            if (existing is not null)
+            changed = RewriteManagedBlock(managed, folder, desired, newline, indent, fileTypes);
+        }
+        else
+        {
+            // Legacy or third-party block: never touch it. Warn only when it looks
+            // like an older V2 block (a base-game "./db/type_files" block is not).
+            unmanagedLegacyBlock = doc.Root.Descendants("ce").Any(LooksLikeLegacyManagerBlock);
+            if (unmanagedLegacyBlock)
             {
-                // The block may already exist for a different active source (e.g.
-                // switching between the configured folder and a loaded save), so the
-                // folder attribute must be rewritten to the requested one.
-                if (!string.Equals((string?)existing.Attribute("folder"), folder, StringComparison.Ordinal))
-                {
-                    existing.SetAttributeValue("folder", folder);
-                    changed = true;
-                }
-
-                (string newline, string indent) = DetectFormatting(doc.Root.Descendants("classes").FirstOrDefault());
-                string fileIndent = indent + indent;
-
-                // Entries this manager does not own (base/third-party) must survive
-                // the rewrite; keep them in their original relative order.
-                List<XElement> preserved = existing.Elements("file")
-                    .Where(f => !desiredSet.Contains((string?)f.Attribute("name") ?? string.Empty))
-                    .ToList();
-
-                // Rewrite when a desired entry is missing, when the desired entries
-                // are not in the exact order requested, or when a desired entry's
-                // "type" no longer matches the role it should have.
-                List<XElement> presentDesired = existing.Elements("file")
-                    .Where(f => desiredSet.Contains((string?)f.Attribute("name") ?? string.Empty))
-                    .ToList();
-
-                bool orderAndTypeMatch =
-                    presentDesired.Select(f => (string?)f.Attribute("name") ?? string.Empty)
-                        .SequenceEqual(desired, StringComparer.OrdinalIgnoreCase)
-                    && presentDesired.All(f =>
-                        string.Equals(
-                            (string?)f.Attribute("type") ?? string.Empty,
-                            GetFileType((string?)f.Attribute("name") ?? string.Empty, fileTypes),
-                            StringComparison.OrdinalIgnoreCase));
-
-                if (!orderAndTypeMatch)
-                {
-                    existing.RemoveNodes();
-                    foreach (string name in desired)
-                    {
-                        existing.Add(new XText(newline + fileIndent));
-                        existing.Add(new XElement("file",
-                            new XAttribute("name", name),
-                            new XAttribute("type", GetFileType(name, fileTypes))));
-                    }
-
-                    foreach (XElement keep in preserved)
-                    {
-                        existing.Add(new XText(newline + fileIndent));
-                        existing.Add(keep);
-                    }
-
-                    existing.Add(new XText(newline + indent));
-                    changed = true;
-                }
+                warnings.Add(
+                    "WARNING: Found existing unmanaged <ce> block. Will create a brand-new V2-managed <ce> block. " +
+                    "Please manually remove or migrate the old <ce> entry inside cfgeconomycore.xml.");
             }
-            else
-            {
-                XElement? classes = doc.Root.Descendants("classes").FirstOrDefault();
-                (string newline, string indent) = DetectFormatting(classes);
-                XElement ce = BuildCe(desired, folder, newline, indent, fileTypes);
 
-                if (classes is not null)
-                {
-                    if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
-                    {
-                        classes.AddBeforeSelf(ce);
-                        classes.AddBeforeSelf(new XText(whitespace.Value));
-                    }
-                    else
-                    {
-                        classes.AddBeforeSelf(ce);
-                        classes.AddBeforeSelf(new XText(newline + indent));
-                    }
-                }
-                else
-                {
-                    doc.Root.Add(new XText(newline + indent));
-                    doc.Root.Add(ce);
-                }
-
-                changed = true;
-            }
+            InsertCe(doc, BuildCe(desired, folder, newline, indent, fileTypes), classes, newline, indent);
+            changed = true;
         }
 
-        return !changed || SaveEconomyCore(missionPath, doc);
+        bool success = !changed || SaveEconomyCore(missionPath, doc);
+        return new EconomyCoreUpdateResult(success, warnings, unmanagedLegacyBlock);
     }
 
     public string? GetTypeFilesFolder(string missionPath)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
-        XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsTypeFilesCe);
+        XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsManagedCe);
         return ce is null ? null : (string?)ce.Attribute("folder");
     }
 
     /// <summary>Convenience overload that targets the configured <c>./db/type_files</c> folder.</summary>
-    public bool UpdateTypeFiles(string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlySet<string> ownedFileNames, IReadOnlyDictionary<string, string> fileTypes) =>
-        UpdateTypeFiles(missionPath, ConfiguredFolder, desiredFileNames, ownedFileNames, fileTypes);
+    public EconomyCoreUpdateResult UpdateTypeFiles(
+        string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlyDictionary<string, string> fileTypes) =>
+        UpdateTypeFiles(missionPath, ConfiguredFolder, desiredFileNames, fileTypes);
 
     public bool RemoveTypeFiles(string missionPath, IReadOnlySet<string> fileNames)
     {
@@ -198,68 +152,100 @@ public sealed class EconomyCoreService : IEconomyCoreService
             return false;
         }
 
-        var targets = new HashSet<string>(fileNames.Where(name => !string.IsNullOrWhiteSpace(name)), StringComparer.OrdinalIgnoreCase);
-        return !RemoveFileEntries(doc, targets) || SaveEconomyCore(missionPath, doc);
-    }
-
-    /// <summary>
-    /// Removes the <c>&lt;file&gt;</c> entries whose leaf name is in
-    /// <paramref name="names"/> from every type_files <c>ce</c> block, dropping a
-    /// block (and its surrounding whitespace) once empty. Returns whether the
-    /// document changed.
-    /// </summary>
-    private static bool RemoveFileEntries(XDocument doc, IReadOnlySet<string> names)
-    {
-        if (doc.Root is null)
-        {
-            return false;
-        }
+        var targets = new HashSet<string>(
+            fileNames.Where(name => !string.IsNullOrWhiteSpace(name)), StringComparer.OrdinalIgnoreCase);
 
         bool changed = false;
-        foreach (XElement ce in doc.Root.Descendants("ce").Where(IsTypeFilesCe).ToList())
+        foreach (XElement ce in doc.Root.Descendants("ce").Where(IsManagedCe).ToList())
         {
             foreach (XElement file in ce.Elements("file")
-                         .Where(f => names.Contains((string?)f.Attribute("name") ?? string.Empty))
+                         .Where(f => targets.Contains((string?)f.Attribute("name") ?? string.Empty))
                          .ToList())
             {
                 file.Remove();
                 changed = true;
             }
+        }
 
-            if (!ce.Elements("file").Any())
+        return !changed || SaveEconomyCore(missionPath, doc);
+    }
+
+    /// <summary>
+    /// Fully rewrites a marked block's children to exactly <paramref name="desired"/>,
+    /// keeping the element, its marker and its (rewritten) <c>folder</c>. Returns
+    /// whether anything changed, so an already-correct block is not rewritten.
+    /// </summary>
+    private static bool RewriteManagedBlock(
+        XElement ce, string folder, IReadOnlyList<string> desired, string newline, string indent,
+        IReadOnlyDictionary<string, string> fileTypes)
+    {
+        bool changed = false;
+
+        if (!string.Equals((string?)ce.Attribute("folder"), folder, StringComparison.Ordinal))
+        {
+            ce.SetAttributeValue("folder", folder);
+            changed = true;
+        }
+
+        if (!string.Equals(
+            (string?)ce.Attribute(ManagerMarkerAttribute), ManagerMarkerValue, StringComparison.Ordinal))
+        {
+            ce.SetAttributeValue(ManagerMarkerAttribute, ManagerMarkerValue);
+            changed = true;
+        }
+
+        List<XElement> current = ce.Elements("file").ToList();
+        bool matches = current.Count == desired.Count
+            && current.Select(f => (string?)f.Attribute("name") ?? string.Empty)
+                .SequenceEqual(desired, StringComparer.OrdinalIgnoreCase)
+            && current.All(f => string.Equals(
+                (string?)f.Attribute("type") ?? string.Empty,
+                GetFileType((string?)f.Attribute("name") ?? string.Empty, fileTypes),
+                StringComparison.OrdinalIgnoreCase));
+
+        if (!matches)
+        {
+            // RemoveNodes (not RemoveAll) so the folder and marker attributes survive.
+            ce.RemoveNodes();
+            string fileIndent = indent + indent;
+            foreach (string name in desired)
             {
-                XNode? preceding = ce.PreviousNode;
-                ce.Remove();
-                if (preceding is XText text && string.IsNullOrWhiteSpace(text.Value))
-                {
-                    text.Remove();
-                }
-
-                changed = true;
+                ce.Add(new XText(newline + fileIndent));
+                ce.Add(new XElement("file",
+                    new XAttribute("name", name),
+                    new XAttribute("type", GetFileType(name, fileTypes))));
             }
+
+            if (desired.Count > 0)
+            {
+                ce.Add(new XText(newline + indent));
+            }
+
+            changed = true;
         }
 
         return changed;
     }
 
-    private static bool IsTypeFilesCe(XElement ce)
-    {
-        string? folder = (string?)ce.Attribute("folder");
-        return !string.IsNullOrWhiteSpace(folder) && IsManagerTypeFilesFolder(folder);
-    }
+    private static bool IsManagedCe(XElement ce) =>
+        string.Equals((string?)ce.Attribute(ManagerMarkerAttribute), ManagerMarkerValue, StringComparison.Ordinal);
 
     /// <summary>
-    /// True when a <c>folder</c> value belongs to this manager: either the
-    /// configured types folder (<c>./db/type_files</c>) or one of the per-save
-    /// folders under the data directory that a loaded save points at.
+    /// True when an unmarked block looks like an older V2 block (its folder points
+    /// into the manager's data directory). The base-game <c>./db/type_files</c>
+    /// block does not match, so a fresh install never warns.
     /// </summary>
-    internal static bool IsManagerTypeFilesFolder(string folder)
+    private static bool LooksLikeLegacyManagerBlock(XElement ce)
     {
+        string? folder = (string?)ce.Attribute("folder");
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return false;
+        }
+
         string normalized = folder.Trim().Replace('\\', '/');
-        return normalized.Equals(ConfiguredFolder, StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("db/type_files", StringComparison.OrdinalIgnoreCase)
-            || (normalized.EndsWith("/type_files", StringComparison.OrdinalIgnoreCase)
-                && normalized.Contains("DayZ-Mod-Manager-V2", StringComparison.OrdinalIgnoreCase));
+        return normalized.EndsWith("/type_files", StringComparison.OrdinalIgnoreCase)
+            && normalized.Contains("DayZ-Mod-Manager-V2", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Reads and parses cfgeconomycore.xml, or null when missing/malformed.</summary>
@@ -303,19 +289,52 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return ("\n", "\t");
     }
 
-    private static XElement BuildCe(IReadOnlyList<string> fileNames, string folder, string newline, string indent, IReadOnlyDictionary<string, string> fileTypes)
+    private static XElement BuildCe(
+        IReadOnlyList<string> fileNames, string folder, string newline, string indent,
+        IReadOnlyDictionary<string, string> fileTypes)
     {
-        var ce = new XElement("ce", new XAttribute("folder", folder));
+        var ce = new XElement("ce",
+            new XAttribute("folder", folder),
+            new XAttribute(ManagerMarkerAttribute, ManagerMarkerValue));
         string fileIndent = indent + indent;
 
         foreach (string name in fileNames)
         {
             ce.Add(new XText(newline + fileIndent));
-            ce.Add(new XElement("file", new XAttribute("name", name), new XAttribute("type", GetFileType(name, fileTypes))));
+            ce.Add(new XElement("file",
+                new XAttribute("name", name),
+                new XAttribute("type", GetFileType(name, fileTypes))));
         }
 
-        ce.Add(new XText(newline + indent));
+        if (fileNames.Count > 0)
+        {
+            ce.Add(new XText(newline + indent));
+        }
+
         return ce;
+    }
+
+    /// <summary>Inserts a new block before <c>&lt;classes&gt;</c>, matching its indentation.</summary>
+    private static void InsertCe(XDocument doc, XElement ce, XElement? classes, string newline, string indent)
+    {
+        if (classes is not null)
+        {
+            if (classes.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+            {
+                classes.AddBeforeSelf(ce);
+                classes.AddBeforeSelf(new XText(whitespace.Value));
+            }
+            else
+            {
+                classes.AddBeforeSelf(ce);
+                classes.AddBeforeSelf(new XText(newline + indent));
+            }
+        }
+        else
+        {
+            doc.Root!.Add(new XText(newline + indent));
+            doc.Root.Add(ce);
+        }
     }
 
     private static string GetFileType(string name, IReadOnlyDictionary<string, string> fileTypes) =>

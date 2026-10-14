@@ -1,4 +1,5 @@
 using DayZModManager.Core;
+using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
 using DayZModManager.Core.Tests.TestDoubles;
 
@@ -142,7 +143,7 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
 
-        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         Assert.False(result.Success);
         Assert.Contains("serverDZ.cfg", result.Message);
@@ -155,8 +156,8 @@ public class PresetServiceTests
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", copyProfilesFromDefault: false); // id 2
-        service.CreatePreset(ServerPath, DataDirectory, "dayzOffline.sakhal", "Other", copyProfilesFromDefault: false); // id 3
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore"); // id 2
+        service.CreatePreset(ServerPath, DataDirectory, "dayzOffline.sakhal", "Other"); // id 3
 
         Assert.Equal(4, service.AllocateInstanceId(DataDirectory, ServerPath, Map));
     }
@@ -186,7 +187,7 @@ public class PresetServiceTests
         fs.AddDirectory(Path.Combine(ServerPath, "mpmissions", Map), "storage_1", "storage_2");
 
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // adopts 1
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Named", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Named");
 
         // The named preset must skip the live storage_1/storage_2 slots.
         Assert.Equal(3, service.ReadInstanceId(DataDirectory, Map, "Named"));
@@ -203,7 +204,7 @@ public class PresetServiceTests
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
         Assert.Equal(5, service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName));
 
-        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         Assert.True(result.Success);
         Assert.Equal(6, service.ReadInstanceId(DataDirectory, Map, "Hardcore"));
@@ -213,33 +214,16 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void CreatePreset_CopyProfiles_CopiesDefaultProfiles()
+    public void CreatePreset_NeverCopiesDefaultProfiles()
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
 
         string defaultProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
-        fs.AddDirectory(defaultProfiles);
         fs.AddFile(Path.Combine(defaultProfiles, "player.db"), "data");
 
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", copyProfilesFromDefault: true);
-
-        string targetProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, "Hardcore");
-        Assert.True(fs.FileExists(Path.Combine(targetProfiles, "player.db")));
-    }
-
-    [Fact]
-    public void CreatePreset_WithoutCopy_LeavesEmptyProfiles()
-    {
-        (PresetService service, FakeFileSystem fs) = CreateService();
-        SeedRootConfig(fs);
-        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
-        fs.AddFile(
-            Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName), "player.db"),
-            "data");
-
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", copyProfilesFromDefault: false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         string targetProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, "Hardcore");
         Assert.True(fs.DirectoryExists(targetProfiles));
@@ -251,7 +235,7 @@ public class PresetServiceTests
     {
         (PresetService service, _) = CreateService();
 
-        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, false);
+        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName);
 
         Assert.False(result.Success);
     }
@@ -270,7 +254,7 @@ public class PresetServiceTests
     {
         (PresetService service, _) = CreateService();
 
-        Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, name, false).Success);
+        Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, name).Success);
     }
 
     [Theory]
@@ -291,9 +275,9 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
-        Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false).Success);
+        Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore").Success);
     }
 
     [Fact]
@@ -301,7 +285,7 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         PresetResult result = service.RenamePreset(DataDirectory, Map, "Hardcore", "Apocalypse");
 
@@ -331,7 +315,7 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         PresetResult result = service.DeletePreset(DataDirectory, Map, "Hardcore");
 
@@ -363,8 +347,8 @@ public class PresetServiceTests
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Zulu", false);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Alpha", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Zulu");
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Alpha");
 
         IReadOnlyList<string> names = service.ListPresetNames(DataDirectory, Map);
 
@@ -413,7 +397,7 @@ public class PresetServiceTests
         fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"currentMap\":\"x\"}");
 
         PresetResult result = service.DuplicatePreset(
-            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
 
         Assert.True(result.Success);
         Assert.Equal(2, service.ReadInstanceId(DataDirectory, Map, "Copy"));
@@ -426,7 +410,7 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void DuplicatePreset_CopiesProfiles_OnlyWhenRequested()
+    public void DuplicatePreset_NeverCopiesProfiles()
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
@@ -434,11 +418,11 @@ public class PresetServiceTests
         string sourceProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceProfiles, "player.db"), "data");
 
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "WithProfiles", copyProfiles: true);
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "WithoutProfiles", copyProfiles: false);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
 
-        Assert.True(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithProfiles"), "player.db")));
-        Assert.False(fs.FileExists(Path.Combine(PresetPaths.ProfilesFolder(DataDirectory, Map, "WithoutProfiles"), "player.db")));
+        string targetProfiles = PresetPaths.ProfilesFolder(DataDirectory, Map, "Copy");
+        Assert.True(fs.DirectoryExists(targetProfiles));
+        Assert.False(fs.FileExists(Path.Combine(targetProfiles, "player.db")));
     }
 
     [Fact]
@@ -450,7 +434,7 @@ public class PresetServiceTests
         string sourceSaves = PresetPaths.SavesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceSaves, "Alpha", "save-meta.json"), "{}");
 
-        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
+        service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
 
         string targetSaves = PresetPaths.SavesFolder(DataDirectory, Map, "Copy");
         Assert.True(fs.DirectoryExists(targetSaves));
@@ -463,13 +447,13 @@ public class PresetServiceTests
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Existing", false);
+        service.CreatePreset(ServerPath, DataDirectory, Map, "Existing");
 
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "", false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, PresetPaths.DefaultPresetName, false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, "Missing", Map, "Copy", false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Existing", false).Success);
-        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy Name", false).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "").Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, PresetPaths.DefaultPresetName).Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, "Missing", Map, "Copy").Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Existing").Success);
+        Assert.False(service.DuplicatePreset(ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy Name").Success);
     }
 
     [Fact]
@@ -484,7 +468,7 @@ public class PresetServiceTests
         fs.DeleteFile(RootConfig);
 
         PresetResult result = service.DuplicatePreset(
-            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy", copyProfiles: false);
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
 
         Assert.False(result.Success);
         Assert.Contains("serverDZ.cfg", result.Message);
@@ -510,7 +494,7 @@ public class PresetServiceTests
         fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
 
         PresetResult result = service.DuplicatePreset(
-            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, otherMap, "Copy", copyProfiles: false);
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, otherMap, "Copy");
 
         Assert.True(result.Success);
 
@@ -537,5 +521,47 @@ public class PresetServiceTests
             Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, otherMap, "Copy"), "CF_types.xml")));
         Assert.True(fs.FileExists(PresetPaths.ModOrderPath(DataDirectory, otherMap, "Copy")));
         Assert.Empty(fs.GetDirectories(PresetPaths.SavesFolder(DataDirectory, otherMap, "Copy")));
+    }
+
+    [Fact]
+    public void ResolveEnvironment_HealsDefaultPreset_AndReturnsEnvironment()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+
+        EnvironmentResolution result = service.ResolveEnvironment(
+            new Settings { ServerPath = ServerPath }, DataDirectory, Map, PresetPaths.DefaultPresetName);
+
+        Assert.Null(result.Error);
+        Assert.NotNull(result.Environment);
+        Assert.Equal(PresetPaths.DefaultPresetName, result.Environment!.PresetName);
+        Assert.Equal(PresetFolder(PresetPaths.DefaultPresetName), result.Environment.PresetFolder);
+        Assert.Equal("1", result.Environment.ModListKey);
+        Assert.True(fs.FileExists(ConfigPath(PresetPaths.DefaultPresetName)));
+    }
+
+    [Fact]
+    public void ResolveEnvironment_Fails_ForIncompleteNamedPreset()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+
+        EnvironmentResolution result = service.ResolveEnvironment(
+            new Settings { ServerPath = ServerPath }, DataDirectory, Map, "Missing");
+
+        Assert.Null(result.Environment);
+        Assert.NotNull(result.Error);
+    }
+
+    [Fact]
+    public void ResolveEnvironment_WithNoMap_ReturnsNullEnvironmentWithoutError()
+    {
+        (PresetService service, _) = CreateService();
+
+        EnvironmentResolution result = service.ResolveEnvironment(
+            new Settings(), DataDirectory, string.Empty, PresetPaths.DefaultPresetName);
+
+        Assert.Null(result.Environment);
+        Assert.Null(result.Error);
     }
 }

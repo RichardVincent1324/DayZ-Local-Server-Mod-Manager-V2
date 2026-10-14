@@ -46,6 +46,24 @@ public interface IPresetService
     string? DescribeIncompletePreset(string dataDirectory, string mapName, string presetName);
 
     /// <summary>
+    /// Resolves the launch environment for the active map and preset, healing the
+    /// reserved default preset when it is the active one and aborting with a clear
+    /// message when a named preset is incomplete. This is the single place preset
+    /// completeness is decided. When <paramref name="mapName"/> is empty there is
+    /// no active environment: the result has a null environment and no error.
+    /// <para>
+    /// <paramref name="dataDirectory"/> is where the resulting profile/config paths
+    /// are anchored (the relocation target). <paramref name="presetLookupDirectory"/>
+    /// is where the preset must exist and is healed - typically the current data
+    /// directory, which may differ from the target during a relocation. It defaults
+    /// to <paramref name="dataDirectory"/>.
+    /// </para>
+    /// </summary>
+    EnvironmentResolution ResolveEnvironment(
+        Settings settings, string dataDirectory, string mapName, string presetName,
+        string? presetLookupDirectory = null);
+
+    /// <summary>
     /// Returns the preset names for a map, with <c>__default_preset__</c> first and
     /// the remaining names sorted case-insensitively.
     /// </summary>
@@ -79,12 +97,11 @@ public interface IPresetService
     PresetResult EnsureDefaultPreset(string serverPath, string dataDirectory, string mapName);
 
     /// <summary>
-    /// Creates a new named preset for a map with a fresh, dedicated instance ID.
-    /// When <paramref name="copyProfilesFromDefault"/> is set, the default preset's
-    /// profile data is copied; otherwise the preset gets an empty profiles folder.
+    /// Creates a new named preset for a map with a fresh, dedicated instance ID and
+    /// an empty profiles folder. Presets never share profile data.
     /// </summary>
     PresetResult CreatePreset(
-        string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfilesFromDefault);
+        string serverPath, string dataDirectory, string mapName, string presetName);
 
     /// <summary>
     /// Creates a new preset as a copy of an existing preset's environment: its
@@ -92,13 +109,12 @@ public interface IPresetService
     /// configuration and generated type files. The copy may target the same map as
     /// the source or a different one; map-scoped settings (the <c>serverDZ.cfg</c>
     /// template and the types configuration's map key) are rewritten for the
-    /// destination map. Profiles are copied only when <paramref name="copyProfiles"/>
-    /// is set. Saves are never copied.
+    /// destination map. Profiles and saves are never copied.
     /// </summary>
     PresetResult DuplicatePreset(
         string serverPath, string dataDirectory,
         string sourceMapName, string sourcePresetName,
-        string targetMapName, string newPresetName, bool copyProfiles);
+        string targetMapName, string newPresetName);
 
     /// <summary>Renames a user preset. The reserved default preset cannot be renamed.</summary>
     PresetResult RenamePreset(string dataDirectory, string mapName, string presetName, string newName);
@@ -166,6 +182,59 @@ public sealed class PresetService : IPresetService
         }
 
         return null;
+    }
+
+    public EnvironmentResolution ResolveEnvironment(
+        Settings settings, string dataDirectory, string mapName, string presetName,
+        string? presetLookupDirectory = null)
+    {
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            return new EnvironmentResolution(null, null);
+        }
+
+        string activePreset = string.IsNullOrWhiteSpace(presetName)
+            ? PresetPaths.DefaultPresetName
+            : presetName;
+        string lookupDirectory = string.IsNullOrWhiteSpace(presetLookupDirectory)
+            ? dataDirectory
+            : presetLookupDirectory;
+
+        if (!PresetExists(lookupDirectory, mapName, activePreset))
+        {
+            if (IsDefaultPreset(activePreset))
+            {
+                // The tool-managed default preset is healed from the server root.
+                PresetResult healed = EnsureDefaultPreset(settings.ServerPath, lookupDirectory, mapName);
+                if (!healed.Success)
+                {
+                    return EnvironmentResolution.Failed(healed.Message);
+                }
+            }
+
+            if (!PresetExists(lookupDirectory, mapName, activePreset))
+            {
+                return EnvironmentResolution.Failed(
+                    $"The active preset \"{activePreset}\" for {mapName} is incomplete " +
+                    $"(its serverDZ.cfg is missing); the map was not applied. Restore it or select another preset.");
+            }
+        }
+
+        var environment = new ServerEnvironment
+        {
+            MapName = mapName,
+            PresetName = activePreset,
+            PresetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, activePreset),
+            ServerProfile = PresetPaths.RelativeToServer(
+                settings.ServerPath,
+                PresetPaths.ProfilesFolder(dataDirectory, mapName, activePreset)),
+            ServerConfig = PresetPaths.RelativeToServer(
+                settings.ServerPath,
+                PresetPaths.ServerConfigPath(dataDirectory, mapName, activePreset)),
+            ModListKey = ModListFolder.PresetKey(ReadInstanceId(lookupDirectory, mapName, activePreset)),
+        };
+
+        return EnvironmentResolution.Resolved(environment);
     }
 
     public IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName)
@@ -301,7 +370,7 @@ public sealed class PresetService : IPresetService
             return RepairDefaultPreset(serverPath, dataDirectory, mapName, hasMeta, hasConfig);
         }
 
-        return CreatePresetCore(serverPath, dataDirectory, mapName, PresetPaths.DefaultPresetName, copyProfiles: false);
+        return CreatePresetCore(serverPath, dataDirectory, mapName, PresetPaths.DefaultPresetName);
     }
 
     /// <summary>
@@ -360,7 +429,7 @@ public sealed class PresetService : IPresetService
     }
 
     public PresetResult CreatePreset(
-        string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfilesFromDefault)
+        string serverPath, string dataDirectory, string mapName, string presetName)
     {
         if (string.IsNullOrWhiteSpace(mapName))
         {
@@ -383,13 +452,13 @@ public sealed class PresetService : IPresetService
             return Failure($"A preset named \"{name}\" already exists for {mapName}.");
         }
 
-        return CreatePresetCore(serverPath, dataDirectory, mapName, name, copyProfilesFromDefault);
+        return CreatePresetCore(serverPath, dataDirectory, mapName, name);
     }
 
     public PresetResult DuplicatePreset(
         string serverPath, string dataDirectory,
         string sourceMapName, string sourcePresetName,
-        string targetMapName, string newPresetName, bool copyProfiles)
+        string targetMapName, string newPresetName)
     {
         if (string.IsNullOrWhiteSpace(sourceMapName) || string.IsNullOrWhiteSpace(targetMapName))
         {
@@ -442,13 +511,6 @@ public sealed class PresetService : IPresetService
             CopyDirectoryIfExists(
                 PresetPaths.TypeFilesFolder(dataDirectory, sourceMapName, sourcePresetName),
                 PresetPaths.TypeFilesFolder(dataDirectory, targetMapName, name));
-
-            if (copyProfiles)
-            {
-                CopyDirectoryIfExists(
-                    PresetPaths.ProfilesFolder(dataDirectory, sourceMapName, sourcePresetName),
-                    PresetPaths.ProfilesFolder(dataDirectory, targetMapName, name));
-            }
 
             var meta = new PresetMetaData
             {
@@ -534,7 +596,7 @@ public sealed class PresetService : IPresetService
     }
 
     private PresetResult CreatePresetCore(
-        string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfiles)
+        string serverPath, string dataDirectory, string mapName, string presetName)
     {
         // The default preset deliberately adopts the server root's existing
         // instance ID when one is configured, so a world the user already played
@@ -564,11 +626,6 @@ public sealed class PresetService : IPresetService
                 CreatedAtUtc = DateTime.UtcNow,
             };
             ConfigJson.Write(_fileSystem, PresetPaths.PresetMetaPath(dataDirectory, mapName, presetName), meta);
-
-            if (copyProfiles)
-            {
-                CopyProfilesFromDefault(dataDirectory, mapName, presetName);
-            }
         }
         catch (Exception ex)
         {
@@ -654,19 +711,6 @@ public sealed class PresetService : IPresetService
 
         _serverConfig.WriteInstanceId(target, instanceId);
         return Success($"Seeded serverDZ.cfg from \"{source}\".");
-    }
-
-    private void CopyProfilesFromDefault(string dataDirectory, string mapName, string presetName)
-    {
-        string defaultProfiles = PresetPaths.ProfilesFolder(
-            dataDirectory, mapName, PresetPaths.DefaultPresetName);
-        if (!_fileSystem.DirectoryExists(defaultProfiles))
-        {
-            return;
-        }
-
-        string targetProfiles = PresetPaths.ProfilesFolder(dataDirectory, mapName, presetName);
-        _fileSystem.CopyDirectory(defaultProfiles, targetProfiles);
     }
 
     private void CopyFileIfExists(string source, string destination)

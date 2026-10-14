@@ -89,6 +89,15 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 return;
             }
 
+            // Persist the current preset's pending mod/settings edits before loading
+            // the target preset, otherwise they would be silently discarded (map
+            // switching already does this).
+            if (!await EnsureAppliedBeforeAsync("switching presets"))
+            {
+                RestorePresetSelection();
+                return;
+            }
+
             string previousActive = _activePresetName;
             bool ok = ActivatePreset is not null && await ActivatePreset(mapName, presetName);
             if (!ok)
@@ -142,8 +151,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         PresetResult result = _presetService.CreatePreset(
-            _serverPath, _dataDirectoryProvider.Current, mapName, request.Name,
-            request.CopyProfilesFromDefault);
+            _serverPath, _dataDirectoryProvider.Current, mapName, request.Name);
         if (!result.Success)
         {
             _log.Error(result.Message);
@@ -196,7 +204,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         PresetResult result = _presetService.DuplicatePreset(
             _serverPath, _dataDirectoryProvider.Current, sourceMap, source.Name,
-            targetMap, request.Name, request.CopyProfiles);
+            targetMap, request.Name);
         if (!result.Success)
         {
             _log.Error(result.Message);
@@ -229,11 +237,25 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
     }
 
-    private void RenamePreset()
+    private async void RenamePreset()
     {
         string mapName = _typesConfig.CurrentMap;
         PresetItemViewModel? preset = SelectedPreset;
         if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
+        {
+            return;
+        }
+
+        // Moving the active preset's folder out from under a running server would
+        // corrupt its profile/world writes.
+        if (RefuseWhileServerRunning("renaming presets"))
+        {
+            return;
+        }
+
+        // Persist pending edits to the current preset before its folder is moved,
+        // so they carry into the renamed preset instead of being lost.
+        if (!await EnsureAppliedBeforeAsync("renaming presets"))
         {
             return;
         }
@@ -262,17 +284,31 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         bool wasActive = string.Equals(_activePresetName, preset.Name, StringComparison.Ordinal);
         RefreshPresets();
 
-        if (wasActive && ActivatePreset is not null)
+        // Reactivate through the guarded switch path so the busy flag is held and the
+        // server-running check is enforced while the renamed preset is re-applied.
+        if (wasActive)
         {
-            _ = ActivatePreset(mapName, trimmed);
+            await SwitchPresetAsync(trimmed);
         }
     }
 
-    private void DeletePreset()
+    private async void DeletePreset()
     {
         string mapName = _typesConfig.CurrentMap;
         PresetItemViewModel? preset = SelectedPreset;
         if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
+        {
+            return;
+        }
+
+        // Deleting the active preset while the server runs would remove the very
+        // environment it is using.
+        if (RefuseWhileServerRunning("deleting presets"))
+        {
+            return;
+        }
+
+        if (!await EnsureAppliedBeforeAsync("deleting presets"))
         {
             return;
         }
@@ -304,9 +340,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         bool wasActive = string.Equals(_activePresetName, preset.Name, StringComparison.Ordinal);
         RefreshPresets();
 
-        if (wasActive && ActivatePreset is not null)
+        // Reactivate the default preset through the guarded switch path so the busy
+        // flag is held while the replacement environment is applied.
+        if (wasActive)
         {
-            _ = ActivatePreset(mapName, PresetPaths.DefaultPresetName);
+            await SwitchPresetAsync(PresetPaths.DefaultPresetName);
         }
     }
 

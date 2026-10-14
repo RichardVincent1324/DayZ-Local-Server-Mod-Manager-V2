@@ -9,6 +9,12 @@ public sealed record TypesOperationResult
     public bool Success { get; init; }
 
     public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// True when the operation found an unmanaged legacy <c>&lt;ce&gt;</c> block and
+    /// created the V2-managed one alongside it. Used to raise a one-time alert.
+    /// </summary>
+    public bool UnmanagedLegacyBlockDetected { get; init; }
 }
 
 /// <summary>A configured type file: its mod-relative source, generated leaf and role.</summary>
@@ -22,6 +28,22 @@ public sealed record ConfiguredTypeFile(string SourceRelative, string GeneratedL
 /// through <see cref="EconomyFolder"/>.
 /// </summary>
 public sealed record TypesTarget(string MissionPath, string TypeFilesFolder, string EconomyFolder);
+
+/// <summary>
+/// Launch-time problems with a preset's types configuration.
+/// <see cref="MissingMods"/> are entries whose mod is no longer present in the
+/// Workshop. <see cref="MissingFiles"/> are generated files of loaded mods that
+/// <c>cfgeconomycore.xml</c> will reference but that are absent from the preset's
+/// <c>type_files</c> folder. Untracked files and entries for merely-unloaded mods
+/// are ignored: neither is referenced by <c>cfgeconomycore.xml</c>.
+/// </summary>
+public sealed record TypesLaunchIssues(
+    IReadOnlyList<string> MissingMods,
+    IReadOnlyList<string> MissingFiles)
+{
+    /// <summary>True when at least one issue should block a server launch.</summary>
+    public bool HasBlockers => MissingMods.Count > 0 || MissingFiles.Count > 0;
+}
 
 /// <summary>
 /// Manages "types" XML configuration for a preset: discovering candidate files in
@@ -91,24 +113,19 @@ public interface ITypesService
         IReadOnlySet<string> fileLeaves);
 
     /// <summary>
-    /// Regenerates the manager-owned type_files block in cfgeconomycore.xml
-    /// referencing only the types of the mods in <paramref name="loadedModNames"/>
+    /// Rewrites the manager-owned (marked) type_files block in cfgeconomycore.xml
+    /// to reference exactly the types of the mods in <paramref name="loadedModNames"/>
     /// from <paramref name="map"/>. <paramref name="folder"/> is written to the
-    /// block's <c>folder</c> attribute (the active preset's type_files). Returns
-    /// false if the file is missing or malformed.
+    /// block's <c>folder</c> attribute (the active preset's type_files) and is
+    /// rewritten on every call. Any unmanaged <c>ce</c> block is left untouched.
+    /// Returns a result whose <see cref="TypesOperationResult.Messages"/> carry any
+    /// warnings (for example, an unmanaged legacy block was found).
     /// </summary>
-    /// <param name="previouslyOwned">
-    /// Type-file leaf names the manager owned before the current configuration was
-    /// installed. They are added to the owned set so their now-removed files are
-    /// dropped from cfgeconomycore.xml instead of being preserved as third-party
-    /// entries.
-    /// </param>
-    bool SyncEconomyCore(
+    TypesOperationResult SyncEconomyCore(
         MapTypesConfig? map,
         string missionPath,
         string folder,
-        IReadOnlySet<string> loadedModNames,
-        IReadOnlySet<string>? previouslyOwned = null);
+        IReadOnlySet<string> loadedModNames);
 
     /// <summary>
     /// Returns the <c>folder</c> value of the manager-owned type_files block in a
@@ -124,6 +141,20 @@ public interface ITypesService
     IReadOnlyList<string> GetActiveTypeFileNames(
         TypesConfig config,
         string mapName,
+        IReadOnlySet<string> loadedModNames);
+
+    /// <summary>
+    /// Returns the launch-blocking problems in a map's types configuration: entries
+    /// whose mod is missing from the Workshop, and generated files of loaded mods
+    /// that are absent from <paramref name="typeFilesFolder"/> (the files
+    /// cfgeconomycore.xml will reference). Untracked files and entries for
+    /// merely-unloaded mods are ignored.
+    /// </summary>
+    TypesLaunchIssues FindLaunchIssues(
+        TypesConfig config,
+        string mapName,
+        string typeFilesFolder,
+        IReadOnlySet<string> workshopModNames,
         IReadOnlySet<string> loadedModNames);
 }
 
@@ -171,10 +202,6 @@ public sealed class TypesService : ITypesService
 
         MapTypesConfig map = GetOrCreateMap(config, mapName);
 
-        // Snapshot the files this manager previously generated for the map before
-        // any mutation, so entries that are replaced below can still be removed
-        // from cfgeconomycore.xml.
-        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
         ModTypesEntry? previous = map.Mods.FirstOrDefault(entry => string.Equals(entry.ModName, modName, StringComparison.OrdinalIgnoreCase));
         int previousIndex = previous is null ? -1 : map.Mods.IndexOf(previous);
 
@@ -271,7 +298,7 @@ public sealed class TypesService : ITypesService
 
         map.Mods.Add(newEntry);
 
-        if (!TryRegenerateEconomy(target, map, messages, loadedModNames, ownedBefore).Success)
+        if (!TryRegenerateEconomy(target, map, messages, loadedModNames).Success)
         {
             map.Mods.Remove(newEntry);
             if (previous is not null)
@@ -320,9 +347,8 @@ public sealed class TypesService : ITypesService
             return new TypesOperationResult { Success = true, Messages = messages };
         }
 
-        // Snapshot before removal so the removed files are still recognized as
-        // owned when cfgeconomycore.xml is regenerated.
-        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
+        // Snapshot before removal so the current state can be restored if the
+        // economy rewrite fails.
         int entryIndex = map.Mods.IndexOf(entry);
         List<string> originalGenerated = new(entry.GeneratedFiles);
         List<string> originalSources = new(entry.SourceFiles);
@@ -367,7 +393,7 @@ public sealed class TypesService : ITypesService
             entryRemoved = true;
         }
 
-        if (!TryRegenerateEconomy(target, map, messages, loadedModNames, ownedBefore).Success)
+        if (!TryRegenerateEconomy(target, map, messages, loadedModNames).Success)
         {
             if (entryRemoved)
             {
@@ -406,13 +432,8 @@ public sealed class TypesService : ITypesService
         if (map is null)
         {
             messages.Add("No types configuration present.");
-            return TryRegenerateEconomy(target, null, messages, loadedModNames,
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            return TryRegenerateEconomy(target, null, messages, loadedModNames);
         }
-
-        // Snapshot before removal so the cleaned-up files are still recognized as
-        // owned when cfgeconomycore.xml is regenerated.
-        IReadOnlySet<string> ownedBefore = GetAllOwnedFileNames(map);
 
         List<ModTypesEntry> invalid = map.Mods
             .Where(entry => !validModNames.Contains(entry.ModName))
@@ -434,7 +455,7 @@ public sealed class TypesService : ITypesService
             map.Mods.Remove(entry);
         }
 
-        if (!TryRegenerateEconomy(target, map, messages, loadedModNames, ownedBefore).Success)
+        if (!TryRegenerateEconomy(target, map, messages, loadedModNames).Success)
         {
             foreach (ModTypesEntry entry in invalid)
             {
@@ -457,57 +478,50 @@ public sealed class TypesService : ITypesService
         return new TypesOperationResult { Success = true, Messages = messages };
     }
 
-    public bool SyncEconomyCore(
+    public TypesOperationResult SyncEconomyCore(
         MapTypesConfig? map,
         string missionPath,
         string folder,
-        IReadOnlySet<string> loadedModNames,
-        IReadOnlySet<string>? previouslyOwned = null)
+        IReadOnlySet<string> loadedModNames)
     {
         IReadOnlyList<(string Leaf, string Type)> files = map is null
             ? Array.Empty<(string Leaf, string Type)>()
             : GetOrderedEconomyFiles(map, loadedModNames);
 
-        // Ownership is the union of the current configuration and any ownership
-        // carried over from the replaced configuration, so entries for files that
-        // were owned before but are not desired now are recognized as stale and
-        // removed.
-        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (map is not null)
-        {
-            owned.UnionWith(GetAllOwnedFileNames(map));
-        }
-
-        if (previouslyOwned is not null)
-        {
-            owned.UnionWith(previouslyOwned);
-        }
-
         try
         {
-            return _economyCore.UpdateTypeFiles(
+            EconomyCoreUpdateResult result = _economyCore.UpdateTypeFiles(
                 missionPath,
                 folder,
                 files.Select(file => file.Leaf).ToList(),
-                owned,
                 GetEconomyFileTypes(files));
+
+            return new TypesOperationResult
+            {
+                Success = result.Success,
+                Messages = result.Warnings,
+                UnmanagedLegacyBlockDetected = result.UnmanagedLegacyBlockDetected,
+            };
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return false;
+            return new TypesOperationResult
+            {
+                Success = false,
+                Messages = new[] { $"Failed to update cfgeconomycore.xml: {ex.Message}" },
+            };
         }
     }
 
     public string? GetActiveTypesFolder(string missionPath) => _economyCore.GetTypeFilesFolder(missionPath);
 
     /// <summary>Convenience overload targeting the <c>./db/type_files</c> folder.</summary>
-    public bool SyncEconomyCore(
+    public TypesOperationResult SyncEconomyCore(
         TypesConfig config,
         string mapName,
         string missionPath,
-        IReadOnlySet<string> loadedModNames,
-        IReadOnlySet<string>? previouslyOwned = null) =>
-        SyncEconomyCore(GetMap(config, mapName), missionPath, EconomyCoreService.ConfiguredFolder, loadedModNames, previouslyOwned);
+        IReadOnlySet<string> loadedModNames) =>
+        SyncEconomyCore(GetMap(config, mapName), missionPath, EconomyCoreService.ConfiguredFolder, loadedModNames);
 
     public TypesOperationResult RemoveUntrackedFiles(
         TypesConfig config,
@@ -565,6 +579,46 @@ public sealed class TypesService : ITypesService
         return map is null ? Array.Empty<string>() : GetAllGeneratedFileNames(map, loadedModNames);
     }
 
+    public TypesLaunchIssues FindLaunchIssues(
+        TypesConfig config,
+        string mapName,
+        string typeFilesFolder,
+        IReadOnlySet<string> workshopModNames,
+        IReadOnlySet<string> loadedModNames)
+    {
+        MapTypesConfig? map = GetMap(config, mapName);
+        if (map is null)
+        {
+            return new TypesLaunchIssues(Array.Empty<string>(), Array.Empty<string>());
+        }
+
+        List<string> missingMods = map.Mods
+            .Where(entry => !workshopModNames.Contains(entry.ModName))
+            .Select(entry => entry.ModName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var missingFiles = new List<string>();
+        foreach (ModTypesEntry entry in map.Mods.Where(entry => loadedModNames.Contains(entry.ModName)))
+        {
+            foreach (string generated in entry.GeneratedFiles)
+            {
+                string leaf = Path.GetFileName(generated);
+                if (string.IsNullOrWhiteSpace(leaf))
+                {
+                    continue;
+                }
+
+                if (!_fileSystem.FileExists(Path.Combine(typeFilesFolder, leaf)))
+                {
+                    missingFiles.Add(leaf);
+                }
+            }
+        }
+
+        return new TypesLaunchIssues(missingMods, missingFiles);
+    }
+
     public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(
         TypesConfig config,
         string mapName,
@@ -599,23 +653,31 @@ public sealed class TypesService : ITypesService
         TypesTarget target,
         MapTypesConfig? map,
         List<string> messages,
-        IReadOnlySet<string> loadedModNames,
-        IReadOnlySet<string> owned)
+        IReadOnlySet<string> loadedModNames)
     {
         IReadOnlyList<(string Leaf, string Type)> files = map is null
             ? Array.Empty<(string Leaf, string Type)>()
             : GetOrderedEconomyFiles(map, loadedModNames);
 
+        bool unmanagedLegacy = false;
         try
         {
-            if (_economyCore.UpdateTypeFiles(
+            EconomyCoreUpdateResult result = _economyCore.UpdateTypeFiles(
                 target.MissionPath,
                 target.EconomyFolder,
                 files.Select(file => file.Leaf).ToList(),
-                owned,
-                GetEconomyFileTypes(files)))
+                GetEconomyFileTypes(files));
+
+            unmanagedLegacy = result.UnmanagedLegacyBlockDetected;
+            messages.AddRange(result.Warnings);
+            if (result.Success)
             {
-                return new TypesOperationResult { Success = true, Messages = messages };
+                return new TypesOperationResult
+                {
+                    Success = true,
+                    Messages = messages,
+                    UnmanagedLegacyBlockDetected = unmanagedLegacy,
+                };
             }
         }
         catch (Exception ex)
@@ -625,7 +687,12 @@ public sealed class TypesService : ITypesService
         }
 
         messages.Add("Failed to update cfgeconomycore.xml.");
-        return new TypesOperationResult { Success = false, Messages = messages };
+        return new TypesOperationResult
+        {
+            Success = false,
+            Messages = messages,
+            UnmanagedLegacyBlockDetected = unmanagedLegacy,
+        };
     }
 
     private bool TryRemoveEconomyEntries(string missionPath, IReadOnlyList<string> names, List<string> messages)

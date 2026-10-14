@@ -188,45 +188,69 @@ public class SettingsViewModelTests
     [Fact]
     public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenServerPathNotSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.False(raised);
     }
 
     [Fact]
     public void BrowseWorkshop_RaisesApplyRequested_WhenServerAndBatchSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         vm.Load(new Settings { ServerPath = @"D:\server", BatFileName = "run.bat" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.True(raised);
     }
 
     [Fact]
     public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenBatchNotSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         vm.Load(new Settings { ServerPath = @"D:\server" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.False(raised, "auto-apply must wait until a batch file is selected");
+    }
+
+    [Fact]
+    public void BrowseWorkshop_InvalidFolder_IsRefused_AndWarns()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\random" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\random", "stuff");
+        var vm = new SettingsViewModel(dialogs, fs);
+        vm.Load(new Settings { WorkshopPath = @"D:\existing\!Workshop" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\existing\!Workshop", vm.WorkshopPath);
+        Assert.False(raised);
+        Assert.NotNull(dialogs.LastErrorMessage);
     }
 
     [Fact]
@@ -355,13 +379,23 @@ public class SettingsViewModelTests
 
         public string? File { get; set; }
 
-        public void ShowMessage(string message, string title, bool isError = false) { }
+        public string? LastErrorMessage { get; private set; }
+
+        public void ShowMessage(string message, string title, bool isError = false)
+        {
+            if (isError)
+            {
+                LastErrorMessage = message;
+            }
+        }
 
         public bool Confirm(string message, string title) => true;
 
         public bool ConfirmWithWarning(string message, string title, string warning, string note = "") => true;
 
         public void ShowWarning(string message, string title, string warning, string note = "") { }
+
+        public void ShowAlert(string message, string title, string warning, string note = "") { }
 
         public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
 

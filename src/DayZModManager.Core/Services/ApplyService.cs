@@ -14,32 +14,11 @@ public sealed record ApplyContext
     public required string DataDirectory { get; init; }
 
     /// <summary>
-    /// The active preset's folder, where the mod order and types configuration are
-    /// persisted. Null when no map/preset is active yet; the mod order is then not
-    /// persisted.
+    /// The active map/preset's launch environment, or null when no map is applied.
+    /// When set, the preset folder, profile, config and junction key all come from
+    /// it, so Apply and map switching use the same resolved paths.
     /// </summary>
-    public string? PresetFolder { get; init; }
-
-    /// <summary>
-    /// Value written to the batch file's <c>serverProfile</c> line (the active
-    /// preset's profiles folder, relative to the server root). Null to leave the
-    /// line untouched.
-    /// </summary>
-    public string? ServerProfile { get; init; }
-
-    /// <summary>
-    /// Value written to the batch file's <c>serverConfig</c> line (the active
-    /// preset's <c>serverDZ.cfg</c>, relative to the server root). Null to leave
-    /// the line untouched.
-    /// </summary>
-    public string? ServerConfig { get; init; }
-
-    /// <summary>
-    /// The active preset's junction-folder key (its <c>instanceId</c> as a string).
-    /// Mods are exposed as <c>ModList/&lt;key&gt;/@mod</c> so each preset keeps its
-    /// own junctions. Null when no preset is active; junction work is then skipped.
-    /// </summary>
-    public string? ModListKey { get; init; }
+    public ServerEnvironment? Environment { get; init; }
 }
 
 /// <summary>Outcome of an Apply operation, including ordered human-readable logs.</summary>
@@ -50,17 +29,17 @@ public sealed record ApplyResult
     public IReadOnlyList<string> Logs { get; init; } = Array.Empty<string>();
 }
 
-    /// <summary>
-    /// Synchronizes the desired configuration with the actual server. Sequence:
-    /// validate, prepare junctions (non-destructive), update batch file, save
-    /// config, finalize junctions (destructive), verify. A preparation failure
-    /// aborts before the batch file or any configuration is touched; a batch-file
-    /// failure aborts before configuration is persisted and before any junction is
-    /// deleted or re-pointed, so a failed Apply never tears down the links the
-    /// unchanged launch batch file still depends on. Destructive junction cleanup
-    /// only runs after the configuration is committed and degrades to a warning
-    /// when a link cannot be removed.
-    /// </summary>
+/// <summary>
+/// Synchronizes the desired configuration with the actual server. Sequence:
+/// validate, prepare junctions (non-destructive), update the launch batch, save
+/// configuration, finalize junctions (destructive), verify. A preparation failure
+/// aborts before the batch file or any configuration is touched; a batch-file
+/// failure aborts before configuration is persisted and before any junction is
+/// deleted or re-pointed, so a failed Apply never tears down the links the
+/// unchanged launch batch file still depends on. Destructive junction cleanup
+/// only runs after the configuration is committed and degrades to a warning
+/// when a link cannot be removed.
+/// </summary>
 public interface IApplyService
 {
     ApplyResult Apply(ApplyContext context);
@@ -70,7 +49,7 @@ public sealed class ApplyService : IApplyService
 {
     private readonly ISettingsService _settings;
     private readonly IModOrderStore _modOrder;
-    private readonly IBatchFileService _batchFile;
+    private readonly ILaunchEnvironmentService _launch;
     private readonly IJunctionService _junctions;
     private readonly IValidationService _validation;
     private readonly IFileSystem _fileSystem;
@@ -78,14 +57,14 @@ public sealed class ApplyService : IApplyService
     public ApplyService(
         ISettingsService settings,
         IModOrderStore modOrder,
-        IBatchFileService batchFile,
+        ILaunchEnvironmentService launch,
         IJunctionService junctions,
         IValidationService validation,
         IFileSystem fileSystem)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _modOrder = modOrder ?? throw new ArgumentNullException(nameof(modOrder));
-        _batchFile = batchFile ?? throw new ArgumentNullException(nameof(batchFile));
+        _launch = launch ?? throw new ArgumentNullException(nameof(launch));
         _junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
         _validation = validation ?? throw new ArgumentNullException(nameof(validation));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
@@ -94,13 +73,14 @@ public sealed class ApplyService : IApplyService
     public ApplyResult Apply(ApplyContext context)
     {
         var logs = new List<string>();
+        ServerEnvironment? environment = context.Environment;
 
         // 1. Validate
         IReadOnlyList<string> errors = _validation.Validate(new ValidationContext
         {
             Settings = context.Settings,
             LoadedMods = context.LoadedMods,
-            ActiveServerConfigPath = ResolveActiveServerConfigPath(context),
+            ActiveServerConfigPath = ResolveActiveServerConfigPath(context, environment),
         });
 
         if (errors.Count > 0)
@@ -112,18 +92,28 @@ public sealed class ApplyService : IApplyService
 
         logs.Add("Validation passed.");
 
+        // Report missing mods once. They are tolerated: the mod stays in the -mod
+        // line and simply gets no junction. Only a launch is blocked by them, so an
+        // Apply must never fail because of one.
+        IReadOnlyList<string> missing =
+            _validation.FindMissingMods(context.Settings.WorkshopPath, context.LoadedMods);
+        if (missing.Count > 0)
+        {
+            logs.Add($"WARNING: {missing.Count} loaded mod(s) are missing from the workshop: {string.Join(", ", missing)}");
+        }
+
         // 2. Prepare junctions for the loaded mods under the active preset's own
         //    ModList subfolder. This phase is non-destructive: it creates missing
         //    junctions and validates that every target can be resolved, but it never
         //    deletes or re-points existing junctions. A failure aborts here so the
         //    batch file and configuration are never touched while a previously-working
         //    junction (or a still-referenced mod's link) is left broken.
-        bool junctionsEnabled = !string.IsNullOrWhiteSpace(context.ModListKey);
+        bool junctionsEnabled = !string.IsNullOrWhiteSpace(environment?.ModListKey);
         JunctionSyncResult prepared = junctionsEnabled
             ? _junctions.PrepareLoaded(
                 context.Settings.ServerPath,
                 context.Settings.WorkshopPath,
-                context.ModListKey!,
+                environment!.ModListKey,
                 context.LoadedMods)
             : new JunctionSyncResult();
 
@@ -135,45 +125,25 @@ public sealed class ApplyService : IApplyService
             return new ApplyResult { Success = false, Logs = logs };
         }
 
-        // 3. Update the batch file. A failure here aborts before any configuration
-        //    is persisted AND before any destructive junction work (re-pointing or
-        //    removing the links of unloaded mods), so the launch batch file and the
-        //    junctions the current mod set depends on stay consistent with each
-        //    other. Junctions created for newly-loaded mods are harmless and are
-        //    reconciled again on the next Apply. The previous contents are kept so
-        //    a later failure can restore the file instead of leaving it diverged.
-        IReadOnlyList<string> modPaths = junctionsEnabled
-            ? context.LoadedMods.Select(mod => ModListFolder.Entry(context.ModListKey!, mod)).ToList()
-            : new List<string>();
+        // 3. Update the launch batch file. A failure here aborts before any
+        //    configuration is persisted AND before any destructive junction work
+        //    (re-pointing or removing the links of unloaded mods), so the launch
+        //    batch file and the junctions the current mod set depends on stay
+        //    consistent with each other. Junctions created for newly-loaded mods are
+        //    harmless and are reconciled again on the next Apply. The previous
+        //    contents are kept so a later failure can restore the file instead of
+        //    leaving it diverged.
         string batchPath = context.Settings.BatFilePath;
         string? batchSnapshot = ReadFileSnapshot(batchPath);
-        bool serverConfigLineWritten = true;
         try
         {
-            if (!_batchFile.WriteModList(batchPath, modPaths))
+            LaunchWriteResult write = _launch.Write(context.Settings, environment, context.LoadedMods);
+            logs.AddRange(write.Messages);
+
+            if (!write.Success)
             {
-                logs.Add("ERROR: Failed to update the batch file. No changes were made.");
+                RestoreFileSnapshot(batchPath, batchSnapshot);
                 return new ApplyResult { Success = false, Logs = logs };
-            }
-
-            // Point the launcher at the active preset's environment. A missing
-            // serverProfile line means the template cannot isolate profiles per
-            // preset; warn but continue (the junction/mod configuration still
-            // applied). A missing serverConfig line is handled by copying the
-            // preset's serverDZ.cfg to the server root below.
-            if (!string.IsNullOrWhiteSpace(context.ServerProfile)
-                && !_batchFile.WriteServerProfile(batchPath, context.ServerProfile))
-            {
-                logs.Add("WARNING: The batch file has no serverProfile line; the preset's profiles folder will not be used.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(context.ServerConfig))
-            {
-                serverConfigLineWritten = _batchFile.WriteServerConfig(batchPath, context.ServerConfig);
-                if (!serverConfigLineWritten)
-                {
-                    logs.Add("WARNING: The batch file has no serverConfig line; the preset's serverDZ.cfg will be copied to the server root instead.");
-                }
             }
         }
         catch (Exception ex)
@@ -183,24 +153,15 @@ public sealed class ApplyService : IApplyService
             return new ApplyResult { Success = false, Logs = logs };
         }
 
-        // Fallback for templates without a serverConfig line: make the preset's
-        // serverDZ.cfg the server root config so the active preset still runs.
-        if (!serverConfigLineWritten)
-        {
-            CopyPresetConfigToServerRoot(context, logs);
-        }
-
-        logs.Add("Batch file updated.");
-
         // 4. Save configuration. Persisting can still fail (disk full, permissions,
         //    locked data directory). If it does, restore the batch file so the
         //    launcher does not reference a mod list that was never committed.
         try
         {
             _settings.Save(context.DataDirectory, context.Settings);
-            if (!string.IsNullOrWhiteSpace(context.PresetFolder))
+            if (!string.IsNullOrWhiteSpace(environment?.PresetFolder))
             {
-                _modOrder.Save(context.PresetFolder, context.LoadedMods);
+                _modOrder.Save(environment!.PresetFolder, context.LoadedMods);
             }
         }
         catch (Exception ex)
@@ -221,7 +182,7 @@ public sealed class ApplyService : IApplyService
             ? _junctions.Finalize(
                 context.Settings.ServerPath,
                 context.Settings.WorkshopPath,
-                context.ModListKey!,
+                environment!.ModListKey,
                 context.LoadedMods)
             : new JunctionSyncResult();
 
@@ -232,12 +193,12 @@ public sealed class ApplyService : IApplyService
         }
 
         // 6. Verify
-        IReadOnlyList<string> missing = junctionsEnabled
-            ? _junctions.Verify(context.Settings.ServerPath, context.ModListKey!, context.LoadedMods)
+        IReadOnlyList<string> unlinked = junctionsEnabled
+            ? _junctions.Verify(context.Settings.ServerPath, environment!.ModListKey, context.LoadedMods)
             : Array.Empty<string>();
-        if (missing.Count > 0)
+        if (unlinked.Count > 0)
         {
-            logs.Add($"WARNING: {missing.Count} loaded mod(s) have no junction: {string.Join(", ", missing)}");
+            logs.Add($"WARNING: {unlinked.Count} loaded mod(s) have no junction: {string.Join(", ", unlinked)}");
         }
 
         // 7. Report
@@ -252,56 +213,23 @@ public sealed class ApplyService : IApplyService
     /// <summary>
     /// Resolves the absolute path of the active preset's <c>serverDZ.cfg</c> so
     /// validation checks the configuration the server will actually load. Returns
-    /// null (the server-root config is validated instead) when no preset is active
-    /// or its config is not present yet - e.g. the very first Apply, before the
-    /// preset has been relocated from the bootstrap data directory to the path the
-    /// batch file references.
+    /// null (the server-root config is validated instead) when no environment is
+    /// active or its config is not present yet.
     /// </summary>
-    private string? ResolveActiveServerConfigPath(ApplyContext context)
+    private string? ResolveActiveServerConfigPath(ApplyContext context, ServerEnvironment? environment)
     {
-        if (string.IsNullOrWhiteSpace(context.ServerConfig)
+        if (environment is null
+            || string.IsNullOrWhiteSpace(environment.ServerConfig)
             || string.IsNullOrWhiteSpace(context.Settings.ServerPath))
         {
             return null;
         }
 
-        string path = Path.IsPathRooted(context.ServerConfig)
-            ? context.ServerConfig
-            : Path.Combine(context.Settings.ServerPath, context.ServerConfig);
+        string path = Path.IsPathRooted(environment.ServerConfig)
+            ? environment.ServerConfig
+            : Path.Combine(context.Settings.ServerPath, environment.ServerConfig);
 
         return _fileSystem.FileExists(path) ? path : null;
-    }
-
-    /// <summary>
-    /// Copies the active preset's <c>serverDZ.cfg</c> over the server root config
-    /// when the launch template has no <c>serverConfig</c> line, so the preset is
-    /// still the environment the server runs.
-    /// </summary>
-    private void CopyPresetConfigToServerRoot(ApplyContext context, List<string> logs)
-    {
-        if (string.IsNullOrWhiteSpace(context.PresetFolder)
-            || string.IsNullOrWhiteSpace(context.Settings.ServerPath))
-        {
-            return;
-        }
-
-        string presetConfig = Path.Combine(context.PresetFolder, ConfigFileNames.ServerConfig);
-        string rootConfig = Path.Combine(context.Settings.ServerPath, ConfigFileNames.ServerConfig);
-        if (!_fileSystem.FileExists(presetConfig)
-            || string.Equals(presetConfig, rootConfig, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        try
-        {
-            _fileSystem.CopyFile(presetConfig, rootConfig);
-            logs.Add("Copied the preset's serverDZ.cfg to the server root.");
-        }
-        catch (Exception ex)
-        {
-            logs.Add($"WARNING: Failed to copy the preset's serverDZ.cfg to the server root: {ex.Message}");
-        }
     }
 
     /// <summary>Reads a file's contents for later rollback, or null when it cannot be read.</summary>

@@ -46,7 +46,6 @@ public partial class PresetTypesViewModelTests
             saveGameService,
             typesConfigStore,
             new FakeServerConfigService(),
-            batchFileService,
             fileSystem,
             dialogs,
             new LogViewModel(),
@@ -55,7 +54,8 @@ public partial class PresetTypesViewModelTests
             serverProcess,
             processLauncher,
             presetService,
-            junctionService);
+            junctionService,
+            new LaunchEnvironmentService(batchFileService, fileSystem));
     }
 
     private static string PresetFolder(string mapName) =>
@@ -249,19 +249,18 @@ public partial class PresetTypesViewModelTests
 
         public int SyncEconomyCoreCalls { get; private set; }
 
-        public IReadOnlySet<string>? LastPreviouslyOwned { get; private set; }
-
         public string? LastEconomyFolder { get; private set; }
 
         public MapTypesConfig? LastEconomyMap { get; private set; }
 
-        public bool SyncEconomyCore(MapTypesConfig? map, string missionPath, string folder, IReadOnlySet<string> loadedModNames, IReadOnlySet<string>? previouslyOwned = null)
+        public TypesOperationResult SyncEconomyCoreResult { get; set; } = new() { Success = true };
+
+        public TypesOperationResult SyncEconomyCore(MapTypesConfig? map, string missionPath, string folder, IReadOnlySet<string> loadedModNames)
         {
             SyncEconomyCoreCalls++;
             LastEconomyMap = map;
             LastEconomyFolder = folder;
-            LastPreviouslyOwned = previouslyOwned;
-            return true;
+            return SyncEconomyCoreResult;
         }
 
         public string? ActiveTypesFolder { get; set; }
@@ -272,6 +271,12 @@ public partial class PresetTypesViewModelTests
 
         public IReadOnlyList<string> GetActiveTypeFileNames(
             TypesConfig config, string mapName, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
+
+        public TypesLaunchIssues LaunchIssues { get; set; } = new(Array.Empty<string>(), Array.Empty<string>());
+
+        public TypesLaunchIssues FindLaunchIssues(
+            TypesConfig config, string mapName, string typeFilesFolder,
+            IReadOnlySet<string> workshopModNames, IReadOnlySet<string> loadedModNames) => LaunchIssues;
     }
 
     private sealed class FakeTypesConfigStore : ITypesConfigStore
@@ -442,9 +447,9 @@ public partial class PresetTypesViewModelTests
     {
         public List<string> PresetNames { get; } = new() { PresetPaths.DefaultPresetName };
 
-        public List<(string Name, bool CopyProfiles)> Created { get; } = new();
+        public List<string> Created { get; } = new();
 
-        public List<(string SourceMap, string Source, string TargetMap, string NewName, bool CopyProfiles)> Duplicated { get; } = new();
+        public List<(string SourceMap, string Source, string TargetMap, string NewName)> Duplicated { get; } = new();
 
         public List<(string OldName, string NewName)> Renamed { get; } = new();
 
@@ -462,6 +467,40 @@ public partial class PresetTypesViewModelTests
             PresetExists(dataDirectory, mapName, presetName)
                 ? null
                 : $"serverDZ.cfg is missing for {presetName}";
+
+        public EnvironmentResolution ResolveEnvironment(
+            Settings settings, string dataDirectory, string mapName, string presetName,
+            string? presetLookupDirectory = null)
+        {
+            if (string.IsNullOrWhiteSpace(mapName))
+            {
+                return new EnvironmentResolution(null, null);
+            }
+
+            string lookup = string.IsNullOrWhiteSpace(presetLookupDirectory) ? dataDirectory : presetLookupDirectory;
+            string active = string.IsNullOrWhiteSpace(presetName) ? PresetPaths.DefaultPresetName : presetName;
+            if (!PresetExists(lookup, mapName, active))
+            {
+                active = PresetPaths.DefaultPresetName;
+            }
+
+            if (!PresetExists(lookup, mapName, active))
+            {
+                return EnvironmentResolution.Failed($"preset \"{active}\" is incomplete");
+            }
+
+            return EnvironmentResolution.Resolved(new ServerEnvironment
+            {
+                MapName = mapName,
+                PresetName = active,
+                PresetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, active),
+                ServerProfile = PresetPaths.RelativeToServer(
+                    settings.ServerPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, active)),
+                ServerConfig = PresetPaths.RelativeToServer(
+                    settings.ServerPath, PresetPaths.ServerConfigPath(dataDirectory, mapName, active)),
+                ModListKey = ModListFolder.PresetKey(ReadInstanceId(lookup, mapName, active)),
+            });
+        }
 
         public IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName) =>
             PresetNames.ToList();
@@ -481,7 +520,7 @@ public partial class PresetTypesViewModelTests
         }
 
         public PresetResult CreatePreset(
-            string serverPath, string dataDirectory, string mapName, string presetName, bool copyProfilesFromDefault)
+            string serverPath, string dataDirectory, string mapName, string presetName)
         {
             if (PresetNames.Any(n => string.Equals(n, presetName, StringComparison.OrdinalIgnoreCase)))
             {
@@ -489,14 +528,14 @@ public partial class PresetTypesViewModelTests
             }
 
             PresetNames.Add(presetName);
-            Created.Add((presetName, copyProfilesFromDefault));
+            Created.Add(presetName);
             return new() { Success = true, Message = $"Created \"{presetName}\"." };
         }
 
         public PresetResult DuplicatePreset(
             string serverPath, string dataDirectory,
             string sourceMapName, string sourcePresetName,
-            string targetMapName, string newPresetName, bool copyProfiles)
+            string targetMapName, string newPresetName)
         {
             if (PresetNames.Any(n => string.Equals(n, newPresetName, StringComparison.OrdinalIgnoreCase)))
             {
@@ -504,7 +543,7 @@ public partial class PresetTypesViewModelTests
             }
 
             PresetNames.Add(newPresetName);
-            Duplicated.Add((sourceMapName, sourcePresetName, targetMapName, newPresetName, copyProfiles));
+            Duplicated.Add((sourceMapName, sourcePresetName, targetMapName, newPresetName));
             return new() { Success = true, Message = $"Duplicated \"{sourcePresetName}\" to \"{newPresetName}\"." };
         }
 
@@ -671,12 +710,28 @@ public partial class PresetTypesViewModelTests
             return ConfirmResult;
         }
 
-        public void ShowWarning(string message, string title, string warning, string note = "")
-        {
-            ShowWarningCalls++;
-            LastWarningMessage = warning;
-            LastWarningNote = note;
-        }
+    public void ShowWarning(string message, string title, string warning, string note = "")
+    {
+        ShowWarningCalls++;
+        LastWarningMessage = warning;
+        LastWarningNote = note;
+    }
+
+    public int ShowAlertCalls { get; private set; }
+
+    public string? LastAlertMessage { get; private set; }
+
+    public string? LastAlertWarning { get; private set; }
+
+    public string? LastAlertNote { get; private set; }
+
+    public void ShowAlert(string message, string title, string warning, string note = "")
+    {
+        ShowAlertCalls++;
+        LastAlertMessage = message;
+        LastAlertWarning = warning;
+        LastAlertNote = note;
+    }
 
         public string? AskText(string title, string prompt, string defaultValue = "") => AskTextResult;
 

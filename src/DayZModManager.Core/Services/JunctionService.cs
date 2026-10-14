@@ -131,11 +131,12 @@ public sealed class JunctionService : IJunctionService
 
                 // The link points at a different target (e.g. the workshop path
                 // changed). Re-pointing is destructive, so it is deferred to
-                // Finalize; only verify now that the new target can be resolved so
-                // a doomed Apply fails before the batch file is touched.
+                // Finalize. When the new target is missing, leave the link intact
+                // and skip it: a missing mod does not fail an Apply (it is only
+                // reported at launch).
                 if (!_fileSystem.DirectoryExists(target))
                 {
-                    failed++;
+                    skipped++;
                     messages.Add($"Mod not found in workshop: {mod}");
                 }
 
@@ -151,7 +152,9 @@ public sealed class JunctionService : IJunctionService
 
             if (!_fileSystem.DirectoryExists(target))
             {
-                failed++;
+                // Missing mods are tolerated by Apply (no junction is created);
+                // the launch preflight blocks starting the server instead.
+                skipped++;
                 messages.Add($"Mod not found in workshop: {mod}");
                 continue;
             }
@@ -181,7 +184,7 @@ public sealed class JunctionService : IJunctionService
     public JunctionSyncResult Finalize(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
         var messages = new List<string>();
-        int created = 0, removed = 0, failed = 0;
+        int created = 0, removed = 0, skipped = 0, failed = 0;
 
         string junctionDir = ModListFolder.Directory(serverPath, presetKey);
         if (!_fileSystem.DirectoryExists(junctionDir))
@@ -216,7 +219,7 @@ public sealed class JunctionService : IJunctionService
 
             if (!_fileSystem.DirectoryExists(target))
             {
-                failed++;
+                skipped++;
                 messages.Add($"Mod not found in workshop: {mod}");
                 continue;
             }
@@ -267,7 +270,7 @@ public sealed class JunctionService : IJunctionService
         {
             Created = created,
             Removed = removed,
-            Skipped = 0,
+            Skipped = skipped,
             Failed = failed,
             Messages = messages,
         };

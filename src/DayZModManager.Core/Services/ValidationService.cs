@@ -25,6 +25,15 @@ public sealed record ValidationContext
 public interface IValidationService
 {
     IReadOnlyList<string> Validate(ValidationContext context);
+
+    /// <summary>
+    /// Returns the loaded mods that are absent from the Workshop directory. Apply
+    /// tolerates missing mods (their junctions are simply skipped), so this is used
+    /// only by the launch preflight to block a server launch. Returns an empty list
+    /// when the Workshop path is unset or does not exist (the Workshop error is
+    /// reported by <see cref="Validate"/> in that case).
+    /// </summary>
+    IReadOnlyList<string> FindMissingMods(string workshopPath, IReadOnlyList<string> loadedMods);
 }
 
 public sealed class ValidationService : IValidationService
@@ -50,14 +59,19 @@ public sealed class ValidationService : IValidationService
         ValidateServer(settings.ServerPath, context.ActiveServerConfigPath, errors);
         ValidateBatch(settings.BatFilePath, errors);
 
-        // Only check individual mods when the workshop directory actually exists,
-        // otherwise every loaded mod is reported missing on top of the real error.
-        if (!string.IsNullOrWhiteSpace(settings.WorkshopPath) && _fileSystem.DirectoryExists(settings.WorkshopPath))
+        return errors;
+    }
+
+    public IReadOnlyList<string> FindMissingMods(string workshopPath, IReadOnlyList<string> loadedMods)
+    {
+        if (string.IsNullOrWhiteSpace(workshopPath) || !_fileSystem.DirectoryExists(workshopPath))
         {
-            ValidateMods(settings.WorkshopPath, context.LoadedMods, errors);
+            return Array.Empty<string>();
         }
 
-        return errors;
+        return loadedMods
+            .Where(mod => !_fileSystem.DirectoryExists(Path.Combine(workshopPath, mod)))
+            .ToList();
     }
 
     private void ValidateWorkshop(string workshopPath, List<string> errors)
@@ -65,10 +79,21 @@ public sealed class ValidationService : IValidationService
         if (string.IsNullOrWhiteSpace(workshopPath))
         {
             errors.Add("Workshop path is not set.");
+            return;
         }
-        else if (!_fileSystem.DirectoryExists(workshopPath))
+
+        if (!_fileSystem.DirectoryExists(workshopPath))
         {
             errors.Add($"Workshop directory not found: {workshopPath}");
+            return;
+        }
+
+        if (!WorkshopPathResolver.IsValidWorkshopPath(_fileSystem, workshopPath))
+        {
+            errors.Add(
+                "Workshop path is not a valid DayZ Workshop or mods folder (choose the DayZ " +
+                "\"!Workshop\" folder, the DayZ game folder, or a folder that directly contains " +
+                $"\"@...\" mod folders): {workshopPath}");
         }
     }
 
@@ -115,17 +140,6 @@ public sealed class ValidationService : IValidationService
         else if (!_batchFile.HasModListLine(batFilePath))
         {
             errors.Add($"Batch file does not contain a modList line: {batFilePath}");
-        }
-    }
-
-    private void ValidateMods(string workshopPath, IReadOnlyList<string> loadedMods, List<string> errors)
-    {
-        foreach (string mod in loadedMods)
-        {
-            if (!_fileSystem.DirectoryExists(Path.Combine(workshopPath, mod)))
-            {
-                errors.Add($"Mod not found in workshop: {mod}");
-            }
         }
     }
 }

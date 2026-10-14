@@ -5,8 +5,8 @@ using DayZModManager.Core.Services;
 
 namespace DayZModManager.App.Dialogs;
 
-/// <summary>Name and copy-profiles choice gathered by the preset prompt window.</summary>
-public sealed record PresetNameInput(string Name, bool CopyProfiles);
+/// <summary>Name gathered by the preset prompt window.</summary>
+public sealed record PresetNameInput(string Name);
 
 public partial class AddPresetWindow : Window
 {
@@ -14,21 +14,17 @@ public partial class AddPresetWindow : Window
         : this(
             "Add Preset",
             $"Preset name for {mapName}:",
-            "Copy profiles data from __default_preset__",
-            checkboxDefault: false,
             "Create")
     {
     }
 
     public AddPresetWindow(
-        string windowTitle, string prompt, string checkboxContent, bool checkboxDefault, string confirmContent,
+        string windowTitle, string prompt, string confirmContent,
         IReadOnlyList<string>? maps = null, string? defaultMap = null)
     {
         InitializeComponent();
         Title = windowTitle;
         PromptText.Text = prompt;
-        CopyProfilesBox.Content = checkboxContent;
-        CopyProfilesBox.IsChecked = checkboxDefault;
         ConfirmButton.Content = confirmContent;
 
         // The destination-map row is only shown when a map list is supplied (the
@@ -71,7 +67,7 @@ public partial class AddPresetWindow : Window
             return;
         }
 
-        Result = new PresetNameInput(name, CopyProfilesBox.IsChecked == true);
+        Result = new PresetNameInput(name);
         DialogResult = true;
     }
 

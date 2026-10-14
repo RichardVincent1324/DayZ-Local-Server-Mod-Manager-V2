@@ -23,10 +23,15 @@ public class ApplyServiceTests
             },
             LoadedMods = loadedMods,
             DataDirectory = DataDirectory,
-            PresetFolder = PresetDir,
-            ServerProfile = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\profiles",
-            ServerConfig = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\serverDZ.cfg",
-            ModListKey = "1",
+            Environment = new ServerEnvironment
+            {
+                MapName = "dayzOffline.chernarusplus",
+                PresetName = PresetPaths.DefaultPresetName,
+                PresetFolder = PresetDir,
+                ServerProfile = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\profiles",
+                ServerConfig = @"DayZ-Mod-Manager-V2\Presets\dayzOffline.chernarusplus\__default_preset__\serverDZ.cfg",
+                ModListKey = "1",
+            },
         };
 
     private static FakeFileSystem SeedValidEnvironment()
@@ -47,7 +52,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            batchFile,
+            new LaunchEnvironmentService(batchFile, fs),
             new JunctionService(fs, junctions),
             new ValidationService(fs, batchFile),
             fs);
@@ -73,6 +78,30 @@ public class ApplyServiceTests
 
         // Junction created under the preset's ModList subfolder
         Assert.True(junctions.IsJunction(Path.Combine(ModListFolder.Directory(ServerPath, "1"), "@CF")));
+    }
+
+    [Fact]
+    public void Apply_WithMissingMod_KeepsItInModListWithoutJunction_AndSucceeds()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        (ApplyService service, FakeFileSystem _, FakeJunctionOperations junctions) = CreateRealServices(fs);
+
+        // @Ghost is loaded but absent from the workshop. A missing mod is tolerated:
+        // it stays in the -mod line and simply gets no junction. Only a launch is
+        // blocked by it.
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF", "@Ghost" }));
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Logs, l => l.Contains("@Ghost"));
+
+        string batch = fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!;
+        Assert.Contains("ModList/1/@Ghost;", batch);
+
+        Assert.True(junctions.IsJunction(Path.Combine(ModListFolder.Directory(ServerPath, "1"), "@CF")));
+        Assert.False(junctions.IsJunction(Path.Combine(ModListFolder.Directory(ServerPath, "1"), "@Ghost")));
+
+        IReadOnlyList<string> savedOrder = new ModOrderStore(fs).Load(PresetDir).Value!;
+        Assert.Equal(new[] { "@CF", "@Ghost" }, savedOrder);
     }
 
     [Fact]
@@ -105,7 +134,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            stubBatch,
+            new LaunchEnvironmentService(stubBatch, fs),
             new JunctionService(fs, junctions),
             new ValidationService(fs, realBatch),
             fs);
@@ -161,7 +190,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            stubBatch,
+            new LaunchEnvironmentService(stubBatch, fs),
             new JunctionService(fs, junctions),
             new ValidationService(fs, new BatchFileService(fs)),
             fs);
@@ -195,7 +224,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new ThrowingSettingsService(new SettingsService(fs)),
             new ModOrderStore(fs),
-            batchFile,
+            new LaunchEnvironmentService(batchFile, fs),
             new JunctionService(fs, junctions),
             new ValidationService(fs, batchFile),
             fs);

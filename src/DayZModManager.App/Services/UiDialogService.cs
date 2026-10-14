@@ -1,4 +1,5 @@
 using System.IO;
+using System.Media;
 using System.Windows;
 using DayZModManager.App.Dialogs;
 using DayZModManager.App.ViewModels;
@@ -40,6 +41,13 @@ public sealed class UiDialogService : IDialogService
         window.ShowDialog();
     }
 
+    public void ShowAlert(string message, string title, string warning, string note = "")
+    {
+        SystemSounds.Exclamation.Play();
+        var window = new WarningConfirmWindow(message, title, warning, note, informational: true);
+        window.ShowDialog();
+    }
+
     public string? AskText(string title, string prompt, string defaultValue = "")
     {
         var window = new TextPromptWindow(title, prompt, defaultValue);
@@ -50,7 +58,7 @@ public sealed class UiDialogService : IDialogService
     {
         var window = new AddPresetWindow(mapName);
         return window.ShowDialog() == true && window.Result is { } input
-            ? new AddPresetRequest(input.Name, input.CopyProfiles)
+            ? new AddPresetRequest(input.Name)
             : null;
     }
 
@@ -59,13 +67,11 @@ public sealed class UiDialogService : IDialogService
         var window = new AddPresetWindow(
             "Duplicate Preset",
             $"Name for the copy of \"{sourcePresetName}\":",
-            "Also copy profiles data from the current preset",
-            checkboxDefault: false,
             "Duplicate",
             maps,
             defaultMap);
         return window.ShowDialog() == true && window.Result is { } input
-            ? new DuplicatePresetRequest(input.Name, input.CopyProfiles, window.SelectedDestinationMap ?? string.Empty)
+            ? new DuplicatePresetRequest(input.Name, window.SelectedDestinationMap ?? string.Empty)
             : null;
     }
 

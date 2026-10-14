@@ -21,7 +21,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private readonly ISaveGameService _saveGameService;
     private readonly ITypesConfigStore _typesConfigStore;
     private readonly IServerConfigService _serverConfig;
-    private readonly IBatchFileService _batchFile;
     private readonly IFileSystem _fileSystem;
     private readonly IDialogService _dialogs;
     private readonly LogViewModel _log;
@@ -31,6 +30,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private readonly IProcessLauncher _processLauncher;
     private readonly IPresetService _presetService;
     private readonly IJunctionService _junctions;
+    private readonly ILaunchEnvironmentService _launchEnvironment;
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
     private string _batFileName = string.Empty;
@@ -56,7 +56,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         ISaveGameService saveGameService,
         ITypesConfigStore typesConfigStore,
         IServerConfigService serverConfig,
-        IBatchFileService batchFile,
         IFileSystem fileSystem,
         IDialogService dialogs,
         LogViewModel log,
@@ -65,14 +64,14 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         IDayZServerProcessState serverProcess,
         IProcessLauncher processLauncher,
         IPresetService presetService,
-        IJunctionService junctions)
+        IJunctionService junctions,
+        ILaunchEnvironmentService launchEnvironment)
     {
         _mapService = mapService;
         _typesService = typesService;
         _saveGameService = saveGameService;
         _typesConfigStore = typesConfigStore;
         _serverConfig = serverConfig;
-        _batchFile = batchFile;
         _fileSystem = fileSystem;
         _dialogs = dialogs;
         _log = log;
@@ -82,6 +81,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _processLauncher = processLauncher;
         _presetService = presetService;
         _junctions = junctions;
+        _launchEnvironment = launchEnvironment;
 
         ConfigureModCommand = new RelayCommand<string>(ConfigureMod, () => MapApplied);
         OpenTypeFilesFolderCommand = new RelayCommand(OpenTypeFilesFolder, () => MapApplied);

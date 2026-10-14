@@ -434,5 +434,64 @@ public partial class PresetTypesViewModelTests
         Assert.Equal(MapName, vm.SelectedMap);
         Assert.False(store.SaveCalled);
     }
+
+    [Fact]
+    public async Task SelectingAMap_EnvironmentApplyFails_LeavesNothingCommitted()
+    {
+        const string secondMap = "dayzOffline.deerisle";
+        var config = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Maps = { [MapName] = new MapTypesConfig() },
+        };
+        var store = new FakeTypesConfigStore();
+        var batch = new FakeBatchFileService();
+        var mapService = new FakeMapService(
+            new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
+            new MapInfo(secondMap, $@"{ServerPath}\mpmissions\{secondMap}"));
+
+        string? persisted = null;
+        PresetTypesViewModel vm = Create(
+            config, mapService: mapService, typesConfigStore: store, batchFileService: batch);
+        vm.PersistActiveSelection = (_, preset) => persisted = preset;
+        vm.ActivatePreset = (_, _) => Task.FromResult(false);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        vm.SelectedMap = secondMap;
+        await WaitUntilAsync(() => !vm.IsBusy);
+
+        // The environment apply failed, so nothing about the switch is committed.
+        Assert.Equal(MapName, config.CurrentMap);
+        Assert.False(store.SaveCalled);
+        Assert.Null(batch.LastServerProfile);
+        Assert.Null(persisted);
+        Assert.Equal(MapName, vm.SelectedMap);
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_FirstRun_ReturnsAppliedMap()
+    {
+        var config = new TypesConfig();
+        var store = new FakeTypesConfigStore();
+
+        PresetTypesViewModel vm = Create(config, typesConfigStore: store);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        string? applied = vm.ReconcileAppliedMap();
+
+        // The shell uses the returned map to provision its mod list and junctions.
+        Assert.Equal(MapName, applied);
+    }
+
+    [Fact]
+    public void ReconcileAppliedMap_AlreadyApplied_ReturnsNull()
+    {
+        var config = new TypesConfig { CurrentMap = MapName };
+
+        PresetTypesViewModel vm = Create(config);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+
+        Assert.Null(vm.ReconcileAppliedMap());
+    }
 }
 

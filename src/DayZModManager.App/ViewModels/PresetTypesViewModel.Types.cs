@@ -99,27 +99,69 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Regenerates the manager-owned type_files block in cfgeconomycore.xml for the
-    /// applied map. The block points at whichever types are active: the configured
-    /// <c>type_files</c>, or the loaded save's own type_files folder.
-    /// </summary>
-    public bool SyncEconomyCore(IReadOnlySet<string>? previouslyOwned = null)
-    {
-        string? missionPath = ResolveAppliedMapPath();
-        if (missionPath is null)
-        {
-            return false;
-        }
-
-        bool updated = _typesService.SyncEconomyCore(
-            ActiveMapConfig(), missionPath, ActiveCeFolderValue(missionPath), LoadedSet(), previouslyOwned);
-        if (!updated)
-        {
-            _log.Warning("Failed to update cfgeconomycore.xml.");
-        }
-
-        return updated;
-    }
+	/// Regenerates the manager-owned (marked) type_files block in cfgeconomycore.xml
+	/// for the applied map. The block points at whichever types are active: the
+	/// configured <c>type_files</c>, or the loaded save's own type_files folder. The
+	/// block is fully overwritten, so a preset switch cannot accumulate entries from
+	/// a previously active preset; unmanaged blocks are left untouched.
+	/// </summary>
+	public bool SyncEconomyCore()
+	{
+		string? missionPath = ResolveAppliedMapPath();
+		if (missionPath is null)
+		{
+			return false;
+		}
+	
+		TypesOperationResult result = _typesService.SyncEconomyCore(
+			ActiveMapConfig(), missionPath, ActiveCeFolderValue(missionPath), LoadedSet());
+	
+		foreach (string message in result.Messages)
+		{
+			_log.Warning(message);
+		}
+	
+		SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+	
+		if (!result.Success)
+		{
+			_log.Warning("Failed to update cfgeconomycore.xml.");
+		}
+	
+		return result.Success;
+	}
+	
+	/// <summary>Title of the one-time unmanaged CE block alert.</summary>
+	private const string UnmanagedCeAlertTitle = "Unmanaged CE block detected";
+	
+	/// <summary>Red-banner body of the one-time unmanaged CE block alert.</summary>
+	private const string UnmanagedCeAlertWarning =
+		"DayZ loads all <ce> blocks simultaneously. Please manually remove the old unmarked <ce> " +
+		"from cfgeconomycore.xml to avoid duplicate type loading / server boot issues.";
+	
+	/// <summary>
+	/// Raises the alert when a sync created the V2 marker while an unmanaged legacy
+	/// <c>&lt;ce&gt;</c> block was present. Core only reports this when it creates the
+	/// marker, so a given <c>cfgeconomycore.xml</c> alerts once (on its first sync);
+	/// each affected map's config alerts independently.
+	/// </summary>
+	private void SurfaceUnmanagedCeAlert(bool detected, string missionPath)
+	{
+		if (!detected)
+		{
+			return;
+		}
+	
+		string cfgXmlPath = Path.Combine(missionPath, "cfgeconomycore.xml");
+		string alertMessage = "Detected an unmanaged <ce> block in cfgeconomycore.xml. A new managed <ce> block has been created.";
+		string alertNote = $"To edit and remove the old entry, open:\n{cfgXmlPath}";
+	
+		_dialogs.ShowAlert(
+			alertMessage,
+			UnmanagedCeAlertTitle,
+			UnmanagedCeAlertWarning,
+			alertNote);
+	}
 
     private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
 
@@ -272,6 +314,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             TypesOperationResult result = _typesService.ConfigureMod(
                 _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
 
+            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
             LogOperation(result, "Types configuration completed.");
         }
         catch (Exception ex)
@@ -343,6 +386,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
 
             bool success = true;
+            bool unmanagedLegacy = false;
             var messages = new List<string>();
             foreach (IGrouping<string, TypesRowViewModel> group in trackedRows.GroupBy(r => r.ModName, StringComparer.Ordinal))
             {
@@ -350,6 +394,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 TypesOperationResult result = _typesService.RemoveFiles(
                     _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
                 messages.AddRange(result.Messages);
+                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
                 if (!result.Success)
                 {
                     success = false;
@@ -361,6 +406,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 TypesOperationResult result = _typesService.RemoveUntrackedFiles(
                     _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), untrackedLeaves);
                 messages.AddRange(result.Messages);
+                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
                 if (!result.Success)
                 {
                     success = false;
@@ -371,6 +417,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 _log.Info(message);
             }
+
+            SurfaceUnmanagedCeAlert(unmanagedLegacy, missionPath);
 
             if (success)
             {
@@ -461,6 +509,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 _log.Info(message);
             }
+
+            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
 
             if (result.Success)
             {
@@ -609,6 +659,38 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         {
             _log.Error($"Failed to open the type_files folder: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Returns the launch-blocking problems with the active map's types
+    /// configuration: entries whose mod is missing from the Workshop, and generated
+    /// files of loaded mods that are absent from the preset's <c>type_files</c>
+    /// folder. Empty when the types configuration is ready to launch.
+    /// </summary>
+    public IReadOnlyList<string> PreflightTypesIssues()
+    {
+        if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            return Array.Empty<string>();
+        }
+
+        var workshop = new HashSet<string>(_allMods, StringComparer.OrdinalIgnoreCase);
+        var loaded = new HashSet<string>(_loadedMods, StringComparer.OrdinalIgnoreCase);
+        TypesLaunchIssues issues = _typesService.FindLaunchIssues(
+            _typesConfig, _typesConfig.CurrentMap, PresetTypeFilesFolder(_typesConfig.CurrentMap), workshop, loaded);
+
+        var messages = new List<string>();
+        if (issues.MissingMods.Count > 0)
+        {
+            messages.Add($"Types configuration references mod(s) missing from the Workshop: {string.Join(", ", issues.MissingMods)}");
+        }
+
+        if (issues.MissingFiles.Count > 0)
+        {
+            messages.Add($"Types file(s) referenced by cfgeconomycore.xml are missing from type_files: {string.Join(", ", issues.MissingFiles)}");
+        }
+
+        return messages;
     }
 }
 

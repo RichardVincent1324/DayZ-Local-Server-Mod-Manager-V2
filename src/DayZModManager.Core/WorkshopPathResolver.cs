@@ -14,6 +14,47 @@ public static class WorkshopPathResolver
     /// <summary>Name of the DayZ Workshop subfolder that hosts the <c>@mod</c> folders.</summary>
     public const string WorkshopFolderName = "!Workshop";
 
+    /// <summary>Name of the DayZ game folder installed by Steam.</summary>
+    public const string GameFolderName = "DayZ";
+
+    /// <summary>
+    /// True when <paramref name="path"/> is a plausible DayZ Workshop or mods
+    /// folder. A Steam folder is recognised by its name (<c>!Workshop</c> or the
+    /// <c>DayZ</c> game folder); any other folder must directly contain at least
+    /// one <c>@mod</c> directory. The content check is deliberately non-recursive:
+    /// a parent folder such as <c>...\steamapps\common</c> that only holds the real
+    /// folder one level deeper is rejected.
+    /// </summary>
+    public static bool IsValidWorkshopPath(IFileSystem fileSystem, string? path)
+    {
+        if (fileSystem is null)
+        {
+            throw new ArgumentNullException(nameof(fileSystem));
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        string normalized = Path.TrimEndingDirectorySeparator(path.Trim());
+        if (!fileSystem.DirectoryExists(normalized))
+        {
+            return false;
+        }
+
+        string name = Path.GetFileName(normalized);
+        if (string.Equals(name, WorkshopFolderName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, GameFolderName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return fileSystem
+            .GetDirectories(normalized)
+            .Any(child => child.StartsWith("@", StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// Returns the effective workshop folder for <paramref name="selectedPath"/>:
     /// the path itself when it is already the <c>!Workshop</c> folder (by name) or

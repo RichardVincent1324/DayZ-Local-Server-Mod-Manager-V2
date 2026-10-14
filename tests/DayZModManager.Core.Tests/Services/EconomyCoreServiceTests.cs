@@ -8,6 +8,8 @@ public class EconomyCoreServiceTests
 {
     private const string MissionPath = @"D:\DayZServer\mpmissions\dayzOffline.chernarusplus";
 
+    private const string Marker = "dzmmv2-managed-by=\"DayZ-Mod-Manager-V2\"";
+
     private const string ConfigXml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
         <economycore>
@@ -20,11 +22,6 @@ public class EconomyCoreServiceTests
         </economycore>
         """;
 
-    private static IReadOnlySet<string> Set(params string[] names) =>
-        new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
-
-    private static IReadOnlySet<string> Empty() => Set();
-
     private static IReadOnlyDictionary<string, string> Types(params string[] names)
     {
         var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -36,28 +33,39 @@ public class EconomyCoreServiceTests
         return types;
     }
 
+    private static IReadOnlySet<string> Set(params string[] names) =>
+        new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+
     private static XDocument Parse(string xml) => XDocument.Parse(xml);
 
-    private static XElement? FindCe(XDocument doc) =>
-        doc.Descendants("ce").FirstOrDefault(c => (string?)c.Attribute("folder") == "./db/type_files");
+    private static XElement? FindManaged(XDocument doc) =>
+        doc.Descendants("ce").FirstOrDefault(c => (string?)c.Attribute("dzmmv2-managed-by") == "DayZ-Mod-Manager-V2");
+
+    private static List<string?> FileNames(XElement ce) =>
+        ce.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
+
+    private static EconomyCoreService CreateService(FakeFileSystem fs) => new(fs);
 
     [Fact]
-    public void UpdateTypeFiles_InsertsCeBlockBeforeClasses()
+    public void UpdateTypeFiles_CreatesManagedBlock_BeforeClasses()
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        bool result = service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" }, Empty(),
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" },
             Types("CF_types.xml", "Expansion_spawnabletypes.xml"));
 
-        Assert.True(result);
+        Assert.True(result.Success);
+        Assert.Empty(result.Warnings);
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
 
-        XElement? ce = FindCe(doc);
+        XElement? ce = FindManaged(doc);
         Assert.NotNull(ce);
+        Assert.Equal("./db/type_files", (string?)ce!.Attribute("folder"));
 
-        var files = ce!.Elements("file").ToList();
+        var files = ce.Elements("file").ToList();
         Assert.Equal(2, files.Count);
         Assert.Equal("CF_types.xml", (string?)files[0].Attribute("name"));
         Assert.Equal("types", (string?)files[0].Attribute("type"));
@@ -74,88 +82,133 @@ public class EconomyCoreServiceTests
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
-        var service = new EconomyCoreService(fs);
-        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["CF_types.xml"] = "spawnabletypes",
-        };
+        var service = CreateService(fs);
+        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["CF_types.xml"] = "spawnabletypes" };
 
-        bool result = service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Empty(), types);
+        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, types);
 
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement file = FindCe(doc)!.Elements("file").Single();
+        XElement file = FindManaged(Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!))!
+            .Elements("file").Single();
         Assert.Equal("spawnabletypes", (string?)file.Attribute("type"));
     }
 
     [Fact]
-    public void UpdateTypeFiles_CorrectsTypeOnExistingEntry()
-    {
-        // The entry is present in the right order but carries a stale type; the
-        // explicit type must still trigger a rewrite.
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="./db/type_files">
-            		<file name="SpawnableItems_types.xml" type="spawnabletypes" />
-            	</ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["SpawnableItems_types.xml"] = "types",
-        };
-
-        bool result = service.UpdateTypeFiles(MissionPath, new[] { "SpawnableItems_types.xml" }, Empty(), types);
-
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement file = FindCe(doc)!.Elements("file").Single();
-        Assert.Equal("types", (string?)file.Attribute("type"));
-    }
-
-    [Fact]
-    public void UpdateTypeFiles_RemovesOnlyOwnedStaleEntries_KeepsBaseAndThirdParty()
+    public void UpdateTypeFiles_FullyOverwritesManagedBlock_AndRewritesFolder()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
-            		<file name="types.xml" type="types" />
-            		<file name="cfgspawnabletypes.xml" type="spawnabletypes" />
-            		<file name="CF_types.xml" type="types" />
+            	<ce folder="../../old/type_files" {Marker}>
             		<file name="OldMod_types.xml" type="types" />
+            		<file name="CF_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        // OldMod is no longer desired and is app-owned -> removed; base + CF kept.
-        bool result = service.UpdateTypeFiles(
-            MissionPath,
-            new[] { "CF_types.xml" },
-            Set("CF_types.xml", "OldMod_types.xml"),
-            Types("CF_types.xml"));
+        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Types("CF_types.xml"));
 
-        Assert.True(result);
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-
-        var names = ce!.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Contains("types.xml", names);
-        Assert.Contains("cfgspawnabletypes.xml", names);
-        Assert.Contains("CF_types.xml", names);
-        Assert.DoesNotContain("OldMod_types.xml", names);
+        XElement ce = FindManaged(doc)!;
+        Assert.Single(doc.Descendants("ce"));
+        Assert.Equal("./db/type_files", (string?)ce.Attribute("folder"));
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(ce));
     }
 
     [Fact]
-    public void UpdateTypeFiles_EmptyDesired_PreservesNonOwnedEntries()
+    public void UpdateTypeFiles_EmptyDesired_KeepsEmptyManagedBlock_AndPreservesBase()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/type_files">
+            		<file name="types.xml" type="types" />
+            	</ce>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files" {Marker}>
+            		<file name="CF_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        service.UpdateTypeFiles(MissionPath, "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", Array.Empty<string>(), Types());
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        XElement ce = FindManaged(doc)!;
+        Assert.Empty(ce.Elements("file"));
+        Assert.Equal("../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", (string?)ce.Attribute("folder"));
+
+        // The base block is untouched.
+        XElement baseCe = doc.Descendants("ce").Single(c => (string?)c.Attribute("folder") == "./db/type_files");
+        Assert.Equal(new[] { "types.xml" }, FileNames(baseCe));
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_UnmanagedLegacyBlock_LeftUntouched_AndWarns()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files">
+            		<file name="Legacy_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        Assert.True(result.Success);
+        Assert.NotEmpty(result.Warnings);
+        Assert.True(result.UnmanagedLegacyBlockDetected);
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        Assert.Equal(2, doc.Descendants("ce").Count());
+
+        // The legacy block is untouched.
+        XElement legacy = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "Legacy_types.xml" }, FileNames(legacy));
+
+        // The new managed block carries the desired files.
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(FindManaged(doc)!));
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_CreatesMarkerThenDoesNotFlagAgain()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files">
+            		<file name="Legacy_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+        const string folder = "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files";
+
+        // First sync creates the managed block and reports the legacy block.
+        EconomyCoreUpdateResult first = service.UpdateTypeFiles(
+            MissionPath, folder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+        Assert.True(first.UnmanagedLegacyBlockDetected);
+
+        // The marker now exists, so a later sync does not report it again.
+        EconomyCoreUpdateResult second = service.UpdateTypeFiles(
+            MissionPath, folder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+        Assert.False(second.UnmanagedLegacyBlockDetected);
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_BaseBlock_DoesNotWarn_AndIsPreserved()
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
@@ -163,86 +216,23 @@ public class EconomyCoreServiceTests
             <economycore>
             	<ce folder="./db/type_files">
             		<file name="types.xml" type="types" />
-            		<file name="cfgspawnabletypes.xml" type="spawnabletypes" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        bool result = service.UpdateTypeFiles(MissionPath, Array.Empty<string>(), Empty(), Types());
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", new[] { "CF_types.xml" }, Types("CF_types.xml"));
 
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-        Assert.Equal(2, ce!.Elements("file").Count());
-    }
-
-    [Fact]
-    public void UpdateTypeFiles_EmptyDesired_RemovesOwnedStaleEntries()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="./db/type_files"><file name="old.xml" type="types" /></ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        bool result = service.UpdateTypeFiles(MissionPath, Array.Empty<string>(), Set("old.xml"), Types());
-
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.Empty(doc.Descendants("ce"));
-    }
-
-    [Fact]
-    public void UpdateTypeFiles_MergesIntoExistingBlock_WithoutDuplicating()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="./db/type_files">
-            		<file name="types.xml" type="types" />
-            	</ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Set("CF_types.xml"), Types("CF_types.xml"));
-        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Set("CF_types.xml"), Types("CF_types.xml"));
+        Assert.True(result.Success);
+        Assert.Empty(result.Warnings);
+        Assert.False(result.UnmanagedLegacyBlockDetected);
 
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.Single(doc.Descendants("ce"));
-        XElement? ce = FindCe(doc);
-        Assert.Equal(2, ce!.Elements("file").Count());
-    }
-
-    [Fact]
-    public void UpdateTypeFiles_MatchesForwardSlashFolderForm_WithoutDuplicating()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="db/type_files"><file name="types.xml" type="types" /></ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Set("CF_types.xml"), Types("CF_types.xml"));
-
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.Single(doc.Descendants("ce"));
-        var names = doc.Descendants("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Contains("types.xml", names);
-        Assert.Contains("CF_types.xml", names);
+        XElement baseCe = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "types.xml" }, FileNames(baseCe));
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(FindManaged(doc)!));
     }
 
     [Fact]
@@ -250,86 +240,46 @@ public class EconomyCoreServiceTests
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        // Deliberately non-alphabetical: the caller's order must be preserved.
         var desired = new[] { "Zeta_types.xml", "Alpha_spawnabletypes.xml", "Beta_types.xml" };
-        bool result = service.UpdateTypeFiles(MissionPath, desired, Empty(), Types(desired));
+        service.UpdateTypeFiles(MissionPath, desired, Types(desired));
 
-        Assert.True(result);
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-
-        var names = ce!.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Equal(new[] { "Zeta_types.xml", "Alpha_spawnabletypes.xml", "Beta_types.xml" }, names);
+        Assert.Equal(desired, FileNames(FindManaged(doc)!));
     }
 
     [Fact]
-    public void UpdateTypeFiles_OrdersTypesBeforeSpawnable_WhenAddingToExistingBlock()
+    public void UpdateTypeFiles_CorrectsTypeOnManagedEntry()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
-            		<file name="Mod_spawnabletypes.xml" type="spawnabletypes" />
+            	<ce folder="./db/type_files" {Marker}>
+            		<file name="SpawnableItems_types.xml" type="spawnabletypes" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
+        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["SpawnableItems_types.xml"] = "types" };
 
-        bool result = service.UpdateTypeFiles(
-            MissionPath, new[] { "Mod_types.xml", "Mod_spawnabletypes.xml" }, Empty(),
-            Types("Mod_types.xml", "Mod_spawnabletypes.xml"));
+        service.UpdateTypeFiles(MissionPath, new[] { "SpawnableItems_types.xml" }, types);
 
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-
-        var names = ce!.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Equal(new[] { "Mod_types.xml", "Mod_spawnabletypes.xml" }, names);
+        XElement file = FindManaged(Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!))!
+            .Elements("file").Single();
+        Assert.Equal("types", (string?)file.Attribute("type"));
     }
 
     [Fact]
-    public void UpdateTypeFiles_ReordersExistingDesiredEntries_ToRequestedOrder()
+    public void UpdateTypeFiles_DoesNotRewrite_WhenAlreadyCorrect()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+        string original = $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
-            		<file name="CF_spawnabletypes.xml" type="spawnabletypes" />
-            		<file name="CF_types.xml" type="types" />
-            	</ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        bool result = service.UpdateTypeFiles(
-            MissionPath, new[] { "CF_types.xml", "CF_spawnabletypes.xml" }, Empty(),
-            Types("CF_types.xml", "CF_spawnabletypes.xml"));
-
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-
-        var names = ce!.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Equal(new[] { "CF_types.xml", "CF_spawnabletypes.xml" }, names);
-    }
-
-    [Fact]
-    public void UpdateTypeFiles_DoesNotRewrite_WhenAlreadyInOrder()
-    {
-        var fs = new FakeFileSystem();
-        string original = """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="./db/type_files">
+            	<ce folder="./db/type_files" {Marker}>
             		<file name="CF_types.xml" type="types" />
             		<file name="CF_spawnabletypes.xml" type="spawnabletypes" />
             	</ce>
@@ -337,23 +287,60 @@ public class EconomyCoreServiceTests
             </economycore>
             """;
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", original);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        bool result = service.UpdateTypeFiles(
-            MissionPath, new[] { "CF_types.xml", "CF_spawnabletypes.xml" }, Empty(),
+        service.UpdateTypeFiles(
+            MissionPath, new[] { "CF_types.xml", "CF_spawnabletypes.xml" },
             Types("CF_types.xml", "CF_spawnabletypes.xml"));
 
-        Assert.True(result);
         // No rewrite happened: the file content is byte-for-byte unchanged.
         Assert.Equal(original, fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml"));
     }
 
     [Fact]
+    public void UpdateTypeFiles_SwitchesManagedFolder_WithoutDuplicating()
+    {
+        var fs = new FakeFileSystem();
+        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/m/p/Alpha/type_files";
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="{saveFolder}" {Marker}>
+            		<file name="saved_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        XElement ce = doc.Descendants("ce").Single();
+        Assert.Equal("./db/type_files", (string?)ce.Attribute("folder"));
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(ce));
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_RepeatedCalls_DoNotDuplicateBlock()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+        var service = CreateService(fs);
+
+        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+        service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        Assert.Single(doc.Descendants("ce"));
+    }
+
+    [Fact]
     public void UpdateTypeFiles_ReturnsFalse_WhenFileMissing()
     {
-        var service = new EconomyCoreService(new FakeFileSystem());
+        var service = CreateService(new FakeFileSystem());
 
-        Assert.False(service.UpdateTypeFiles(MissionPath, new[] { "x.xml" }, Empty(), Types("x.xml")));
+        Assert.False(service.UpdateTypeFiles(MissionPath, new[] { "x.xml" }, Types("x.xml")).Success);
     }
 
     [Fact]
@@ -361,59 +348,60 @@ public class EconomyCoreServiceTests
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        Assert.False(service.UpdateTypeFiles(MissionPath, new[] { "x.xml" }, Empty(), Types("x.xml")));
+        Assert.False(service.UpdateTypeFiles(MissionPath, new[] { "x.xml" }, Types("x.xml")).Success);
     }
 
     [Fact]
-    public void RemoveTypeFiles_RemovesOnlyTheNamedEntries()
+    public void RemoveTypeFiles_RemovesOnlyFromManagedBlock_KeepsUnmanaged()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
             	<ce folder="./db/type_files">
+            		<file name="Orphan_types.xml" type="types" />
+            	</ce>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files" {Marker}>
             		<file name="Orphan_types.xml" type="types" />
             		<file name="CF_types.xml" type="types" />
-            		<file name="Other_orphan_spawnabletypes.xml" type="spawnabletypes" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
         bool result = service.RemoveTypeFiles(MissionPath, Set("Orphan_types.xml"));
 
         Assert.True(result);
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement? ce = FindCe(doc);
-        Assert.NotNull(ce);
-        var names = ce!.Elements("file").Select(f => (string?)f.Attribute("name")).ToList();
-        Assert.Equal(new[] { "CF_types.xml", "Other_orphan_spawnabletypes.xml" }, names);
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(FindManaged(doc)!));
+
+        XElement unmanaged = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "Orphan_types.xml" }, FileNames(unmanaged));
     }
 
     [Fact]
-    public void RemoveTypeFiles_DropsBlock_WhenItEmpties()
+    public void RemoveTypeFiles_KeepsManagedBlock_WhenItEmpties()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
+            	<ce folder="./db/type_files" {Marker}>
             		<file name="Orphan_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
+        var service = CreateService(fs);
 
-        bool result = service.RemoveTypeFiles(MissionPath, Set("Orphan_types.xml"));
+        Assert.True(service.RemoveTypeFiles(MissionPath, Set("Orphan_types.xml")));
 
-        Assert.True(result);
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.DoesNotContain(doc.Descendants("file"), f => (string?)f.Attribute("name") == "Orphan_types.xml");
-        Assert.DoesNotContain(doc.Descendants("ce"), c => (string?)c.Attribute("folder") == "./db/type_files");
+        XElement ce = FindManaged(doc)!;
+        Assert.Empty(ce.Elements("file"));
         Assert.Contains(doc.Descendants("rootclass"), r => (string?)r.Attribute("name") == "DefaultWeapon");
     }
 
@@ -422,15 +410,14 @@ public class EconomyCoreServiceTests
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
-        var service = new EconomyCoreService(fs);
 
-        Assert.True(service.RemoveTypeFiles(MissionPath, Set("Ghost_types.xml")));
+        Assert.True(new EconomyCoreService(fs).RemoveTypeFiles(MissionPath, Set("Ghost_types.xml")));
     }
 
     [Fact]
     public void RemoveTypeFiles_ReturnsFalse_WhenFileMissing()
     {
-        var service = new EconomyCoreService(new FakeFileSystem());
+        var service = CreateService(new FakeFileSystem());
 
         Assert.False(service.RemoveTypeFiles(MissionPath, Set("x.xml")));
     }
@@ -440,72 +427,37 @@ public class EconomyCoreServiceTests
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", "<economycore>");
-        var service = new EconomyCoreService(fs);
 
-        Assert.False(service.RemoveTypeFiles(MissionPath, Set("x.xml")));
+        Assert.False(new EconomyCoreService(fs).RemoveTypeFiles(MissionPath, Set("x.xml")));
     }
 
     [Fact]
-    public void UpdateTypeFiles_WritesRequestedFolderValue()
+    public void GetTypeFilesFolder_ReturnsManagedBlockFolder()
     {
         var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
-        var service = new EconomyCoreService(fs);
-        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/type_files";
+        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/m/p/Alpha/type_files";
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="{saveFolder}" {Marker}><file name="x.xml" type="types" /></ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
 
-        bool result = service.UpdateTypeFiles(MissionPath, saveFolder, new[] { "CF_types.xml" }, Empty(), Types("CF_types.xml"));
-
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        Assert.Equal(saveFolder, (string?)doc.Descendants("ce").Single().Attribute("folder"));
+        Assert.Equal(saveFolder, new EconomyCoreService(fs).GetTypeFilesFolder(MissionPath));
     }
 
     [Fact]
-    public void UpdateTypeFiles_SwitchesAnExistingSavePathBlockBackToConfigured_WithoutDuplicating()
+    public void GetTypeFilesFolder_ReturnsNull_WhenOnlyUnmanagedBlocks()
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/type_files">
-            		<file name="saved_types.xml" type="types" />
-            	</ce>
+            	<ce folder="./db/type_files"><file name="types.xml" type="types" /></ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
-        var service = new EconomyCoreService(fs);
-
-        bool result = service.UpdateTypeFiles(MissionPath, new[] { "CF_types.xml" }, Set("saved_types.xml"), Types("CF_types.xml"));
-
-        Assert.True(result);
-        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
-        XElement ce = doc.Descendants("ce").Single();
-        Assert.Equal("./db/type_files", (string?)ce.Attribute("folder"));
-        Assert.Equal(new[] { "CF_types.xml" }, ce.Elements("file").Select(f => (string?)f.Attribute("name")).ToList());
-    }
-
-    [Fact]
-    public void GetTypeFilesFolder_ReturnsTheManagerBlockFolder()
-    {
-        var fs = new FakeFileSystem();
-        const string saveFolder = "../../DayZ-Mod-Manager-V2/Progress_Saves/dayzOffline.chernarusplus/Alpha/type_files";
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
-            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
-            <economycore>
-            	<ce folder="{saveFolder}"><file name="x.xml" type="types" /></ce>
-            	<classes><rootclass name="DefaultWeapon" /></classes>
-            </economycore>
-            """);
-        var service = new EconomyCoreService(fs);
-
-        Assert.Equal(saveFolder, service.GetTypeFilesFolder(MissionPath));
-    }
-
-    [Fact]
-    public void GetTypeFilesFolder_ReturnsNull_WhenNoManagerBlock()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
 
         Assert.Null(new EconomyCoreService(fs).GetTypeFilesFolder(MissionPath));
     }

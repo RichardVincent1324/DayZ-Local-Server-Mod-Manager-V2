@@ -213,12 +213,28 @@ public class JunctionServiceTests
         // Workshop path changed and @CF is not present in the new location yet.
         JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, PresetKey, new[] { "@CF" });
 
-        Assert.Equal(1, result.Failed);
+        // A missing target is skipped (not fatal): missing mods only block launch.
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(1, result.Skipped);
         Assert.Contains(result.Messages, m => m.Contains("Mod not found in workshop", StringComparison.OrdinalIgnoreCase));
 
         // The previously-working junction must be left intact for a failed/aborted Apply.
         Assert.True(junctions.IsJunction(link));
         Assert.Equal(@"D:\OldWorkshop\@CF", junctions.Targets[link]);
+    }
+
+    [Fact]
+    public void PrepareLoaded_SkipsMissingMod_WithoutFailing()
+    {
+        (JunctionService service, FakeFileSystem fs, _) = CreateService();
+        fs.AddDirectory(ServerPath);
+
+        // @Missing is loaded but has no folder in the Workshop.
+        JunctionSyncResult result = service.PrepareLoaded(ServerPath, WorkshopPath, PresetKey, new[] { "@Missing" });
+
+        Assert.Equal(0, result.Failed);
+        Assert.Equal(1, result.Skipped);
+        Assert.Contains(result.Messages, m => m.Contains("Mod not found in workshop", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

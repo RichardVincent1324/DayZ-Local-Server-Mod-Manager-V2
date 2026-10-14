@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
@@ -24,6 +24,8 @@ public sealed class MainViewModel : ViewModelBase
     private readonly IDayZServerProcessState _serverProcess;
     private readonly IPresetService _presetService;
     private readonly IJunctionService _junctions;
+    private readonly IValidationService _validation;
+    private readonly ILaunchEnvironmentService _launchEnvironment;
 
     private Settings _settings = new();
     private bool _isDirty;
@@ -41,7 +43,7 @@ public sealed class MainViewModel : ViewModelBase
         ITypesService typesService,
         ISaveGameService saveGameService,
         IServerConfigService serverConfigService,
-        IBatchFileService batchFileService,
+        ILaunchEnvironmentService launchEnvironment,
         IFileSystem fileSystem,
         IDialogService dialogs,
         IProcessLauncher launcher,
@@ -49,7 +51,8 @@ public sealed class MainViewModel : ViewModelBase
         IDayZServerProcessState serverProcessState,
         IDataDirectoryProvider dataDirectoryProvider,
         IPresetService presetService,
-        IJunctionService junctions)
+        IJunctionService junctions,
+        IValidationService validation)
     {
         _settingsService = settingsService;
         _modOrderStore = modOrderStore;
@@ -62,6 +65,8 @@ public sealed class MainViewModel : ViewModelBase
         _serverProcess = serverProcessState;
         _presetService = presetService;
         _junctions = junctions;
+        _validation = validation;
+        _launchEnvironment = launchEnvironment;
 
         Log = new LogViewModel();
         ModState = new ModState();
@@ -94,7 +99,7 @@ public sealed class MainViewModel : ViewModelBase
 		// A persisted active preset may point at a folder that is missing or
 		// incomplete (for example, a folder created by hand, or one whose config was
 		// removed). Fall back to the map's default preset so the session loads a
-		// usable environment; ApplyMapCore then persists the corrected selection.
+		// usable environment; the map switch then persists the corrected selection.
 		if (!string.IsNullOrWhiteSpace(_settings.ActiveMap)
 			&& !_presetService.PresetExists(_dataDirectoryProvider.Current, _settings.ActiveMap, activePreset))
 		{
@@ -148,9 +153,9 @@ public sealed class MainViewModel : ViewModelBase
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         PresetTypes = new PresetTypesViewModel(
-            mapService, typesService, saveGameService, typesConfigStore, serverConfigService, batchFileService,
+            mapService, typesService, saveGameService, typesConfigStore, serverConfigService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher,
-            presetService, _junctions)
+            presetService, _junctions, launchEnvironment)
         {
             ActivePresetName = activePreset,
         };
@@ -214,14 +219,22 @@ public sealed class MainViewModel : ViewModelBase
             }
 
             PresetTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
-            PresetTypes.ReconcileAppliedMap();
+            string? autoAppliedMap = PresetTypes.ReconcileAppliedMap();
             Mods.MarkApplied();
             UpdateDirty();
 			
-			    if (_startupFellBackToDefaultPreset)
-				{
-					await ApplyStartupFallbackAsync();
-				}
+            if (_startupFellBackToDefaultPreset)
+            {
+                await ApplyStartupFallbackAsync();
+            }
+            else if (autoAppliedMap is not null && Settings.CanApply)
+            {
+                // The first map was just auto-applied. Run the normal activation so
+                // its mod order is loaded and its junctions/mod list are provisioned
+                // before the first launch, instead of leaving a batch file whose mods
+                // have no matching junctions.
+                await ActivatePresetAsync(autoAppliedMap, ResolveActivePreset(_settings, autoAppliedMap));
+            }
 
             await CleanupOldLogsIfEnabledAsync(_settings);
         }
@@ -369,8 +382,13 @@ public sealed class MainViewModel : ViewModelBase
         else
         {
             TypesConfig.Maps.Remove(mapName);
-            TypesConfig.CurrentMap = mapName;
         }
+
+        // The environment being applied targets this map. Set it before the apply so
+        // the launch batch and mod order are written for the right map even on a
+        // cross-map switch; the snapshot above captured the previous map, so a failed
+        // apply restores it.
+        TypesConfig.CurrentMap = mapName;
 
         _settings = WithActiveSelection(_settings, mapName, presetName);
         PresetTypes.ActivePresetName = presetName;
@@ -513,51 +531,19 @@ public sealed class MainViewModel : ViewModelBase
 
             string dataDirectory = _dataDirectoryProvider.Resolve(newSettings);
 
-            // The active preset is the environment being applied. Its folder and
-            // launch variables are derived from the applied map and active preset.
+            // Resolve the active map/preset's launch environment in one place. The
+            // preset lives in the current data directory (which may differ from the
+            // relocation target), while the profile/config paths written to the batch
+            // file are anchored at the resolved target.
             string mapName = TypesConfig.CurrentMap;
             string activePreset = PresetTypes.ActivePresetName;
-            string? presetFolder = null;
-            string? serverProfile = null;
-            string? serverConfig = null;
-            string? modListKey = null;
-            if (!string.IsNullOrWhiteSpace(mapName))
+            EnvironmentResolution resolution = _presetService.ResolveEnvironment(
+                newSettings, dataDirectory, mapName, activePreset,
+                presetLookupDirectory: _dataDirectoryProvider.Current);
+            if (resolution.Error is not null)
             {
-                // Validate the active preset before applying. A preset missing its
-                // serverDZ.cfg would otherwise pass validation (which falls back to
-                // the server-root config) and leave the server pointed at a config
-                // that does not exist. The tool-managed default preset is healed
-                // from the server root; any other incomplete preset aborts.
-                string presetDataDirectory = _dataDirectoryProvider.Current;
-                if (!_presetService.PresetExists(presetDataDirectory, mapName, activePreset))
-                {
-                    if (PresetPaths.IsDefaultPreset(activePreset))
-                    {
-                        PresetResult healed = _presetService.EnsureDefaultPreset(
-                            newSettings.ServerPath, presetDataDirectory, mapName);
-                        if (!healed.Success)
-                        {
-                            Log.Error(healed.Message);
-                            return false;
-                        }
-                    }
-
-                    if (!_presetService.PresetExists(presetDataDirectory, mapName, activePreset))
-                    {
-                        Log.Error(
-                            $"The active preset \"{activePreset}\" for {mapName} is incomplete (its serverDZ.cfg is missing); " +
-							"the map was not applied. Restore it or select another preset.");
-                        return false;
-                    }
-                }
-
-                presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, activePreset);
-                serverProfile = PresetPaths.RelativeToServer(
-                    newSettings.ServerPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, activePreset));
-                serverConfig = PresetPaths.RelativeToServer(
-                    newSettings.ServerPath, PresetPaths.ServerConfigPath(dataDirectory, mapName, activePreset));
-                modListKey = ModListFolder.PresetKey(
-                    _presetService.ReadInstanceId(dataDirectory, mapName, activePreset));
+                Log.Error(resolution.Error);
+                return false;
             }
 
             ApplyResult result = await Task.Run(() => _applyService.Apply(new ApplyContext
@@ -565,10 +551,7 @@ public sealed class MainViewModel : ViewModelBase
                 Settings = newSettings,
                 LoadedMods = loadedMods,
                 DataDirectory = dataDirectory,
-                PresetFolder = presetFolder,
-                ServerProfile = serverProfile,
-                ServerConfig = serverConfig,
-                ModListKey = modListKey,
+                Environment = resolution.Environment,
             }));
 
             foreach (string line in result.Logs)
@@ -726,6 +709,14 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
+        // Mandatory preflight: validate the environment even when nothing is
+        // pending, so a stale-yet-clean state (a mod removed from the Workshop,
+        // a referenced type file deleted, an incomplete preset) cannot launch.
+        if (!ValidateBeforeLaunch())
+        {
+            return;
+        }
+
         try
         {
             _launcher.Launch(_settings.BatFilePath, _settings.ServerPath);
@@ -735,6 +726,62 @@ public sealed class MainViewModel : ViewModelBase
         {
             Log.Error($"Failed to launch server: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Runs the launch preflight: the standard configuration validation (paths,
+    /// batch and server config), the loaded mods missing from the Workshop (Apply
+    /// tolerates these, so they are checked here only), and the active preset's
+    /// types issues (config entries for Workshop-missing mods, and referenced type
+    /// files missing from type_files). Returns false and reports the problems when
+    /// the environment is not ready to launch.
+    /// </summary>
+    private bool ValidateBeforeLaunch()
+    {
+        var errors = new List<string>(_validation.Validate(new ValidationContext
+        {
+            Settings = _settings,
+            LoadedMods = ModState.LoadedMods,
+            ActiveServerConfigPath = ActivePresetServerConfigPath(),
+        }));
+
+        foreach (string mod in _validation.FindMissingMods(_settings.WorkshopPath, ModState.LoadedMods))
+        {
+            errors.Add($"Mod not found in workshop: {mod}");
+        }
+
+        errors.AddRange(PresetTypes.PreflightTypesIssues());
+
+        if (errors.Count == 0)
+        {
+            return true;
+        }
+
+        ShowLaunchInvalid(string.Join(" ", errors));
+        return false;
+    }
+
+    /// <summary>
+    /// The active preset's <c>serverDZ.cfg</c> path, or null when no map is applied
+    /// (the server-root config is validated instead).
+    /// </summary>
+    private string? ActivePresetServerConfigPath()
+    {
+        string mapName = TypesConfig.CurrentMap;
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            return null;
+        }
+
+        return PresetPaths.ServerConfigPath(
+            _dataDirectoryProvider.Current, mapName, PresetTypes.ActivePresetName);
+    }
+
+    /// <summary>Reports a launch blocked by an invalid environment (log + modal).</summary>
+    private void ShowLaunchInvalid(string reason)
+    {
+        Log.Error(reason);
+        _dialogs.ShowMessage(reason, "Start Server", isError: true);
     }
 
     /// <summary>

@@ -493,5 +493,72 @@ public partial class PresetTypesViewModelTests
         Assert.Equal(0, types.CleanInvalidCalls);
         Assert.Contains("server is running", dialogs.LastErrorMessage);
     }
+
+    [Fact]
+    public void PreflightTypesIssues_FormatsMissingModsAndFiles()
+    {
+        var types = new FakeTypesService
+        {
+            LaunchIssues = new TypesLaunchIssues(new[] { "@Ghost" }, new[] { "CF_types.xml" }),
+        };
+        (PresetTypesViewModel vm, _, _) = CreateTypesVm(
+            ConfigWithEntry(Entry("@CF", @"db\type_files\CF_types.xml")), types, new FakeDialogs());
+
+        IReadOnlyList<string> issues = vm.PreflightTypesIssues();
+
+        Assert.Contains(issues, m => m.Contains("@Ghost"));
+        Assert.Contains(issues, m => m.Contains("CF_types.xml"));
+    }
+
+    [Fact]
+    public void PreflightTypesIssues_NoCurrentMap_ReturnsEmpty()
+    {
+        var types = new FakeTypesService
+        {
+            LaunchIssues = new TypesLaunchIssues(new[] { "@Ghost" }, Array.Empty<string>()),
+        };
+        (PresetTypesViewModel vm, _, _) = CreateTypesVm(new TypesConfig(), types, new FakeDialogs());
+
+        Assert.Empty(vm.PreflightTypesIssues());
+    }
+
+    [Fact]
+    public void SyncEconomyCore_ReturnsServiceResult()
+    {
+        var active = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Maps = { [MapName] = new MapTypesConfig { Mods = { Entry("@CF", "CF_types.xml") } } },
+        };
+        var types = new FakeTypesService();
+        PresetTypesViewModel vm = Create(active, typesService: types);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.True(vm.SyncEconomyCore());
+        Assert.Equal(1, types.SyncEconomyCoreCalls);
+    }
+
+    [Fact]
+    public void SyncEconomyCore_UnmanagedLegacyBlock_ShowsAlert()
+    {
+        var active = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Maps = { [MapName] = new MapTypesConfig { Mods = { Entry("@CF", "CF_types.xml") } } },
+        };
+        var types = new FakeTypesService
+        {
+            SyncEconomyCoreResult = new TypesOperationResult { Success = true, UnmanagedLegacyBlockDetected = true },
+        };
+        var dialogs = new FakeDialogs();
+        PresetTypesViewModel vm = Create(active, typesService: types, dialogs: dialogs);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.True(vm.SyncEconomyCore());
+
+        Assert.Equal(1, dialogs.ShowAlertCalls);
+        Assert.Contains("unmanaged", dialogs.LastAlertMessage!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cfgeconomycore.xml", dialogs.LastAlertNote!);
+    }
 }
 

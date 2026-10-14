@@ -242,11 +242,41 @@ public class TypesServiceTests
         service.ConfigureMod(config, MapName, Target(), WorkshopPath, "@OtherMod",
             Select($@"{WorkshopPath}\@OtherMod\types.xml"), Loaded("@CF", "@OtherMod"));
 
-        Assert.True(service.SyncEconomyCore(config, MapName, MissionPath, Loaded("@CF")));
+        Assert.True(service.SyncEconomyCore(config, MapName, MissionPath, Loaded("@CF")).Success);
 
         string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
         Assert.Contains("CF_types.xml", economy);
         Assert.DoesNotContain("OtherMod_types.xml", economy);
+    }
+
+    [Fact]
+    public void SyncEconomyCore_FullyOverwritesManagedBlock()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddDirectory($@"{WorkshopPath}\@CF");
+        fs.AddFile($@"{WorkshopPath}\@CF\types.xml", "<types/>");
+        // A previously written managed block still carries a stale entry.
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/type_files" dzmmv2-managed-by="DayZ-Mod-Manager-V2">
+            		<file name="Old_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var config = new TypesConfig();
+        var service = CreateService(fs);
+
+        service.ConfigureMod(config, MapName, Target(), WorkshopPath, "@CF",
+            Select($@"{WorkshopPath}\@CF\types.xml"), Loaded("@CF"));
+
+        TypesOperationResult result = service.SyncEconomyCore(config, MapName, MissionPath, Loaded("@CF"));
+
+        Assert.True(result.Success);
+        string economy = fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!;
+        Assert.Contains("CF_types.xml", economy);
+        Assert.DoesNotContain("Old_types.xml", economy);
     }
 
     [Fact]
@@ -493,7 +523,7 @@ public class TypesServiceTests
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
+            	<ce folder="./db/type_files" dzmmv2-managed-by="DayZ-Mod-Manager-V2">
             		<file name="CF_types.xml" type="types" />
             		<file name="Orphan_types.xml" type="types" />
             	</ce>
@@ -525,7 +555,7 @@ public class TypesServiceTests
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files">
+            	<ce folder="./db/type_files" dzmmv2-managed-by="DayZ-Mod-Manager-V2">
             		<file name="CF_types.xml" type="types" />
             		<file name="Orphan_types.xml" type="types" />
             	</ce>
@@ -646,5 +676,46 @@ public class TypesServiceTests
         Assert.Contains(result.Messages, m => m.Contains("cfgeconomycore.xml"));
         Assert.NotNull(fs.TryGetFileContents($@"{TypeFilesFolder}\CF_types.xml"));
         Assert.Single(config.Maps[MapName].Mods);
+    }
+
+    [Fact]
+    public void FindLaunchIssues_CleanConfig_HasNoBlockers()
+    {
+        FakeFileSystem fs = Seed();
+        var config = ConfigWith(Entry("@CF", @"db\type_files\CF_types.xml"));
+        fs.AddFile($@"{TypeFilesFolder}\CF_types.xml", "<types/>");
+
+        TypesLaunchIssues issues = CreateService(fs).FindLaunchIssues(
+            config, MapName, TypeFilesFolder, Loaded("@CF"), Loaded("@CF"));
+
+        Assert.False(issues.HasBlockers);
+        Assert.Empty(issues.MissingMods);
+        Assert.Empty(issues.MissingFiles);
+    }
+
+    [Fact]
+    public void FindLaunchIssues_ReportsModMissingFromWorkshop()
+    {
+        FakeFileSystem fs = Seed();
+        var config = ConfigWith(Entry("@Ghost", @"db\type_files\Ghost_types.xml"));
+
+        TypesLaunchIssues issues = CreateService(fs).FindLaunchIssues(
+            config, MapName, TypeFilesFolder, Loaded("@CF"), Loaded("@CF"));
+
+        Assert.True(issues.HasBlockers);
+        Assert.Contains("@Ghost", issues.MissingMods);
+    }
+
+    [Fact]
+    public void FindLaunchIssues_ReportsReferencedFileMissingFromTypeFiles()
+    {
+        FakeFileSystem fs = Seed();
+        var config = ConfigWith(Entry("@CF", @"db\type_files\CF_types.xml"));
+
+        TypesLaunchIssues issues = CreateService(fs).FindLaunchIssues(
+            config, MapName, TypeFilesFolder, Loaded("@CF"), Loaded("@CF"));
+
+        Assert.True(issues.HasBlockers);
+        Assert.Contains("CF_types.xml", issues.MissingFiles);
     }
 }

@@ -17,12 +17,14 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// for it (mission template and batch serverProfile) before its first launch.
     /// Does not rewrite server files for an already-applied map, and never
     /// auto-applies while there is no real mission folder on a configured server.
+    /// Returns the map it auto-applied, or null when it applied nothing, so the
+    /// shell can provision the mod list and junctions for a freshly applied map.
     /// </summary>
-    public void ReconcileAppliedMap()
+    public string? ReconcileAppliedMap()
     {
         if (MapNames.Count == 0)
         {
-            return;
+            return null;
         }
 
         if (!string.IsNullOrEmpty(_typesConfig.CurrentMap))
@@ -32,7 +34,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 _log.Warning($"Previously applied map \"{_typesConfig.CurrentMap}\" was not found on this server. Select a valid map.");
             }
 
-            return;
+            return null;
         }
 
         // Nothing has been applied yet. Auto-apply a default map only when a real
@@ -43,18 +45,21 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             || string.IsNullOrWhiteSpace(_batFileName)
             || _discoveredMaps.Count == 0)
         {
-            return;
+            return null;
         }
 
         string defaultMap = _discoveredMaps[0].Name;
-        if (!ApplyMapCore(defaultMap))
+        ServerEnvironment? environment = PrepareMapSwitch(defaultMap);
+        if (environment is null)
         {
             // Refused (server running) or the server files could not be written;
             // leave the current map empty so a later reconcile retries.
-            return;
+            return null;
         }
 
+        CommitAppliedMap(defaultMap, environment.PresetName, environment);
         SetRestoringSelection(defaultMap);
+        return defaultMap;
     }
 
     /// <summary>Rebuilds the map dropdown from discovered maps plus any maps already configured.</summary>
@@ -182,7 +187,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 return;
             }
 
-            if (!ApplyMapCore(mapName))
+            // Prepare the target map/preset (resolve environment, write the mission
+            // template) without committing anything. Only after the environment apply
+            // succeeds is the switch committed, so a failed switch leaves the active
+            // map, persisted selection and launch batch untouched.
+            ServerEnvironment? environment = PrepareMapSwitch(mapName);
+            if (environment is null)
             {
                 // Refused (server running) or the server files could not be
                 // updated; keep the dropdown on the actually-applied map.
@@ -194,13 +204,14 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             // mod order/types and apply its environment. Without this the in-memory
             // mod list would still belong to the previous preset, and the next Apply
             // would persist it into the wrong preset's mod_order.json.
-            if (ActivatePreset is not null && !await ActivatePreset(mapName, _activePresetName))
+            if (ActivatePreset is not null && !await ActivatePreset(mapName, environment.PresetName))
             {
                 _log.Error($"Map switched to {mapName}, but its preset environment could not be applied.");
                 SetRestoringSelection(_typesConfig.CurrentMap);
                 return;
             }
 
+            CommitAppliedMap(mapName, environment.PresetName, environment);
             SetRestoringSelection(mapName);
         }
         catch (Exception ex)
@@ -228,7 +239,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// </summary>
     private bool TryBeginTypesOperation()
     {
-        if (_typesBusy || _isSwitching)
+        if (_typesBusy || _isSwitching || _isSwitchingPreset)
         {
             return false;
         }
@@ -283,28 +294,28 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Applies <paramref name="mapName"/> to the server and commits it as the
-    /// current map. The server template and batch serverProfile are written and
-    /// validated FIRST so a failure never leaves the app believing a map was
-    /// applied while the server still runs the previous mission; CurrentMap is
-    /// only persisted once those succeed. Returns false when the switch was
-    /// refused (server running) or the server files could not be updated.
+    /// Prepares a map switch: resolves the target map's active preset and writes
+    /// that preset's mission template, but commits nothing (no CurrentMap, no types
+    /// save, no launch batch, no persisted selection). Returns the resolved
+    /// environment, or null when the switch was refused (server running, no batch
+    /// file) or the server files could not be updated. The caller runs the
+    /// environment apply and then <see cref="CommitAppliedMap"/>.
     /// </summary>
-    private bool ApplyMapCore(string mapName)
+    private ServerEnvironment? PrepareMapSwitch(string mapName)
     {
         if (RefuseWhileServerRunning("switching maps"))
         {
-            return false;
+            return null;
         }
 
         if (string.IsNullOrWhiteSpace(_batFileName))
         {
             _log.Error("No launch batch file is selected. Choose one in the Settings tab before switching maps.");
-            return false;
+            return null;
         }
 
-        string previousMap = _typesConfig.CurrentMap;
         string dataDirectory = _dataDirectoryProvider.Current;
+        var settings = new Settings { ServerPath = _serverPath, BatFileName = _batFileName };
 
         // Switching maps uses that map's active preset (persisted from a previous
         // session), falling back to the reserved default preset. The default
@@ -313,51 +324,51 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         if (!ensured.Success)
         {
             _log.Error(ensured.Message);
-            return false;
+            return null;
         }
 
         string requestedPreset = ResolvePresetForMap?.Invoke(mapName) ?? PresetPaths.DefaultPresetName;
-        if (!_presetService.PresetExists(dataDirectory, mapName, requestedPreset))
+        EnvironmentResolution resolution = _presetService.ResolveEnvironment(
+            settings, dataDirectory, mapName, requestedPreset);
+        if (resolution.Environment is null)
         {
-            requestedPreset = PresetPaths.DefaultPresetName;
+            // The persisted preset is unavailable; fall back to the default preset,
+            // which was just ensured above.
+            resolution = _presetService.ResolveEnvironment(
+                settings, dataDirectory, mapName, PresetPaths.DefaultPresetName);
+            if (resolution.Environment is null)
+            {
+                _log.Error(resolution.Error ?? $"No usable preset is available for {mapName}.");
+                return null;
+            }
         }
 
-        _activePresetName = requestedPreset;
-        string presetConfig = PresetPaths.ServerConfigPath(dataDirectory, mapName, _activePresetName);
+        ServerEnvironment environment = resolution.Environment;
+        string presetConfig = Path.Combine(environment.PresetFolder, ConfigFileNames.ServerConfig);
 
         if (!_serverConfig.UpdateTemplate(presetConfig, mapName))
         {
             _log.Error($"Failed to set the mission template in {presetConfig}; the map was not switched.");
-            return false;
+            return null;
         }
 
-        // Point the launcher at the active preset's environment: its profiles and
-        // its serverDZ.cfg, both expressed relative to the server root.
-        string batPath = Path.Combine(_serverPath, _batFileName);
-        string profileValue = PresetPaths.RelativeToServer(
-            _serverPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, _activePresetName));
-        string configValue = PresetPaths.RelativeToServer(_serverPath, presetConfig);
+        return environment;
+    }
 
-        if (!_batchFile.WriteServerProfile(batPath, profileValue))
-        {
-            // Roll the template back so the server files stay on the previous map.
-            RollbackMapFiles(previousMap, mapName);
-            _log.Error("Failed to update the batch file serverProfile; the map was not switched.");
-            return false;
-        }
+    /// <summary>
+    /// Commits a prepared map switch after the environment apply has succeeded:
+    /// makes the map/preset active, merges and persists its types configuration,
+    /// creates its profiles folder, points the launch batch at it (idempotent when
+    /// an Apply already did), refreshes the UI and persists the selection.
+    /// </summary>
+    private void CommitAppliedMap(string mapName, string presetName, ServerEnvironment environment)
+    {
+        _activePresetName = presetName;
 
-        if (!_batchFile.WriteServerConfig(batPath, configValue))
-        {
-            // Templates without a serverConfig line fall back to the server root.
-            TryCopyPresetConfigToRoot(mapName);
-            _log.Warning("Batch file has no serverConfig line; the preset serverDZ.cfg was copied to the server root instead.");
-        }
-
-        // Commit: only after the server files were updated successfully.
         // Load the target preset's own (single-map) types configuration so a map
         // switch shows that preset's settings rather than carrying the previous
         // map's config over.
-        MergePresetTypesConfig(mapName, _activePresetName);
+        MergePresetTypesConfig(mapName, presetName);
         _typesConfig.CurrentMap = mapName;
         try
         {
@@ -365,21 +376,30 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            _typesConfig.CurrentMap = previousMap;
-            RollbackMapFiles(previousMap, mapName);
-            _log.Error($"Failed to persist the applied map; the map was not switched: {ex.Message}");
-            return false;
+            // The environment is already applied; a failed types save is reported
+            // but does not tear it down.
+            _log.Error($"Failed to persist the applied map's types configuration: {ex.Message}");
         }
 
         // Pre-create the preset profiles folder the batch serverProfile points at.
         // DayZ also creates it on its first boot; a failure is non-fatal.
         try
         {
-            _fileSystem.CreateDirectory(PresetPaths.ProfilesFolder(dataDirectory, mapName, _activePresetName));
+            _fileSystem.CreateDirectory(PresetPaths.ProfilesFolder(
+                _dataDirectoryProvider.Current, mapName, presetName));
         }
         catch (Exception ex)
         {
             _log.Error($"Failed to create the preset profiles directory: {ex.Message}");
+        }
+
+        // Point the launcher at the environment even when no separate Apply ran
+        // (e.g. the startup auto-apply). Idempotent when an Apply already wrote it.
+        var settings = new Settings { ServerPath = _serverPath, BatFileName = _batFileName };
+        ServerLocationWriteResult location = _launchEnvironment.WriteServerLocation(settings, environment);
+        foreach (string message in location.Messages)
+        {
+            _log.Info(message);
         }
 
         NotifyCommandStates();
@@ -391,8 +411,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         // Let the shell persist the now-active map/preset so the next startup can
         // locate this preset's mod order and types configuration.
-        PersistActiveSelection?.Invoke(mapName, _activePresetName);
-        return true;
+        PersistActiveSelection?.Invoke(mapName, presetName);
     }
 
     /// <summary>
@@ -414,56 +433,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             // No usable config for this preset: this map starts with an empty one.
             _typesConfig.Maps.Remove(mapName);
             _typesConfig.CurrentMap = mapName;
-        }
-    }
-
-    /// <summary>
-    /// Best-effort copy of the active preset's serverDZ.cfg to the server root,
-    /// used when the launch template has no serverConfig line.
-    /// </summary>
-    private void TryCopyPresetConfigToRoot(string mapName)
-    {
-        string presetConfig = PresetPaths.ServerConfigPath(
-            _dataDirectoryProvider.Current, mapName, _activePresetName);
-        string rootConfig = Path.Combine(_serverPath, "serverDZ.cfg");
-        try
-        {
-            if (_fileSystem.FileExists(presetConfig))
-            {
-                _fileSystem.CopyFile(presetConfig, rootConfig);
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Warning($"Failed to copy the preset serverDZ.cfg to the server root: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Best-effort revert of the server template and batch serverProfile to
-    /// <paramref name="previousMap"/> after a mid-switch failure. A failure to
-    /// roll back is only logged; the caller has already reported the switch error.
-    /// </summary>
-    private void RollbackMapFiles(string previousMap, string currentMap)
-    {
-        if (string.IsNullOrWhiteSpace(previousMap)
-            || string.Equals(previousMap, currentMap, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        string dataDirectory = _dataDirectoryProvider.Current;
-        string previousConfig = PresetPaths.ServerConfigPath(dataDirectory, previousMap, _activePresetName);
-        if (!_serverConfig.UpdateTemplate(previousConfig, previousMap))
-        {
-            _log.Warning("Failed to restore the previous server template after the map switch was aborted.");
-        }
-
-        string profileValue = PresetPaths.RelativeToServer(
-            _serverPath, PresetPaths.ProfilesFolder(dataDirectory, previousMap, _activePresetName));
-        if (!_batchFile.WriteServerProfile(Path.Combine(_serverPath, _batFileName), profileValue))
-        {
-            _log.Warning("Failed to restore the previous batch serverProfile after the map switch was aborted.");
         }
     }
 }

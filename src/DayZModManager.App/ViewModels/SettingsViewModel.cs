@@ -156,15 +156,30 @@ public sealed class SettingsViewModel : ViewModelBase
     private void BrowseWorkshop()
     {
         string? folder = _dialogs.PickFolder("Select the Steam Workshop folder (!Workshop)");
-        if (folder is not null)
+        if (folder is null)
         {
-            // Correct a folder that points at the DayZ game directory rather than
-            // its "!Workshop" child.
-            WorkshopPath = WorkshopPathResolver.Resolve(_fileSystem, folder);
-            if (CanApply)
-            {
-                ApplyRequested?.Invoke();
-            }
+            return;
+        }
+
+        // Correct a folder that points at the DayZ game directory rather than its
+        // "!Workshop" child, then require the result to be a real Workshop/mods
+        // folder (named !Workshop/DayZ, or directly containing "@..." mod folders).
+        string resolved = WorkshopPathResolver.Resolve(_fileSystem, folder);
+        if (!WorkshopPathResolver.IsValidWorkshopPath(_fileSystem, resolved))
+        {
+            _dialogs.ShowMessage(
+                "The selected folder is not a valid DayZ Workshop or mods folder.\n\n" +
+                "Choose the DayZ \"!Workshop\" folder, the DayZ game folder, or a folder that " +
+                "directly contains \"@...\" mod folders.",
+                "Invalid Workshop path",
+                isError: true);
+            return;
+        }
+
+        WorkshopPath = resolved;
+        if (CanApply)
+        {
+            ApplyRequested?.Invoke();
         }
     }
 

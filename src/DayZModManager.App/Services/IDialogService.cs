@@ -4,14 +4,12 @@ namespace DayZModManager.App.Services;
 
 /// <summary>Input gathered by the Add Preset dialog.</summary>
 /// <param name="Name">The new preset's name.</param>
-/// <param name="CopyProfilesFromDefault">True to seed the preset from the default preset's profiles.</param>
-public sealed record AddPresetRequest(string Name, bool CopyProfilesFromDefault);
+public sealed record AddPresetRequest(string Name);
 
 /// <summary>Input gathered by the Duplicate Preset dialog.</summary>
 /// <param name="Name">The new (duplicated) preset's name.</param>
-/// <param name="CopyProfiles">True to also copy the current preset's profiles data.</param>
 /// <param name="DestinationMap">The map the copy is created under.</param>
-public sealed record DuplicatePresetRequest(string Name, bool CopyProfiles, string DestinationMap);
+public sealed record DuplicatePresetRequest(string Name, string DestinationMap);
 
 /// <summary>Abstraction over modal UI interactions (message boxes, pickers).</summary>
 public interface IDialogService
@@ -34,6 +32,13 @@ public interface IDialogService
     /// report a blocked operation.
     /// </summary>
     void ShowWarning(string message, string title, string warning, string note = "");
+
+    /// <summary>
+    /// Shows an informational window with a prominent red warning banner and plays
+    /// the standard Windows warning tone. Used for one-time, serious notices that
+    /// must not be missed.
+    /// </summary>
+    void ShowAlert(string message, string title, string warning, string note = "");
 
     /// <summary>Opens a folder picker. Returns the chosen path, or null if cancelled.</summary>
     string? PickFolder(string title = "Select a folder");
@@ -64,16 +69,16 @@ public interface IDialogService
     string? AskText(string title, string prompt, string defaultValue = "");
 
     /// <summary>
-    /// Opens the Add Preset dialog for a map. Returns the requested name and
-    /// whether to copy the default preset's profiles, or null when cancelled.
+    /// Opens the Add Preset dialog for a map. Returns the requested name, or null
+    /// when cancelled.
     /// </summary>
     AddPresetRequest? AskAddPreset(string mapName);
 
     /// <summary>
     /// Opens the Duplicate Preset dialog for an existing preset. <paramref name="maps"/>
     /// is the same map collection as the Current Map ComboBox; <paramref name="defaultMap"/>
-    /// is preselected. Returns the requested name, whether to copy the current preset's
-    /// profiles, and the destination map, or null when cancelled.
+    /// is preselected. Returns the requested name and the destination map, or null
+    /// when cancelled.
     /// </summary>
     DuplicatePresetRequest? AskDuplicatePreset(string sourcePresetName, IReadOnlyList<string> maps, string defaultMap);
 }

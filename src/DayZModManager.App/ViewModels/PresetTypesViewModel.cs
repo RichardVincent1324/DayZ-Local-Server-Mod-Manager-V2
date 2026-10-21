@@ -49,6 +49,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private bool _isRestoringPreset;
     private bool _isRestoringMod;
     private string? _pendingMap;
+    private bool _liveWorldExists;
+    private string _liveWorldStatusToolTip = BuildLiveWorldStatusToolTip(0, exists: false);
 
     public PresetTypesViewModel(
         IMapService mapService,
@@ -120,6 +122,77 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 NotifyCommandStates();
             }
         }
+    }
+
+    /// <summary>
+    /// True when the active preset's live world storage folder
+    /// (<c>mpmissions\&lt;map&gt;\storage_&lt;instanceId&gt;</c>) exists on disk.
+    /// Orphaned storage folders never affect this value.
+    /// </summary>
+    public bool LiveWorldExists
+    {
+        get => _liveWorldExists;
+        private set => SetField(ref _liveWorldExists, value);
+    }
+
+    /// <summary>Dynamic tooltip describing the live-world indicator state.</summary>
+    public string LiveWorldStatusToolTip
+    {
+        get => _liveWorldStatusToolTip;
+        private set => SetField(ref _liveWorldStatusToolTip, value);
+    }
+
+    /// <summary>
+    /// Re-evaluates the active preset's live storage folder. Only the preset's
+    /// own <c>storage_&lt;instanceId&gt;</c> counts; orphaned storage is ignored.
+    /// Never throws: an unreadable folder is reported as missing.
+    /// </summary>
+    public void RefreshLiveWorldStatus()
+    {
+        int instanceId = 0;
+        bool exists = false;
+        string? mapName = _typesConfig.CurrentMap;
+
+        if (!string.IsNullOrWhiteSpace(mapName))
+        {
+            try
+            {
+                instanceId = _presetService.ReadInstanceId(
+                    _dataDirectoryProvider.Current, mapName, _activePresetName);
+
+                if (!string.IsNullOrWhiteSpace(_serverPath) && instanceId > 0)
+                {
+                    string storageFolder = _saveGameService.GetStorageFolderPath(
+                        _serverPath, mapName, instanceId);
+                    exists = _fileSystem.DirectoryExists(storageFolder);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warning($"Failed to check the live-world storage folder: {ex.Message}");
+            }
+        }
+
+        LiveWorldExists = exists;
+        LiveWorldStatusToolTip = BuildLiveWorldStatusToolTip(instanceId, exists);
+    }
+
+    private static string BuildLiveWorldStatusToolTip(int instanceId, bool exists)
+    {
+        string storageFolder = $"storage_{instanceId}";
+        if (exists)
+        {
+            return
+                "Live-world indicator: Green = Active live world exists" + Environment.NewLine +
+                $"Associated storage folder: {storageFolder}" + Environment.NewLine +
+                "Add-Save and Wipe Current World are available for this preset.";
+        }
+
+        return
+            "Live-world indicator: Gray = No active live-world exists" + Environment.NewLine +
+            $"Expected storage folder: {storageFolder}" + Environment.NewLine +
+            "Start server at least once to generate this world folder." + Environment.NewLine +
+            "Add-Save and Wipe Current World are unavailable until storage exists.";
     }
 
     /// <summary>Folder of the active preset for the given map.</summary>

@@ -10,6 +10,9 @@ namespace DayZModManager.App.ViewModels;
 
 public sealed partial class PresetTypesViewModel : ViewModelBase
 {
+    /// <summary>Corrupt types files already reported, so the modal warning is shown once per file.</summary>
+    private readonly HashSet<string> _reportedCorruptTypes = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Called at startup: retains the last-applied map (validating it is still
     /// present on the server) and, for a first-time user whose server is already
@@ -57,7 +60,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return null;
         }
 
-        CommitAppliedMap(defaultMap, environment.PresetName, environment);
+        if (!CommitAppliedMap(defaultMap, environment.PresetName, environment))
+        {
+            return null;
+        }
+
         SetRestoringSelection(defaultMap);
         return defaultMap;
     }
@@ -75,12 +82,22 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             MapNames.Add(map.Name);
         }
 
-        foreach (string key in _typesConfig.Maps.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        // Add maps that have preset folders but are no longer discovered, so the
+        // user can see and clean up stale configurations.
+        string presetsRoot = PresetPaths.PresetsRoot(_dataDirectoryProvider.Current);
+        foreach (string key in _fileSystem.GetDirectories(presetsRoot).OrderBy(k => k, StringComparer.Ordinal))
         {
             if (!ContainsIgnoreCase(MapNames, key))
             {
                 MapNames.Add(key);
             }
+        }
+
+        // Keep the applied map selectable even when its mission folder disappeared,
+        // so the dropdown never silently jumps to a different map.
+        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) && !ContainsIgnoreCase(MapNames, _typesConfig.CurrentMap))
+        {
+            MapNames.Add(_typesConfig.CurrentMap);
         }
 
         _isRestoring = true;
@@ -211,7 +228,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 return;
             }
 
-            CommitAppliedMap(mapName, environment.PresetName, environment);
+            if (!CommitAppliedMap(mapName, environment.PresetName, environment))
+            {
+                SetRestoringSelection(_typesConfig.CurrentMap);
+                return;
+            }
+
             SetRestoringSelection(mapName);
         }
         catch (Exception ex)
@@ -327,6 +349,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return null;
         }
 
+        foreach (string warning in ensured.Warnings)
+        {
+            _log.Warning(warning);
+        }
+
         string requestedPreset = ResolvePresetForMap?.Invoke(mapName) ?? PresetPaths.DefaultPresetName;
         EnvironmentResolution resolution = _presetService.ResolveEnvironment(
             settings, dataDirectory, mapName, requestedPreset);
@@ -341,6 +368,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 _log.Error(resolution.Error ?? $"No usable preset is available for {mapName}.");
                 return null;
             }
+        }
+
+        foreach (string warning in resolution.Warnings)
+        {
+            _log.Warning(warning);
         }
 
         ServerEnvironment environment = resolution.Environment;
@@ -361,24 +393,48 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// creates its profiles folder, points the launch batch at it (idempotent when
     /// an Apply already did), refreshes the UI and persists the selection.
     /// </summary>
-    private void CommitAppliedMap(string mapName, string presetName, ServerEnvironment environment)
+    private bool CommitAppliedMap(string mapName, string presetName, ServerEnvironment environment)
     {
+        // Point the launcher at the environment even when no separate Apply ran
+        // (e.g. the startup auto-apply). Idempotent when an Apply already wrote it.
+        // A non-conforming batch is rejected before any state is committed.
+        var settings = new Settings { ServerPath = _serverPath, BatFileName = _batFileName };
+        LaunchWriteResult location = _launchEnvironment.WriteServerLocation(settings, environment);
+        if (!location.Success)
+        {
+            foreach (string message in location.Messages)
+            {
+                _log.Error(message);
+            }
+
+            _log.Error($"Could not point the launch batch at preset \"{presetName}\"; the map was not switched.");
+            return false;
+        }
+
+        foreach (string message in location.Messages)
+        {
+            _log.Info(message);
+        }
+
         _activePresetName = presetName;
 
         // Load the target preset's own (single-map) types configuration so a map
         // switch shows that preset's settings rather than carrying the previous
         // map's config over.
-        MergePresetTypesConfig(mapName, presetName);
+        bool typesUsable = MergePresetTypesConfig(mapName, presetName);
         _typesConfig.CurrentMap = mapName;
-        try
+        if (typesUsable)
         {
-            _typesConfigStore.Save(PresetFolder(mapName), _typesConfig);
-        }
-        catch (Exception ex)
-        {
-            // The environment is already applied; a failed types save is reported
-            // but does not tear it down.
-            _log.Error($"Failed to persist the applied map's types configuration: {ex.Message}");
+            try
+            {
+                _typesConfigStore.Save(PresetFolder(mapName), _typesConfig);
+            }
+            catch (Exception ex)
+            {
+                // The environment is already applied; a failed types save is reported
+                // but does not tear it down.
+                _log.Error($"Failed to persist the applied map's types configuration: {ex.Message}");
+            }
         }
 
         // Pre-create the preset profiles folder the batch serverProfile points at.
@@ -393,18 +449,22 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             _log.Error($"Failed to create the preset profiles directory: {ex.Message}");
         }
 
-        // Point the launcher at the environment even when no separate Apply ran
-        // (e.g. the startup auto-apply). Idempotent when an Apply already wrote it.
-        var settings = new Settings { ServerPath = _serverPath, BatFileName = _batFileName };
-        ServerLocationWriteResult location = _launchEnvironment.WriteServerLocation(settings, environment);
-        foreach (string message in location.Messages)
-        {
-            _log.Info(message);
-        }
-
         NotifyCommandStates();
         RebuildRows();
-        SyncEconomyCore();
+        if (typesUsable)
+        {
+            if (!SyncEconomyCore())
+            {
+                _log.Error(
+                    "Map switched, but cfgeconomycore.xml could not be synchronized. " +
+                    "Start Server is blocked until the configuration is re-applied successfully.");
+            }
+        }
+        else
+        {
+            _log.Warning("cfgeconomycore.xml was not updated because types_config.json is corrupt.");
+        }
+
         RefreshPresets();
         RefreshSaves();
         _log.Success($"Map switched to: {mapName}");
@@ -412,28 +472,54 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         // Let the shell persist the now-active map/preset so the next startup can
         // locate this preset's mod order and types configuration.
         PersistActiveSelection?.Invoke(mapName, presetName);
+        return true;
     }
 
     /// <summary>
-    /// Loads the types configuration owned by a preset for a map and merges it
-    /// into the shared config, replacing only that map's entry. A preset-scoped
-    /// file never carries another map, so switching maps or presets cannot leak
-    /// or drop other maps' settings.
+    /// Loads the target preset's types configuration into the shared config.
+    /// Returns false when the file is corrupt: the in-memory mods are cleared but
+    /// the file is preserved (and backed up) so an automatic save cannot replace
+    /// it with an empty config.
     /// </summary>
-    private void MergePresetTypesConfig(string mapName, string presetName)
+    private bool MergePresetTypesConfig(string mapName, string presetName)
     {
         string presetFolder = PresetPaths.PresetFolder(_dataDirectoryProvider.Current, mapName, presetName);
         ConfigLoadResult<TypesConfig> loaded = _typesConfigStore.Load(presetFolder);
         if (loaded.Status == ConfigLoadStatus.Success && loaded.Value is not null)
         {
-            _typesConfig.MergeFrom(loaded.Value);
+            _typesConfig.Mods = loaded.Value.Mods.ToList();
+            _typesConfig.IsCorrupt = false;
+            return true;
         }
-        else
+
+        // No usable config for this preset: this map starts with an empty one.
+        _typesConfig.Mods.Clear();
+        _typesConfig.CurrentMap = mapName;
+        _typesConfig.IsCorrupt = loaded.Status == ConfigLoadStatus.Corrupt;
+        if (!_typesConfig.IsCorrupt)
         {
-            // No usable config for this preset: this map starts with an empty one.
-            _typesConfig.Maps.Remove(mapName);
-            _typesConfig.CurrentMap = mapName;
+            return true;
         }
+
+        string path = PresetPaths.TypesConfigPath(_dataDirectoryProvider.Current, mapName, presetName);
+        bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
+        _log.Error(
+            $"types_config.json is corrupt ({path}). " +
+            (backedUp ? $"A backup was saved as \"{path}.corrupt\". " : string.Empty) +
+            "The file was not overwritten and cfgeconomycore.xml was not updated. " +
+            "Fix or delete the corrupt file, then re-select the map.");
+
+        if (_reportedCorruptTypes.Add(path))
+        {
+            _dialogs.ShowWarning(
+                "The preset's types configuration could not be read and was left untouched.",
+                "Types configuration corrupt",
+                "The file was not overwritten and cfgeconomycore.xml was not updated. " +
+                "Fix or delete the corrupt types_config.json, then re-select the map.",
+                path);
+        }
+
+        return false;
     }
 }
 

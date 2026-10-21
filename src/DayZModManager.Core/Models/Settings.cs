@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DayZModManager.Core.Models;
 
 /// <summary>
@@ -44,10 +46,12 @@ public sealed record Settings
     private Dictionary<string, string> _activePresets = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Full path to the launch batch file. Empty while no batch file is selected;
-    /// a rooted <see cref="BatFileName"/> is used directly, otherwise it is
-    /// combined with <see cref="ServerPath"/>.
+    /// Full path to the launch batch file. Derived from <see cref="BatFileName"/>
+    /// and <see cref="ServerPath"/>; never persisted, so it cannot go stale.
+    /// Empty while no batch file is selected; a rooted <see cref="BatFileName"/> is
+    /// used directly, otherwise it is combined with <see cref="ServerPath"/>.
     /// </summary>
+    [JsonIgnore]
     public string BatFilePath =>
         string.IsNullOrWhiteSpace(BatFileName)
             ? string.Empty

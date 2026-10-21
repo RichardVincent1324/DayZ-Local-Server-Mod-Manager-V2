@@ -157,7 +157,9 @@ public class PresetServiceTests
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // id 1
         service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore"); // id 2
-        service.CreatePreset(ServerPath, DataDirectory, "dayzOffline.sakhal", "Other"); // id 3
+        service.DuplicatePreset(
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName,
+            "dayzOffline.sakhal", "Other"); // id 3
 
         Assert.Equal(4, service.AllocateInstanceId(DataDirectory, ServerPath, Map));
     }
@@ -176,6 +178,70 @@ public class PresetServiceTests
         // even though storage_7 exists, so the user's existing world is used.
         Assert.Equal(7, service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName));
         Assert.Contains("instanceId=7;", fs.TryGetFileContents(ConfigPath(PresetPaths.DefaultPresetName))!);
+    }
+
+    [Fact]
+    public void EnsureDefaultPreset_RootIdUsedByPresetOnSameMap_UsesFreshIdAndWarns()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs, instanceId: 7);
+        fs.AddDirectory(PresetFolder("Survivor"));
+        fs.AddFile(MetaPath("Survivor"), "{\"instanceId\":7}");
+
+        PresetResult result = service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        Assert.True(result.Success);
+        int id = service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        Assert.NotEqual(7, id);
+        Assert.Contains(result.Warnings, w => w.Contains("7") && w.Contains("Survivor"));
+    }
+
+    [Fact]
+    public void EnsureDefaultPreset_RootIdUsedByPresetOnAnotherMap_UsesFreshIdAndWarns()
+    {
+        const string otherMap = "dayzOffline.sakhal";
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs, instanceId: 7);
+        fs.AddDirectory(PresetPaths.PresetFolder(DataDirectory, otherMap, "Other"));
+        fs.AddFile(PresetPaths.PresetMetaPath(DataDirectory, otherMap, "Other"), "{\"instanceId\":7}");
+
+        PresetResult result = service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+
+        Assert.True(result.Success);
+        int id = service.ReadInstanceId(DataDirectory, Map, PresetPaths.DefaultPresetName);
+        Assert.NotEqual(7, id);
+        Assert.Contains(result.Warnings, w => w.Contains("7") && w.Contains("Other"));
+    }
+
+    [Fact]
+    public void CreatePreset_FailsWhenDefaultConfigMissing_EvenIfRootExists()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+
+        // The map's default preset (and therefore its config) does not exist.
+        PresetResult result = service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
+
+        Assert.False(result.Success);
+        Assert.Contains("default preset", result.Message);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        Assert.False(fs.DirectoryExists(PresetFolder("Hardcore")));
+    }
+
+    [Fact]
+    public void DuplicatePreset_FailsWhenSourceConfigMissing_EvenIfDefaultAndRootExist()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        fs.DeleteFile(ConfigPath(PresetPaths.DefaultPresetName));
+
+        PresetResult result = service.DuplicatePreset(
+            ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
+
+        Assert.False(result.Success);
+        Assert.Contains("serverDZ.cfg", result.Message);
+        Assert.False(fs.DirectoryExists(PresetFolder("Copy")));
     }
 
     [Fact]
@@ -275,7 +341,8 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
-        service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
+        Assert.True(service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore").Success);
 
         Assert.False(service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore").Success);
     }
@@ -285,6 +352,7 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
         service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         PresetResult result = service.RenamePreset(DataDirectory, Map, "Hardcore", "Apocalypse");
@@ -315,6 +383,7 @@ public class PresetServiceTests
     {
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
+        service.EnsureDefaultPreset(ServerPath, DataDirectory, Map);
         service.CreatePreset(ServerPath, DataDirectory, Map, "Hardcore");
 
         PresetResult result = service.DeletePreset(DataDirectory, Map, "Hardcore");
@@ -339,6 +408,84 @@ public class PresetServiceTests
         fs.AddFile(ConfigPath("Broken"), $"template=\"{Map}\";\ninstanceId=9;\n");
 
         Assert.Equal(9, service.ReadInstanceId(DataDirectory, Map, "Broken"));
+    }
+
+    [Fact]
+    public void ReadInstanceId_PrefersServerConfigOverMetadata()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddFile(MetaPath("Drift"), "{\"instanceId\":1}");
+        fs.AddFile(ConfigPath("Drift"), $"template=\"{Map}\";\ninstanceId=9;\n");
+
+        // DayZ uses the config value, so the app must too.
+        Assert.Equal(9, service.ReadInstanceId(DataDirectory, Map, "Drift"));
+    }
+
+    [Fact]
+    public void ReadInstanceId_TreatsEmptyMetadataAsUnknown()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddFile(MetaPath("EmptyMeta"), "{}");
+        fs.AddFile(ConfigPath("EmptyMeta"), $"template=\"{Map}\";\ninstanceId=9;\n");
+
+        Assert.Equal(9, service.ReadInstanceId(DataDirectory, Map, "EmptyMeta"));
+    }
+
+    [Fact]
+    public void FindInstanceIdIssues_ReportsDuplicateIds()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddDirectory(PresetFolder("A"));
+        fs.AddFile(MetaPath("A"), "{\"instanceId\":7}");
+        fs.AddFile(ConfigPath("A"), $"template=\"{Map}\";\ninstanceId=7;\n");
+        fs.AddDirectory(PresetFolder("B"));
+        fs.AddFile(MetaPath("B"), "{\"instanceId\":7}");
+        fs.AddFile(ConfigPath("B"), $"template=\"{Map}\";\ninstanceId=7;\n");
+
+        IReadOnlyList<string> issues = service.FindInstanceIdIssues(DataDirectory);
+
+        Assert.Contains(issues, i => i.Contains("Instance ID 7") && i.Contains("\"A\"") && i.Contains("\"B\""));
+    }
+
+    [Fact]
+    public void FindInstanceIdIssues_ReportsMetaConfigMismatch()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddDirectory(PresetFolder("A"));
+        fs.AddFile(MetaPath("A"), "{\"instanceId\":1}");
+        fs.AddFile(ConfigPath("A"), $"template=\"{Map}\";\ninstanceId=9;\n");
+
+        IReadOnlyList<string> issues = service.FindInstanceIdIssues(DataDirectory);
+
+        Assert.Contains(issues, i => i.Contains("preset-meta.json") && i.Contains("9"));
+    }
+
+    [Fact]
+    public void FindInstanceIdConflicts_ExcludesMetadataMismatch()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddDirectory(PresetFolder("A"));
+        fs.AddFile(MetaPath("A"), "{\"instanceId\":1}");
+        fs.AddFile(ConfigPath("A"), $"template=\"{Map}\";\ninstanceId=9;\n");
+
+        // The config is authoritative and the app will use ID 9, so a stale
+        // metadata value is a warning, not a launch blocker.
+        Assert.Empty(service.FindInstanceIdConflicts(DataDirectory));
+        Assert.NotEmpty(service.FindInstanceIdIssues(DataDirectory));
+    }
+
+    [Fact]
+    public void FindInstanceIdIssues_ReturnsEmpty_WhenIdsAreConsistentAndUnique()
+    {
+        (PresetService service, FakeFileSystem fs) = CreateService();
+        fs.AddDirectory(PresetFolder("A"));
+        fs.AddFile(MetaPath("A"), "{\"instanceId\":1}");
+        fs.AddFile(ConfigPath("A"), $"template=\"{Map}\";\ninstanceId=1;\n");
+        fs.AddDirectory(PresetFolder("B"));
+        fs.AddFile(MetaPath("B"), "{\"instanceId\":2}");
+        fs.AddFile(ConfigPath("B"), $"template=\"{Map}\";\ninstanceId=2;\n");
+
+        Assert.Empty(service.FindInstanceIdIssues(DataDirectory));
     }
 
     [Fact]
@@ -394,7 +541,7 @@ public class PresetServiceTests
         string sourceTypeFiles = PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceTypeFiles, "CF_types.xml"), "<types/>");
         fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
-        fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"currentMap\":\"x\"}");
+        fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"mods\":[]}");
 
         PresetResult result = service.DuplicatePreset(
             ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
@@ -476,18 +623,18 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void DuplicatePreset_ToAnotherMap_RewritesMapScopedSettings()
+    public void DuplicatePreset_ToAnotherMap_CopiesMapAgnosticTypesConfig()
     {
         const string otherMap = "dayzOffline.sakhal";
         (PresetService service, FakeFileSystem fs) = CreateService();
         SeedRootConfig(fs);
         service.EnsureDefaultPreset(ServerPath, DataDirectory, Map); // map A default, id 1
 
-        // Source preset content that is map-scoped and must be adapted.
+        // Source preset content: the types file is map-agnostic.
         fs.AddFile(ConfigPath(PresetPaths.DefaultPresetName), $"template=\"{Map}\";\ninstanceId=1;\n");
         fs.AddFile(
             PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName),
-            "{\"currentMap\":\"" + Map + "\",\"maps\":{\"" + Map + "\":{\"mods\":[]}}}");
+            "{\"mods\":[{\"modName\":\"@CF\"}]}");
         fs.AddFile(
             Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName), "CF_types.xml"),
             "<types/>");
@@ -510,11 +657,12 @@ public class PresetServiceTests
         Assert.Contains($"template=\"{otherMap}\"", cfg);
         Assert.Contains($"instanceId={instanceId};", cfg);
 
-        // Types config is rewritten to the destination map key/CurrentMap.
+        // The map-agnostic types config is copied as-is.
         string types = fs.TryGetFileContents(PresetPaths.TypesConfigPath(DataDirectory, otherMap, "Copy"))!;
-        Assert.Contains($"\"currentMap\": \"{otherMap}\"", types);
-        Assert.Contains($"\"{otherMap}\"", types);
-        Assert.DoesNotContain($"\"{Map}\"", types);
+        Assert.Contains("\"mods\"", types);
+        Assert.Contains("\"@CF\"", types);
+        Assert.DoesNotContain("\"currentMap\"", types);
+        Assert.DoesNotContain("\"maps\"", types);
 
         // Map-agnostic content is copied; saves never are.
         Assert.True(fs.FileExists(

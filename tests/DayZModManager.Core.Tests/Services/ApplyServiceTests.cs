@@ -41,7 +41,7 @@ public class ApplyServiceTests
         fs.AddDirectory(ServerPath);
         fs.AddFile($@"{ServerPath}\DayZServer_x64.exe", "");
         fs.AddFile($@"{ServerPath}\serverDZ.cfg", "");
-        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@Old;\"");
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@Old;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
         return fs;
     }
 
@@ -52,7 +52,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            new LaunchEnvironmentService(batchFile, fs),
+            new LaunchEnvironmentService(batchFile),
             new JunctionService(fs, junctions),
             new ValidationService(fs, batchFile),
             fs);
@@ -111,7 +111,7 @@ public class ApplyServiceTests
         fs.AddDirectory(WorkshopPath, "@CF");
         fs.AddDirectory(ServerPath);
         // Missing executable and config file -> validation fails
-        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@Old;\"");
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@Old;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
 
         (ApplyService service, FakeFileSystem _, FakeJunctionOperations junctions) = CreateRealServices(fs);
 
@@ -134,7 +134,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            new LaunchEnvironmentService(stubBatch, fs),
+            new LaunchEnvironmentService(stubBatch),
             new JunctionService(fs, junctions),
             new ValidationService(fs, realBatch),
             fs);
@@ -180,7 +180,7 @@ public class ApplyServiceTests
     public void Apply_BatchWriteThrows_KeepsJunctionsAndConfigOfUnchangedSet()
     {
         FakeFileSystem fs = SeedValidEnvironment();
-        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=ModList/@CF;ModList/@Expansion;\"");
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=ModList/@CF;ModList/@Expansion;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
         var junctions = new FakeJunctionOperations();
         string modFolder = ModListFolder.Directory(ServerPath, "1");
         junctions.Create($@"{modFolder}\@CF", $@"{WorkshopPath}\@CF");
@@ -190,7 +190,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new SettingsService(fs),
             new ModOrderStore(fs),
-            new LaunchEnvironmentService(stubBatch, fs),
+            new LaunchEnvironmentService(stubBatch),
             new JunctionService(fs, junctions),
             new ValidationService(fs, new BatchFileService(fs)),
             fs);
@@ -224,7 +224,7 @@ public class ApplyServiceTests
         var service = new ApplyService(
             new ThrowingSettingsService(new SettingsService(fs)),
             new ModOrderStore(fs),
-            new LaunchEnvironmentService(batchFile, fs),
+            new LaunchEnvironmentService(batchFile),
             new JunctionService(fs, junctions),
             new ValidationService(fs, batchFile),
             fs);
@@ -258,6 +258,30 @@ public class ApplyServiceTests
         Assert.True(result.Success);
     }
 
+    [Fact]
+    public void Apply_MissingServerConfigLine_Fails_AndDoesNotOverwriteServerRootConfig()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        string rootConfig = $@"{ServerPath}\serverDZ.cfg";
+        fs.AddFile(rootConfig, "root config");
+        fs.AddFile(Path.Combine(PresetDir, "serverDZ.cfg"), "preset config");
+        fs.AddFile(
+            $@"{ServerPath}\LocalServer.example.bat",
+            "set \"modList=-mod=@Old;\"\nset \"serverProfile=old\\profiles\"");
+
+        (ApplyService service, _, _) = CreateRealServices(fs);
+
+        ApplyResult result = service.Apply(CreateContext(new[] { "@CF" }));
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Logs, l => l.Contains("serverConfig", StringComparison.OrdinalIgnoreCase));
+
+        // The old behaviour copied the preset config over the root config. That
+        // fallback is gone: the root config and the batch file stay untouched.
+        Assert.Equal("root config", fs.TryGetFileContents(rootConfig));
+        Assert.Contains("modList=-mod=@Old;", fs.TryGetFileContents($@"{ServerPath}\LocalServer.example.bat")!);
+    }
+
     private sealed class ThrowingSettingsService : ISettingsService
     {
         private readonly ISettingsService _inner;
@@ -283,6 +307,10 @@ public class ApplyServiceTests
         public bool ThrowWrite { get; set; }
 
         public bool HasModListLine(string batFilePath) => _inner.HasModListLine(batFilePath);
+
+        public bool HasServerProfileLine(string batFilePath) => _inner.HasServerProfileLine(batFilePath);
+
+        public bool HasServerConfigLine(string batFilePath) => _inner.HasServerConfigLine(batFilePath);
 
         public bool WriteModList(string batFilePath, IReadOnlyList<string> modNames)
         {

@@ -78,6 +78,31 @@ public class EconomyCoreServiceTests
     }
 
     [Fact]
+    public void GetTypeFileNames_ReturnsManagedEntriesInOrder()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+        var service = CreateService(fs);
+        service.UpdateTypeFiles(
+            MissionPath,
+            new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" },
+            Types("CF_types.xml", "Expansion_spawnabletypes.xml"));
+
+        Assert.Equal(
+            new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" },
+            service.GetTypeFileNames(MissionPath));
+    }
+
+    [Fact]
+    public void GetTypeFileNames_ReturnsEmpty_WhenNoManagedBlock()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+
+        Assert.Empty(CreateService(fs).GetTypeFileNames(MissionPath));
+    }
+
+    [Fact]
     public void UpdateTypeFiles_ExplicitFileTypes_AreUsed()
     {
         var fs = new FakeFileSystem();

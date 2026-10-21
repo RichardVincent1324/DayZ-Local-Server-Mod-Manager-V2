@@ -330,7 +330,7 @@ public partial class PresetTypesViewModelTests
     [Fact]
     public void CleanInvalid_DoesNotPrompt_WhenNothingInvalid()
     {
-        var config = new TypesConfig { CurrentMap = MapName, Maps = { [MapName] = new MapTypesConfig() } };
+        var config = new TypesConfig { CurrentMap = MapName };
         var types = new FakeTypesService();
         var dialogs = new FakeDialogs();
 
@@ -528,7 +528,7 @@ public partial class PresetTypesViewModelTests
         var active = new TypesConfig
         {
             CurrentMap = MapName,
-            Maps = { [MapName] = new MapTypesConfig { Mods = { Entry("@CF", "CF_types.xml") } } },
+            Mods = { Entry("@CF", "CF_types.xml") },
         };
         var types = new FakeTypesService();
         PresetTypesViewModel vm = Create(active, typesService: types);
@@ -544,7 +544,7 @@ public partial class PresetTypesViewModelTests
         var active = new TypesConfig
         {
             CurrentMap = MapName,
-            Maps = { [MapName] = new MapTypesConfig { Mods = { Entry("@CF", "CF_types.xml") } } },
+            Mods = { Entry("@CF", "CF_types.xml") },
         };
         var types = new FakeTypesService
         {
@@ -559,6 +559,43 @@ public partial class PresetTypesViewModelTests
         Assert.Equal(1, dialogs.ShowAlertCalls);
         Assert.Contains("unmanaged", dialogs.LastAlertMessage!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("cfgeconomycore.xml", dialogs.LastAlertNote!);
+    }
+
+    [Fact]
+    public void PreflightTypesIssues_ReportsUnsynchronizedEconomyBlock()
+    {
+        string missionPath = $@"{ServerPath}\mpmissions\{MapName}";
+        string expectedFolder = Path.GetRelativePath(missionPath, TypeFilesFolderPath()).Replace('\\', '/');
+        var types = new FakeTypesService
+        {
+            ActiveTypesFolder = expectedFolder,
+            ActiveTypeFiles = new[] { "CF_types.xml" },
+            ManagedTypeFileNames = new[] { "Old_types.xml" },
+        };
+        PresetTypesViewModel vm = Create(AppliedConfig(), typesService: types);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        IReadOnlyList<string> issues = vm.PreflightTypesIssues();
+
+        Assert.Contains(issues, i => i.Contains("cfgeconomycore.xml is not synchronized"));
+    }
+
+    [Fact]
+    public void PreflightTypesIssues_DoesNotReport_WhenEconomyBlockMatches()
+    {
+        string missionPath = $@"{ServerPath}\mpmissions\{MapName}";
+        string expectedFolder = Path.GetRelativePath(missionPath, TypeFilesFolderPath()).Replace('\\', '/');
+        var types = new FakeTypesService
+        {
+            ActiveTypesFolder = expectedFolder,
+            ActiveTypeFiles = new[] { "CF_types.xml" },
+            ManagedTypeFileNames = new[] { "CF_types.xml" },
+        };
+        PresetTypesViewModel vm = Create(AppliedConfig(), typesService: types);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.DoesNotContain(
+            vm.PreflightTypesIssues(), i => i.Contains("cfgeconomycore.xml is not synchronized"));
     }
 }
 

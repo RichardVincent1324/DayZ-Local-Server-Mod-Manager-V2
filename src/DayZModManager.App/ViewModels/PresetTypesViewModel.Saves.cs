@@ -72,6 +72,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 // (mods, types, profiles, instance ID) is left untouched.
                 NotifyCommandStates();
                 RebuildRows();
+                RefreshLiveWorldStatus();
             }
         }
         catch (Exception ex)
@@ -292,6 +293,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 NotifyCommandStates();
                 RebuildRows();
+                RefreshLiveWorldStatus();
             }
         }
         catch (Exception ex)
@@ -385,6 +387,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         string mapName = _typesConfig.CurrentMap;
         if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(mapName))
         {
+            RefreshLiveWorldStatus();
             return;
         }
 
@@ -403,6 +406,10 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         catch (Exception ex)
         {
             _log.Error($"Failed to list progress saves: {ex.Message}");
+        }
+        finally
+        {
+            RefreshLiveWorldStatus();
         }
     }
 

@@ -9,43 +9,86 @@ public class TypesConfigStoreTests
     private const string PresetDir = @"D:\app\data\Presets\dayzOffline.chernarusplus\__default_preset__";
 
     [Fact]
-    public void Save_PersistsOnlyTheCurrentMap()
+    public void Save_ThenLoad_PreservesMods()
     {
         var fs = new FakeFileSystem();
         var store = new TypesConfigStore(fs);
         var config = new TypesConfig
         {
-            CurrentMap = "mapA",
-            Maps =
-            {
-                ["mapA"] = new MapTypesConfig { Mods = { new ModTypesEntry { ModName = "@A" } } },
-                ["mapB"] = new MapTypesConfig { Mods = { new ModTypesEntry { ModName = "@B" } } },
-            },
+            Mods = { new ModTypesEntry { ModName = "@A" } },
         };
 
         store.Save(PresetDir, config);
 
         TypesConfig reloaded = store.Load(PresetDir).Value!;
-        Assert.Equal("mapA", reloaded.CurrentMap);
-        Assert.True(reloaded.Maps.ContainsKey("mapA"));
-        Assert.False(reloaded.Maps.ContainsKey("mapB"), "another map's config must never be written into this preset");
+        Assert.Equal("@A", reloaded.Mods.Single().ModName);
     }
 
     [Fact]
-    public void Save_WithCurrentMapWithoutEntry_WritesEmptyConfigForThatMap()
+    public void Save_WritesMapAgnosticShape()
     {
         var fs = new FakeFileSystem();
         var store = new TypesConfigStore(fs);
-        var config = new TypesConfig
-        {
-            CurrentMap = "mapA",
-            Maps = { ["mapB"] = new MapTypesConfig() },
-        };
+
+        store.Save(PresetDir, new TypesConfig { Mods = { new ModTypesEntry { ModName = "@A" } } });
+
+        string json = fs.TryGetFileContents(Path.Combine(PresetDir, "types_config.json"))!;
+        Assert.Contains("\"mods\"", json);
+        Assert.DoesNotContain("\"maps\"", json);
+        Assert.DoesNotContain("\"currentMap\"", json);
+    }
+
+    [Fact]
+    public void Load_RejectsOldMapEnvelope()
+    {
+        var fs = new FakeFileSystem();
+        string path = Path.Combine(PresetDir, "types_config.json");
+        fs.AddFile(path, "{\"maps\":{\"mapA\":{\"mods\":[]}},\"currentMap\":\"mapA\"}");
+        var store = new TypesConfigStore(fs);
+
+        Assert.Equal(ConfigLoadStatus.Corrupt, store.Load(PresetDir).Status);
+        Assert.True(store.BackupCorrupt(PresetDir));
+        Assert.Equal(
+            "{\"maps\":{\"mapA\":{\"mods\":[]}},\"currentMap\":\"mapA\"}",
+            fs.TryGetFileContents(path + ".corrupt"));
+    }
+
+    [Fact]
+    public void BackupCorrupt_PreservesUnreadableFile()
+    {
+        var fs = new FakeFileSystem();
+        string path = Path.Combine(PresetDir, "types_config.json");
+        fs.AddFile(path, "not json");
+        var store = new TypesConfigStore(fs);
+
+        Assert.True(store.BackupCorrupt(PresetDir));
+        Assert.Equal("not json", fs.TryGetFileContents(path + ".corrupt"));
+    }
+
+    [Fact]
+    public void BackupCorrupt_ReturnsFalse_ForValidFile()
+    {
+        var fs = new FakeFileSystem();
+        var store = new TypesConfigStore(fs);
+        store.Save(PresetDir, new TypesConfig());
+
+        Assert.False(store.BackupCorrupt(PresetDir));
+        Assert.False(fs.FileExists(Path.Combine(PresetDir, "types_config.json.corrupt")));
+    }
+
+    [Fact]
+    public void Save_BacksUpCorruptFileBeforeWritingNewConfig()
+    {
+        var fs = new FakeFileSystem();
+        string path = Path.Combine(PresetDir, "types_config.json");
+        fs.AddFile(path, "not json");
+        var store = new TypesConfigStore(fs);
+        var config = new TypesConfig { IsCorrupt = true };
 
         store.Save(PresetDir, config);
 
-        TypesConfig reloaded = store.Load(PresetDir).Value!;
-        Assert.Equal("mapA", reloaded.CurrentMap);
-        Assert.Empty(reloaded.Maps);
+        Assert.Equal("not json", fs.TryGetFileContents(path + ".corrupt"));
+        Assert.Equal(ConfigLoadStatus.Success, store.Load(PresetDir).Status);
+        Assert.False(config.IsCorrupt);
     }
 }

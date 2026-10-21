@@ -36,4 +36,28 @@ public class ModOrderStoreTests
         Assert.Equal(ConfigLoadStatus.Success, result.Status);
         Assert.Equal(new[] { "@CF", "@Dabs Framework", "@VPPAdminTools" }, result.Value!);
     }
+
+    [Fact]
+    public void BackupCorrupt_PreservesUnreadableFile()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(@"C:\data\mod_order.json", "not json");
+        var store = new ModOrderStore(fs);
+
+        Assert.True(store.BackupCorrupt(@"C:\data"));
+        Assert.Equal("not json", fs.TryGetFileContents(@"C:\data\mod_order.json.corrupt"));
+    }
+
+    [Fact]
+    public void Save_BacksUpCorruptFileBeforeWriting()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(@"C:\data\mod_order.json", "not json");
+        var store = new ModOrderStore(fs);
+
+        store.Save(@"C:\data", new[] { "@CF" });
+
+        Assert.Equal("not json", fs.TryGetFileContents(@"C:\data\mod_order.json.corrupt"));
+        Assert.Equal(ConfigLoadStatus.Success, store.Load(@"C:\data").Status);
+    }
 }

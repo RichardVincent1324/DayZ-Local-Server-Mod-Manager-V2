@@ -159,6 +159,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
+        foreach (string warning in result.Warnings)
+        {
+            _log.Warning(warning);
+        }
+
         _log.Success(result.Message);
         RefreshPresets();
 
@@ -210,6 +215,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             _log.Error(result.Message);
             _dialogs.ShowMessage(result.Message, "Duplicate Preset", isError: true);
             return;
+        }
+
+        foreach (string warning in result.Warnings)
+        {
+            _log.Warning(warning);
         }
 
         _log.Success(result.Message);

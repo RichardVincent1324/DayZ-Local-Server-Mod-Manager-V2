@@ -40,6 +40,23 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public void ReconcileAppliedMap_CorruptTypesConfig_IsNotSavedOrSynced()
+    {
+        var config = new TypesConfig();
+        var store = new FakeTypesConfigStore { LoadResult = ConfigLoadResult<TypesConfig>.Corrupt() };
+        var types = new FakeTypesService();
+
+        PresetTypesViewModel vm = Create(config, typesConfigStore: store, typesService: types);
+        vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        vm.ReconcileAppliedMap();
+
+        Assert.True(store.BackupCalled);
+        Assert.False(store.SaveCalled);
+        Assert.True(config.IsCorrupt);
+        Assert.Equal(0, types.SyncEconomyCoreCalls);
+    }
+
+    [Fact]
     public void ApplyingAMap_PointsBatchAtThePresetProfilesAndConfig()
     {
         var config = new TypesConfig();
@@ -110,20 +127,19 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public async Task SelectingAMap_MergesTargetPresetConfig_WithoutLeakingOtherMaps()
+    public async Task SelectingAMap_ReplacesTypesConfigWithTargetPresetConfig()
     {
         const string secondMap = "dayzOffline.deerisle";
         var config = new TypesConfig
         {
             CurrentMap = MapName,
-            Maps = { [MapName] = new MapTypesConfig() },
+            Mods = { new ModTypesEntry { ModName = "@A" } },
         };
         var store = new FakeTypesConfigStore
         {
             LoadResult = ConfigLoadResult<TypesConfig>.Success(new TypesConfig
             {
-                CurrentMap = secondMap,
-                Maps = { [secondMap] = new MapTypesConfig { Mods = { new ModTypesEntry { ModName = "@B" } } } },
+                Mods = { new ModTypesEntry { ModName = "@B" } },
             }),
         };
         var mapService = new FakeMapService(
@@ -137,8 +153,8 @@ public partial class PresetTypesViewModelTests
         await WaitUntilAsync(() => string.Equals(config.CurrentMap, secondMap, StringComparison.Ordinal));
 
         Assert.Equal(secondMap, config.CurrentMap);
-        Assert.Equal("@B", config.Maps[secondMap].Mods.Single().ModName);
-        Assert.True(config.Maps.ContainsKey(MapName), "the previous map's config must be preserved in memory");
+        Assert.Equal("@B", config.Mods.Single().ModName);
+        Assert.DoesNotContain(config.Mods, m => string.Equals(m.ModName, "@A", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -236,11 +252,7 @@ public partial class PresetTypesViewModelTests
     public void ReconcileAppliedMap_MissingRetainedMap_WarnsAndKeepsSelection()
     {
         const string missingMap = "dayzOffline.deerisle";
-        var config = new TypesConfig
-        {
-            CurrentMap = missingMap,
-            Maps = { [missingMap] = new MapTypesConfig() },
-        };
+        var config = new TypesConfig { CurrentMap = missingMap };
         var store = new FakeTypesConfigStore();
 
         PresetTypesViewModel vm = Create(config, typesConfigStore: store);
@@ -307,9 +319,9 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void ReconcileAppliedMap_ConfigOnlyMap_NoServerMap_DoesNotAutoApply()
+    public void ReconcileAppliedMap_NoDiscoveredMaps_DoesNotAutoApply()
     {
-        var config = new TypesConfig { Maps = { [MapName] = new MapTypesConfig() } };
+        var config = new TypesConfig();
         var store = new FakeTypesConfigStore();
 
         PresetTypesViewModel vm = Create(config, mapService: new FakeMapService(), typesConfigStore: store);
@@ -317,22 +329,14 @@ public partial class PresetTypesViewModelTests
         vm.ReconcileAppliedMap();
 
         Assert.Equal(string.Empty, config.CurrentMap);
-        Assert.False(store.SaveCalled, "a config-only map with no folder on the server must not be auto-applied");
+        Assert.False(store.SaveCalled, "a server with no mission folders must not be auto-applied");
     }
 
     [Fact]
     public async Task SelectingAMap_NotDiscoverable_RevertsToAppliedMap()
     {
         const string deadMap = "dayzOffline.deerisle";
-        var config = new TypesConfig
-        {
-            CurrentMap = MapName,
-            Maps =
-            {
-                [MapName] = new MapTypesConfig(),
-                [deadMap] = new MapTypesConfig(), // persisted but no longer on disk
-            },
-        };
+        var config = new TypesConfig { CurrentMap = MapName };
         var store = new FakeTypesConfigStore();
 
         PresetTypesViewModel vm = Create(config, typesConfigStore: store);
@@ -439,11 +443,7 @@ public partial class PresetTypesViewModelTests
     public async Task SelectingAMap_EnvironmentApplyFails_LeavesNothingCommitted()
     {
         const string secondMap = "dayzOffline.deerisle";
-        var config = new TypesConfig
-        {
-            CurrentMap = MapName,
-            Maps = { [MapName] = new MapTypesConfig() },
-        };
+        var config = new TypesConfig { CurrentMap = MapName };
         var store = new FakeTypesConfigStore();
         var batch = new FakeBatchFileService();
         var mapService = new FakeMapService(

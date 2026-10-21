@@ -32,7 +32,12 @@ public sealed record ServerEnvironment
 /// </summary>
 public sealed record EnvironmentResolution(ServerEnvironment? Environment, string? Error)
 {
-    public static EnvironmentResolution Resolved(ServerEnvironment environment) => new(environment, null);
+    /// <summary>Non-fatal notices produced while resolving (for example, a healed default preset).</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
+    public static EnvironmentResolution Resolved(
+        ServerEnvironment environment, IReadOnlyList<string>? warnings = null) =>
+        new(environment, null) { Warnings = warnings ?? Array.Empty<string>() };
 
     public static EnvironmentResolution Failed(string error) => new(null, error);
 }

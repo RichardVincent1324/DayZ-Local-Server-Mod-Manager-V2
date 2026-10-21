@@ -9,10 +9,13 @@ namespace DayZModManager.Core.Models;
 public sealed class PresetMetaData
 {
     /// <summary>
-    /// The preset's dedicated DayZ instance ID. Read from the preset's
-    /// <c>serverDZ.cfg</c> at runtime to locate the live storage folder.
+    /// The preset's dedicated DayZ instance ID. The value in the preset's
+    /// <c>serverDZ.cfg</c> is authoritative at runtime (that is what DayZ reads to
+    /// locate the live storage folder); this is the app-managed record of it.
+    /// Defaults to 0 so a missing field is treated as "unknown" and the config is
+    /// used instead of silently claiming instance ID 1.
     /// </summary>
-    public int InstanceId { get; set; } = 1;
+    public int InstanceId { get; set; }
 
     /// <summary>When the preset was created, in UTC.</summary>
     public DateTime CreatedAtUtc { get; set; }

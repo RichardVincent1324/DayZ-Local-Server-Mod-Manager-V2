@@ -165,7 +165,7 @@ public static class ListBoxDragDropReorder
             }
 
             Point position = e.GetPosition(listBox);
-            int insertIndex = ComputeInsertIndex(listBox, position);
+            int insertIndex = ComputeInsertIndex(listBox, position, GetRealizedBounds(listBox));
 
             // Capture before EndDrag clears the drag state.
             List<ModItemViewModel>? dragStartSelection = state.DragStartSelection;
@@ -347,22 +347,30 @@ public static class ListBoxDragDropReorder
     }
 
     /// <summary>
-    /// Clears the current selection and selects exactly <paramref name="selection"/>
-    /// by item reference. Realized containers get IsSelected set directly (which
-    /// keeps the Selector's bookkeeping in sync); virtualized items fall back to
-    /// SelectedItems.Add and get highlighted when their container is realized.
+    /// Makes the current selection match <paramref name="selection"/> by item
+    /// reference using only the deltas: items no longer selected are removed and
+    /// missing ones are added. Clearing and re-adding the whole selection flips
+    /// every realized container's <c>IsSelected</c> and transiently mis-paints
+    /// recycled containers (the grey highlight jump). The Selector's
+    /// <c>SelectedItems</c> API is used directly so no container has to be
+    /// generated.
     /// </summary>
     private static void RestoreSelection(ListBox listBox, IReadOnlyList<ModItemViewModel> selection)
     {
-        listBox.SelectedItems.Clear();
+        var target = new HashSet<ModItemViewModel>(selection);
 
+        for (int i = listBox.SelectedItems.Count - 1; i >= 0; i--)
+        {
+            if (listBox.SelectedItems[i] is ModItemViewModel vm && !target.Contains(vm))
+            {
+                listBox.SelectedItems.RemoveAt(i);
+            }
+        }
+
+        var selected = new HashSet<ModItemViewModel>(listBox.SelectedItems.OfType<ModItemViewModel>());
         foreach (ModItemViewModel vm in selection)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromItem(vm) is ListBoxItem container)
-            {
-                container.IsSelected = true;
-            }
-            else
+            if (selected.Add(vm))
             {
                 listBox.SelectedItems.Add(vm);
             }
@@ -384,87 +392,149 @@ public static class ListBoxDragDropReorder
         ReleaseCapture(listBox);
     }
 
-	private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
-	{
-		if (state.Indicator is not { } indicator) return;
-	
-		int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox));
-		indicator.InsertPositionKind = InsertKind.None;
-	
-		if (index < 0)
-		{
-			indicator.Y = -1;
-			indicator.InvalidateVisual();
-			return;
-		}
-	
-		double y = index < listBox.Items.Count
-			? GetContainerTopY(listBox, index)
-			: GetListBottomY(listBox);
-	
-		// 关键：位置算不出来 → 直接隐藏，而不是兜底到 0
-		if (y < 0)
-		{
-			indicator.Y = -1;
-			indicator.InvalidateVisual();
-			return;
-		}
-	
-		// 底部指示线夹在视口内，避免被 AdornerLayer 裁掉
-		if (y > listBox.ActualHeight) y = listBox.ActualHeight;
-	
-		if (index == 0)
-			indicator.InsertPositionKind = InsertKind.TopOfList;
-		else if (index == listBox.Items.Count)
-			indicator.InsertPositionKind = InsertKind.BottomOfList;
-		else
-			indicator.InsertPositionKind = InsertKind.BetweenItems;
-	
-		indicator.Y = y;
-		indicator.InvalidateVisual();
-	}
-
-    private static double GetContainerTopY(ListBox listBox, int index)
+    private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
     {
-        if (listBox.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement container)
+        if (state.Indicator is not { } indicator)
         {
-            return container.TranslatePoint(new Point(0, 0), listBox).Y;
+            return;
         }
 
-        // The target container may be virtualized; fall back to a realized neighbor.
-        for (int i = index + 1; i < listBox.Items.Count; i++)
+        List<RealizedContainer> realized = GetRealizedBounds(listBox);
+        int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox), realized);
+        indicator.InsertPositionKind = InsertKind.None;
+
+        if (index < 0)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement next)
-            {
-                return next.TranslatePoint(new Point(0, 0), listBox).Y;
-            }
+            indicator.Y = -1;
+            indicator.InvalidateVisual();
+            return;
         }
 
-        for (int i = index - 1; i >= 0; i--)
+        double y = GetInsertionY(listBox, index, realized);
+
+        // When no position can be computed, hide the indicator instead of falling
+        // back to 0.
+        if (y < 0)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement prev)
-            {
-                return prev.TranslatePoint(new Point(0, 0), listBox).Y + prev.ActualHeight;
-            }
+            indicator.Y = -1;
+            indicator.InvalidateVisual();
+            return;
         }
 
-        return -1;
+        // Clamp the bottom indicator inside the viewport so the AdornerLayer does
+        // not clip it.
+        if (y > listBox.ActualHeight)
+        {
+            y = listBox.ActualHeight;
+        }
+
+        indicator.InsertPositionKind = index == 0
+            ? InsertKind.TopOfList
+            : index == listBox.Items.Count
+                ? InsertKind.BottomOfList
+                : InsertKind.BetweenItems;
+
+        indicator.Y = y;
+        indicator.InvalidateVisual();
     }
 
-    private static double GetListBottomY(ListBox listBox)
+    /// <summary>
+    /// The Y at which the insertion line for <paramref name="index"/> is drawn: the
+    /// top of that realized row, the bottom of the last row when appending, or the
+    /// nearest realized boundary when the exact row is virtualized.
+    /// </summary>
+    private static double GetInsertionY(ListBox listBox, int index, IReadOnlyList<RealizedContainer> realized)
     {
-        for (int i = listBox.Items.Count - 1; i >= 0; i--)
+        if (realized.Count == 0)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement last)
+            return -1;
+        }
+
+        foreach (RealizedContainer container in realized)
+        {
+            if (container.Index == index)
             {
-                return last.TranslatePoint(new Point(0, 0), listBox).Y + last.ActualHeight;
+                return container.Top;
             }
         }
 
-        return -1;
+        if (index >= listBox.Items.Count)
+        {
+            return realized[^1].Bottom;
+        }
+
+        foreach (RealizedContainer container in realized)
+        {
+            if (container.Index > index)
+            {
+                return container.Top;
+            }
+        }
+
+        return realized[^1].Bottom;
     }
 
-    private static int ComputeInsertIndex(ListBox listBox, Point position)
+    /// <summary>
+    /// The realized rows in item order, read straight from the ItemsPanel's
+    /// children. This avoids calling ItemContainerGenerator per index on every drag
+    /// move (which can force realization and recycle other containers) and gives
+    /// the insert calculation a single consistent snapshot.
+    /// </summary>
+    private static List<RealizedContainer> GetRealizedBounds(ListBox listBox)
+    {
+        var bounds = new List<RealizedContainer>();
+        if (GetItemsHostPanel(listBox) is not { } panel || listBox.ItemContainerGenerator is not { } generator)
+        {
+            return bounds;
+        }
+
+        foreach (UIElement child in panel.Children)
+        {
+            if (child is not FrameworkElement element || !element.IsVisible)
+            {
+                continue;
+            }
+
+            int index = generator.IndexFromContainer(element);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            double top = element.TranslatePoint(new Point(0, 0), listBox).Y;
+            bounds.Add(new RealizedContainer(index, top, top + element.ActualHeight));
+        }
+
+        bounds.Sort(static (a, b) => a.Index.CompareTo(b.Index));
+        return bounds;
+    }
+
+    /// <summary>
+    /// The panel that hosts the ListBox's item containers (the ItemsPresenter's
+    /// child). Read without going through the (protected) ItemsPanelRoot.
+    /// </summary>
+    private static Panel? GetItemsHostPanel(ListBox listBox)
+    {
+        if (FindDescendant<ItemsPresenter>(listBox) is not { } presenter)
+        {
+            return null;
+        }
+
+        int count = VisualTreeHelper.GetChildrenCount(presenter);
+        for (int i = 0; i < count; i++)
+        {
+            if (VisualTreeHelper.GetChild(presenter, i) is Panel panel)
+            {
+                return panel;
+            }
+        }
+
+        return null;
+    }
+
+    private readonly record struct RealizedContainer(int Index, double Top, double Bottom);
+
+    private static int ComputeInsertIndex(ListBox listBox, Point position, IReadOnlyList<RealizedContainer> realized)
     {
         if (IsOverScrollBar(listBox, position))
         {
@@ -486,7 +556,37 @@ public static class ListBoxDragDropReorder
             return -1;
         }
 
-        return position.Y < listBox.ActualHeight / 2.0 ? 0 : listBox.Items.Count;
+        // The cursor is not over a row. Anchor the decision to the realized content
+        // bounds rather than the control's midpoint: with only a few items the
+        // content ends well above ActualHeight / 2, so a position just below the
+        // last item would otherwise fall in the "upper half" and wrongly report 0.
+        if (realized.Count == 0)
+        {
+            return listBox.Items.Count;
+        }
+
+        if (position.Y <= realized[0].Top)
+        {
+            return realized[0].Index;
+        }
+
+        RealizedContainer last = realized[^1];
+        if (position.Y >= last.Bottom)
+        {
+            return last.Index + 1;
+        }
+
+        // A gap between two realized rows: insert at the nearer edge.
+        for (int i = 0; i < realized.Count - 1; i++)
+        {
+            if (position.Y < realized[i + 1].Top)
+            {
+                double middle = (realized[i].Bottom + realized[i + 1].Top) / 2.0;
+                return position.Y < middle ? realized[i].Index + 1 : realized[i + 1].Index;
+            }
+        }
+
+        return listBox.Items.Count;
     }
 
     private static Point ScreenPoint(UIElement element)

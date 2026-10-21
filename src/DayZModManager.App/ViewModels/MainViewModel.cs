@@ -136,7 +136,10 @@ public sealed class MainViewModel : ViewModelBase
             }
             else if (order.Status == ConfigLoadStatus.Corrupt)
             {
-                Log.Error("mod_order.json is corrupt and was ignored.");
+                bool backedUp = _modOrderStore.BackupCorrupt(presetFolder);
+                Log.Error(
+                    "mod_order.json is corrupt and was ignored." +
+                    (backedUp ? " A backup was saved as mod_order.json.corrupt." : string.Empty));
             }
 
             ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(presetFolder);
@@ -146,9 +149,18 @@ public sealed class MainViewModel : ViewModelBase
             }
             else if (types.Status == ConfigLoadStatus.Corrupt)
             {
-                Log.Error("types_config.json is corrupt and was ignored.");
+                bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
+                TypesConfig.IsCorrupt = true;
+                Log.Error(
+                    "types_config.json is corrupt and was ignored. The file was preserved." +
+                    (backedUp ? " A backup was saved as types_config.json.corrupt." : string.Empty) +
+                    " Fix or delete it before editing types.");
             }
         }
+
+        // CurrentMap is runtime-only now (the file is map-agnostic); restore it
+        // from the persisted active map before the types page is built.
+        TypesConfig.CurrentMap = _settings.ActiveMap;
 
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
@@ -216,6 +228,21 @@ public sealed class MainViewModel : ViewModelBase
             if (SettingsChanged(startupSettings, _settings))
             {
                 return;
+            }
+
+            IReadOnlyList<string> instanceIdIssues = _presetService.FindInstanceIdIssues(_dataDirectoryProvider.Current);
+            if (instanceIdIssues.Count > 0)
+            {
+                foreach (string issue in instanceIdIssues)
+                {
+                    Log.Error(issue);
+                }
+
+                _dialogs.ShowWarning(
+                    "Preset instance IDs are not unique or do not match their serverDZ.cfg.",
+                    "Preset instance ID problem",
+                    "Worlds or ModList junctions may be shared. Fix the affected presets before starting the server.",
+                    string.Join(Environment.NewLine, instanceIdIssues));
             }
 
             PresetTypes.Refresh(_settings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
@@ -365,10 +392,19 @@ public sealed class MainViewModel : ViewModelBase
         string previousPreset = PresetTypes.ActivePresetName;
         Settings previousSettings = _settings;
         IReadOnlyList<string> previousMods = ModState.LoadedMods.ToList();
-        var previousMaps = new Dictionary<string, MapTypesConfig>(TypesConfig.Maps, StringComparer.OrdinalIgnoreCase);
+        List<ModTypesEntry> previousTypes = TypesConfig.Mods.ToList();
         string previousCurrentMap = TypesConfig.CurrentMap;
+        bool previousCorrupt = TypesConfig.IsCorrupt;
 
         ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(presetFolder);
+        if (order.Status == ConfigLoadStatus.Corrupt)
+        {
+            bool backedUp = _modOrderStore.BackupCorrupt(presetFolder);
+            Log.Error(
+                "mod_order.json is corrupt for the selected preset; it was ignored." +
+                (backedUp ? " A backup was saved as mod_order.json.corrupt." : string.Empty));
+        }
+
         IReadOnlyList<string> mods = order.Status == ConfigLoadStatus.Success
             ? order.Value!
             : Array.Empty<string>();
@@ -381,7 +417,15 @@ public sealed class MainViewModel : ViewModelBase
         }
         else
         {
-            TypesConfig.Maps.Remove(mapName);
+            TypesConfig.Mods.Clear();
+            TypesConfig.IsCorrupt = types.Status == ConfigLoadStatus.Corrupt;
+            if (TypesConfig.IsCorrupt)
+            {
+                bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
+                Log.Error(
+                    "types_config.json is corrupt for the selected preset; it was ignored and will not be overwritten." +
+                    (backedUp ? " A backup was saved as types_config.json.corrupt." : string.Empty));
+            }
         }
 
         // The environment being applied targets this map. Set it before the apply so
@@ -398,8 +442,9 @@ public sealed class MainViewModel : ViewModelBase
         {
             _settings = previousSettings;
             Mods.ReplaceLoadedMods(previousMods);
-            TypesConfig.Maps = previousMaps;
+            TypesConfig.Mods = previousTypes;
             TypesConfig.CurrentMap = previousCurrentMap;
+            TypesConfig.IsCorrupt = previousCorrupt;
             PresetTypes.ActivePresetName = previousPreset;
             Log.Error($"Failed to apply preset \"{presetName}\"; restored the previous preset.");
         }
@@ -484,7 +529,11 @@ public sealed class MainViewModel : ViewModelBase
     private static bool HasNoConfiguredPaths(Settings settings) =>
         string.IsNullOrWhiteSpace(settings.WorkshopPath) && string.IsNullOrWhiteSpace(settings.ServerPath);
 
-    private void ApplyLoadedTypes(TypesConfig loaded) => TypesConfig.MergeFrom(loaded);
+    private void ApplyLoadedTypes(TypesConfig loaded)
+    {
+        TypesConfig.Mods = loaded.Mods.ToList();
+        TypesConfig.IsCorrupt = false;
+    }
 
     /// <summary>Applies pending changes if any. Used when leaving the Mods tab or closing the window.</summary>
     public async Task ApplyIfDirtyAsync()
@@ -544,6 +593,11 @@ public sealed class MainViewModel : ViewModelBase
             {
                 Log.Error(resolution.Error);
                 return false;
+            }
+
+            foreach (string warning in resolution.Warnings)
+            {
+                Log.Warning(warning);
             }
 
             ApplyResult result = await Task.Run(() => _applyService.Apply(new ApplyContext
@@ -620,7 +674,12 @@ public sealed class MainViewModel : ViewModelBase
                     PresetTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
                 }
 
-                PresetTypes.SyncEconomyCore();
+                if (!PresetTypes.SyncEconomyCore())
+                {
+                    Log.Error(
+                        "Apply completed, but cfgeconomycore.xml could not be synchronized. " +
+                        "Start Server is blocked until the configuration is re-applied successfully.");
+                }
             }
             catch (Exception ex)
             {
@@ -751,6 +810,12 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         errors.AddRange(PresetTypes.PreflightTypesIssues());
+        errors.AddRange(_presetService.FindInstanceIdConflicts(_dataDirectoryProvider.Current));
+
+        if (TypesConfig.IsCorrupt)
+        {
+            errors.Add("types_config.json is corrupt for the active preset. Fix or delete it before starting the server.");
+        }
 
         if (errors.Count == 0)
         {

@@ -35,8 +35,8 @@
                 <!-- Drag handle: passive glyph (not a Button) so the whole row keeps
                      initiating the drag. -->
                 <TextBlock Grid.Column="0" Text="&#xE700;" FontFamily="Segoe MDL2 Assets"
-                           FontSize="12" Foreground="#FF9A9A9A" VerticalAlignment="Center"
-                           Margin="0,0,6,0" />
+                           FontSize="10" Foreground="#FF9A9A9A" VerticalAlignment="Center"
+                           Margin="0,0,5,0" />
 
                 <TextBlock Grid.Column="1" Text="{Binding Name}" Padding="2" VerticalAlignment="Center">
                     <TextBlock.Style>
@@ -170,6 +170,12 @@
         <Style x:Key="FolderIconButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -222,16 +228,39 @@
 
 		<!-- Footer: status + actions -->
 		<Border DockPanel.Dock="Bottom" BorderBrush="#FFDDDDDD" BorderThickness="0,1,0,0" Padding="12,10">
-			<DockPanel>
-				<TextBlock DockPanel.Dock="Left" Text="{Binding StatusText}" FontWeight="Bold"
-						   Foreground="{Binding IsDirty, Converter={x:Static vm:BoolToBrushConverter.Instance}}"
-						   VerticalAlignment="Center" />
-				<StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="20,0,0,0">
+			<Grid>
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition Width="Auto" />
+					<ColumnDefinition Width="*" />
+					<ColumnDefinition Width="Auto" />
+				</Grid.ColumnDefinitions>
+		
+				<StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+				
+					<TextBlock Text="{Binding StatusText}" FontWeight="Bold"
+							Foreground="{Binding IsDirty, Converter={x:Static vm:BoolToBrushConverter.Instance}}"
+							VerticalAlignment="Center" Margin="0,0,20,0" />
+					
 					<Button Content="Apply" Command="{Binding ApplyCommand}" Width="90" Height="28" Margin="0,0,8,0" />
+					
 					<Button Content="Start Server" Command="{Binding StartServerCommand}" Width="110" Height="30"
 							Background="#FF2E7D32" Foreground="White" FontWeight="Bold" />
 				</StackPanel>
-			</DockPanel>
+		
+				<Ellipse Grid.Column="2" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,9,0"
+						ToolTip="{Binding PresetTypes.LiveWorldStatusToolTip}">
+					<Ellipse.Style>
+						<Style TargetType="Ellipse">
+							<Setter Property="Fill" Value="LightGray" />
+							<Style.Triggers>
+								<DataTrigger Binding="{Binding PresetTypes.LiveWorldExists}" Value="True">
+									<Setter Property="Fill" Value="Green" />
+								</DataTrigger>
+							</Style.Triggers>
+						</Style>
+					</Ellipse.Style>
+				</Ellipse>
+			</Grid>
 		</Border>
 
         <!-- Footer: log -->
@@ -338,13 +367,11 @@
 									  VirtualizingStackPanel.IsVirtualizing="False"
                                       MaxDropDownHeight="300" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
+                                    Content="&#xE8B7;"
                                     Command="{Binding OpenMapProfilesFolderCommand}"
-                                    Width="30" Height="26" Margin="4,0,0,0"
+                                    Margin="4,0,0,0"
                                     ToolTip="{Binding MapProfilesFolderToolTip}"
-                                    ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    ToolTipService.ShowOnDisabled="True" />
                         </StackPanel>
 
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
@@ -374,39 +401,29 @@
                                            Visibility="{Binding IsModSelectionEmpty, Converter={StaticResource BoolToVis}}" />
                             </Grid>
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding OpenTypeFilesFolderCommand}" Width="30" Height="26" Margin="4,0,0,0"
+                                    Content="&#xE8B7;"
+                                    Command="{Binding OpenTypeFilesFolderCommand}" Margin="4,0,0,0"
                                     ToolTip="{Binding OpenTypeFilesFolderToolTip}"
-                                    ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    ToolTipService.ShowOnDisabled="True" />
                         </StackPanel>
 
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding AddPresetCommand}" Width="30" Height="26"
-                                    ToolTip="Add preset" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE710;"
+                                    Command="{Binding AddPresetCommand}"
+                                    ToolTip="Add preset" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding DuplicatePresetCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Duplicate current preset" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE8C8;"
+                                    Command="{Binding DuplicatePresetCommand}" Margin="4,0,0,0"
+                                    ToolTip="Duplicate current preset" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding RenamePresetCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Rename preset" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE70F;"
+                                    Command="{Binding RenamePresetCommand}" Margin="4,0,0,0"
+                                    ToolTip="Rename preset" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding DeletePresetCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Delete preset" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE711;"
+                                    Command="{Binding DeletePresetCommand}" Margin="4,0,0,0"
+                                    ToolTip="Delete preset" ToolTipService.ShowOnDisabled="True" />
                         </StackPanel>
                     </DockPanel>
 
@@ -490,35 +507,25 @@
                         </StackPanel>
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding LoadSaveCommand}" Width="30" Height="26"
-                                    ToolTip="Load save" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE73E;"
+                                    Command="{Binding LoadSaveCommand}"
+                                    ToolTip="Load save" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding AddSaveCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Add save" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE710;"
+                                    Command="{Binding AddSaveCommand}" Margin="4,0,0,0"
+                                    ToolTip="Add save" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding RenameSaveCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Rename save" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE70F;"
+                                    Command="{Binding RenameSaveCommand}" Margin="4,0,0,0"
+                                    ToolTip="Rename save" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-                                    Command="{Binding DeleteSaveCommand}" Width="30" Height="26" Margin="4,0,0,0"
-                                    ToolTip="Delete save" ToolTipService.ShowOnDisabled="True">
-                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                            </Button>
+                                    Content="&#xE711;"
+                                    Command="{Binding DeleteSaveCommand}" Margin="4,0,0,0"
+                                    ToolTip="Delete save" ToolTipService.ShowOnDisabled="True" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
-									Command="{Binding WipeWorldCommand}" Width="30" Height="26" Margin="12,0,0,0"
-									ToolTip="Wipe current world" ToolTipService.ShowOnDisabled="True">
-								<TextBlock Text="&#xE75C;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-											VerticalAlignment="Center" HorizontalAlignment="Center" />
-							</Button>
+                                    Content="&#xE75C;"
+                                    Command="{Binding WipeWorldCommand}" Margin="12,0,0,0"
+                                    ToolTip="Wipe current world" ToolTipService.ShowOnDisabled="True" />
                         </StackPanel>
                     </Grid>
                 </Grid>
@@ -529,8 +536,8 @@
                     <TextBlock Text="Configuration" FontSize="14" FontWeight="Bold" Margin="0,0,0,10" />
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="130" />
-                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="550" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
@@ -541,77 +548,108 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Workshop path:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <Grid Grid.Row="0" Grid.Column="1" Margin="0,0,8,8">
-                            <TextBlock Text="{Binding WorkshopPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZ\!Workshop" Foreground="LightGray" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding WorkshopPath}" Value="">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                        <Button Grid.Row="0" Grid.Column="2" Content="Browse" Command="{Binding BrowseWorkshopCommand}" Width="80" Margin="0,0,0,8" />
+                        <Border Grid.Row="0" Grid.Column="1" Margin="0,0,8,8"
+                                Background="#FAFAFA" BorderBrush="#CCCCCC" BorderThickness="1"
+                                Padding="6,0" Height="24" ToolTip="{Binding WorkshopPath}">
+                            <Grid>
+                                <TextBlock Text="{Binding WorkshopPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZ\!Workshop" Foreground="LightGray" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding WorkshopPath}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <Button Grid.Row="0" Grid.Column="2" Style="{StaticResource FolderIconButtonStyle}"
+                                Content="&#xE8B7;" Command="{Binding BrowseWorkshopCommand}"
+                                Margin="0,0,0,8" ToolTip="Browse Mod Source folder"
+                                ToolTipService.ShowOnDisabled="True"
+                                AutomationProperties.Name="Browse Workshop folder" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Server path:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,8,8">
-                            <TextBlock Text="{Binding ServerPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZServer" Foreground="LightGray" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ServerPath}" Value="">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                        <Button Grid.Row="1" Grid.Column="2" Content="Browse" Command="{Binding BrowseServerCommand}" Width="80" Margin="0,0,0,8" />
+                        <Border Grid.Row="1" Grid.Column="1" Margin="0,0,8,8"
+                                Background="#FAFAFA" BorderBrush="#CCCCCC" BorderThickness="1"
+                                Padding="6,0" Height="24" ToolTip="{Binding ServerPath}">
+                            <Grid>
+                                <TextBlock Text="{Binding ServerPath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="example D:\SteamLibrary\steamapps\common\DayZServer" Foreground="LightGray" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ServerPath}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <Button Grid.Row="1" Grid.Column="2" Style="{StaticResource FolderIconButtonStyle}"
+                                Content="&#xE8B7;" Command="{Binding BrowseServerCommand}"
+                                Margin="0,0,0,8" ToolTip="Browse Server folder"
+                                ToolTipService.ShowOnDisabled="True"
+                                AutomationProperties.Name="Browse Server folder" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Batch file:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,8,8">
-                            <TextBlock Text="{Binding BatFileName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="choose the LocalServer.bat you placed in the server folder" Foreground="LightGray" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding BatFileName}" Value="">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                        <Button Grid.Row="2" Grid.Column="2" Content="Choose" Command="{Binding BrowseBatchFileCommand}" Width="80" Margin="0,0,0,8" />
+                        <Border Grid.Row="2" Grid.Column="1" Margin="0,0,8,8"
+                                Background="#FAFAFA" BorderBrush="#CCCCCC" BorderThickness="1"
+                                Padding="6,0" Height="24" ToolTip="{Binding BatFileName}">
+                            <Grid>
+                                <TextBlock Text="{Binding BatFileName}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="choose the LocalServer.bat you placed in the server folder" Foreground="LightGray" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BatFileName}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <Button Grid.Row="2" Grid.Column="2" Style="{StaticResource FolderIconButtonStyle}"
+                                Content="&#xE8B7;" Command="{Binding BrowseBatchFileCommand}"
+                                Margin="0,0,0,8" ToolTip="Choose Batch file"
+                                ToolTipService.ShowOnDisabled="True"
+                                AutomationProperties.Name="Choose Batch file" />
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Data directory:" VerticalAlignment="Center" Margin="0,0,8,8" />
-                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding EffectiveDataDirectory}" VerticalAlignment="Center" Margin="0,0,8,8" TextTrimming="CharacterEllipsis" />
+						<TextBlock Grid.Row="3" Grid.Column="1" 
+								Text="{Binding EffectiveDataDirectory}" 
+								VerticalAlignment="Center" 
+								Margin="6,0,8,8" 
+								TextTrimming="CharacterEllipsis" 
+								ToolTip="{Binding EffectiveDataDirectory}" />
                     </Grid>
 
                     <Border Height="1" Background="#FFDDDDDD" Margin="0,14,0,14" />
 
                     <TextBlock Text="Features" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" />
                     <CheckBox x:Name="AutoCleanServerLogsCheckBox"
-                              Content="Auto-clean server log files on startup"
-                              IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                              Click="AutoCleanServerLogs_Click"
-                              Loaded="AutoCleanServerLogsCheckBox_Loaded"
-                              VerticalContentAlignment="Center">
-                        <CheckBox.ToolTip>
-                            <ToolTip Style="{StaticResource WrappingToolTipStyle}"
-                                     Content="On App Startup: when more than 20 .rpt and .log files have accumulated in the active preset's profiles folder, all of them are deleted. At or below 20 no files are touched. Default: OFF." />
-                        </CheckBox.ToolTip>
-                    </CheckBox>
+								IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+								Click="AutoCleanServerLogs_Click"
+								Loaded="AutoCleanServerLogsCheckBox_Loaded"
+								VerticalContentAlignment="Center"
+								HorizontalAlignment="Left"  
+								MaxWidth="400">
+						<CheckBox.ToolTip>
+							<ToolTip Style="{StaticResource WrappingToolTipStyle}"
+							Content="On App Startup: when more than 20 .rpt and .log files have accumulated in the active preset's profiles folder, all of them are deleted. At or below 20 no files are touched. Default: OFF." />
+						</CheckBox.ToolTip>
+						<TextBlock Text="Auto-clean server log files on startup" />
+					</CheckBox>
                 </StackPanel>
             </TabItem>
         </TabControl>

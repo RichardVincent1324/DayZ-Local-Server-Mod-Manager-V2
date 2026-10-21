@@ -13,22 +13,14 @@ public class PersistedConfigNullHardeningTests
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
 
     [Fact]
-    public void TypesConfig_NullMaps_BecomesEmptyCaseInsensitiveDictionary()
+    public void TypesConfig_NullMods_BecomesEmptyList()
     {
-        TypesConfig? config = JsonSerializer.Deserialize<TypesConfig>("{\"maps\":null}", Options);
+        TypesConfig? config = JsonSerializer.Deserialize<TypesConfig>("{\"mods\":null}", Options);
 
         Assert.NotNull(config);
-        Assert.NotNull(config!.Maps);
-        config.Maps["SomeMap"] = new MapTypesConfig();
-        Assert.True(config.Maps.ContainsKey("somemap"));
-    }
-
-    [Fact]
-    public void MapTypesConfig_NullMods_BecomesEmptyList()
-    {
-        MapTypesConfig? map = JsonSerializer.Deserialize<MapTypesConfig>("{\"mods\":null}", Options);
-
-        Assert.NotNull(map!.Mods);
+        Assert.NotNull(config!.Mods);
+        config.Mods.Add(new ModTypesEntry { ModName = "@CF" });
+        Assert.Single(config.Mods);
     }
 
     [Fact]

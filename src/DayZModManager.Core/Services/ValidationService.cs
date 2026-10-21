@@ -136,10 +136,22 @@ public sealed class ValidationService : IValidationService
         if (!_fileSystem.FileExists(batFilePath))
         {
             errors.Add($"Batch file not found: {batFilePath}");
+            return;
         }
-        else if (!_batchFile.HasModListLine(batFilePath))
+
+        if (!_batchFile.HasModListLine(batFilePath))
         {
-            errors.Add($"Batch file does not contain a modList line: {batFilePath}");
+            errors.Add($"Batch file is missing a modList line: {batFilePath}");
+        }
+
+        if (!_batchFile.HasServerProfileLine(batFilePath))
+        {
+            errors.Add($"Batch file is missing a serverProfile line: {batFilePath}");
+        }
+
+        if (!_batchFile.HasServerConfigLine(batFilePath))
+        {
+            errors.Add($"Batch file is missing a serverConfig line: {batFilePath}");
         }
     }
 }

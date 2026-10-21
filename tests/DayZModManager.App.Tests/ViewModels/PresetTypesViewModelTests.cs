@@ -55,7 +55,7 @@ public partial class PresetTypesViewModelTests
             processLauncher,
             presetService,
             junctionService,
-            new LaunchEnvironmentService(batchFileService, fileSystem));
+            new LaunchEnvironmentService(batchFileService));
     }
 
     private static string PresetFolder(string mapName) =>
@@ -114,14 +114,10 @@ public partial class PresetTypesViewModelTests
         new() { ModName = modName, GeneratedFiles = generatedFiles.ToList() };
 
     private static TypesConfig ConfigWithEntry(ModTypesEntry entry) =>
-        new()
-        {
-            CurrentMap = MapName,
-            Maps = { [MapName] = new MapTypesConfig { Mods = { entry } } },
-        };
+        new() { CurrentMap = MapName, Mods = { entry } };
 
     private static TypesConfig AppliedConfig() =>
-        new() { CurrentMap = MapName, Maps = { [MapName] = new MapTypesConfig() } };
+        new() { CurrentMap = MapName };
 
     private static string TypeFilesFolderPath() =>
         PresetTypeFilesFolder(MapName);
@@ -171,15 +167,10 @@ public partial class PresetTypesViewModelTests
 
         public IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName) => DiscoveryFiles;
 
-        public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(TypesConfig config, string mapName, string modName)
+        public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(TypesConfig config, string modName)
         {
             var files = new List<ConfiguredTypeFile>();
-            if (!config.Maps.TryGetValue(mapName, out MapTypesConfig? map))
-            {
-                return files;
-            }
-
-            ModTypesEntry? entry = map.Mods.FirstOrDefault(m =>
+            ModTypesEntry? entry = config.Mods.FirstOrDefault(m =>
                 string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
             if (entry is null)
             {
@@ -206,7 +197,7 @@ public partial class PresetTypesViewModelTests
         }
 
         public TypesOperationResult ConfigureMod(
-            TypesConfig config, string mapName, TypesTarget target, string workshopPath, string modName,
+            TypesConfig config, TypesTarget target, string workshopPath, string modName,
             IReadOnlyList<TypeFileSelection> selections, IReadOnlySet<string> loadedModNames)
         {
             ConfigureModCalls++;
@@ -217,7 +208,7 @@ public partial class PresetTypesViewModelTests
         }
 
         public TypesOperationResult RemoveFiles(
-            TypesConfig config, string mapName, TypesTarget target, string modName,
+            TypesConfig config, TypesTarget target, string modName,
             IReadOnlySet<string> fileLeaves, IReadOnlySet<string> loadedModNames)
         {
             RemoveFilesCalls++;
@@ -227,7 +218,7 @@ public partial class PresetTypesViewModelTests
         }
 
         public TypesOperationResult CleanInvalid(
-            TypesConfig config, string mapName, TypesTarget target,
+            TypesConfig config, TypesTarget target,
             IReadOnlySet<string> validModNames, IReadOnlySet<string> loadedModNames)
         {
             CleanInvalidCalls++;
@@ -237,7 +228,7 @@ public partial class PresetTypesViewModelTests
         }
 
         public TypesOperationResult RemoveUntrackedFiles(
-            TypesConfig config, string mapName, TypesTarget target, IReadOnlySet<string> fileLeaves)
+            TypesConfig config, TypesTarget target, IReadOnlySet<string> fileLeaves)
         {
             RemoveUntrackedCalls++;
             LastUntrackedLeaves = fileLeaves;
@@ -251,11 +242,11 @@ public partial class PresetTypesViewModelTests
 
         public string? LastEconomyFolder { get; private set; }
 
-        public MapTypesConfig? LastEconomyMap { get; private set; }
+        public TypesConfig? LastEconomyMap { get; private set; }
 
         public TypesOperationResult SyncEconomyCoreResult { get; set; } = new() { Success = true };
 
-        public TypesOperationResult SyncEconomyCore(MapTypesConfig? map, string missionPath, string folder, IReadOnlySet<string> loadedModNames)
+        public TypesOperationResult SyncEconomyCore(TypesConfig? map, string missionPath, string folder, IReadOnlySet<string> loadedModNames)
         {
             SyncEconomyCoreCalls++;
             LastEconomyMap = map;
@@ -270,12 +261,16 @@ public partial class PresetTypesViewModelTests
         public IReadOnlyList<string> ActiveTypeFiles { get; set; } = Array.Empty<string>();
 
         public IReadOnlyList<string> GetActiveTypeFileNames(
-            TypesConfig config, string mapName, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
+            TypesConfig config, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
+
+        public IReadOnlyList<string> ManagedTypeFileNames { get; set; } = Array.Empty<string>();
+
+        public IReadOnlyList<string> GetManagedTypeFileNames(string missionPath) => ManagedTypeFileNames;
 
         public TypesLaunchIssues LaunchIssues { get; set; } = new(Array.Empty<string>(), Array.Empty<string>());
 
         public TypesLaunchIssues FindLaunchIssues(
-            TypesConfig config, string mapName, string typeFilesFolder,
+            TypesConfig config, string typeFilesFolder,
             IReadOnlySet<string> workshopModNames, IReadOnlySet<string> loadedModNames) => LaunchIssues;
     }
 
@@ -283,11 +278,19 @@ public partial class PresetTypesViewModelTests
     {
         public bool SaveCalled { get; private set; }
 
+        public bool BackupCalled { get; private set; }
+
         public ConfigLoadResult<TypesConfig> LoadResult { get; set; } = ConfigLoadResult<TypesConfig>.Missing();
 
         public ConfigLoadResult<TypesConfig> Load(string dataDirectory) => LoadResult;
 
         public void Save(string dataDirectory, TypesConfig config) => SaveCalled = true;
+
+        public bool BackupCorrupt(string presetFolder)
+        {
+            BackupCalled = true;
+            return true;
+        }
     }
 
     private sealed class FakeServerConfigService : IServerConfigService
@@ -311,6 +314,10 @@ public partial class PresetTypesViewModelTests
     private sealed class FakeBatchFileService : IBatchFileService
     {
         public bool HasModListLine(string batFilePath) => true;
+
+        public bool HasServerProfileLine(string batFilePath) => true;
+
+        public bool HasServerConfigLine(string batFilePath) => true;
 
         public bool WriteModList(string batFilePath, IReadOnlyList<string> modNames) => true;
 
@@ -507,6 +514,10 @@ public partial class PresetTypesViewModelTests
 
         public int ReadInstanceId(string dataDirectory, string mapName, string presetName) => 1;
 
+        public IReadOnlyList<string> FindInstanceIdIssues(string dataDirectory) => Array.Empty<string>();
+
+        public IReadOnlyList<string> FindInstanceIdConflicts(string dataDirectory) => Array.Empty<string>();
+
         public int AllocateInstanceId(string dataDirectory, string serverPath, string mapName) => 1;
 
         public PresetResult EnsureDefaultPreset(string serverPath, string dataDirectory, string mapName)
@@ -598,6 +609,8 @@ public partial class PresetTypesViewModelTests
         private readonly HashSet<string> _files = new(StringComparer.OrdinalIgnoreCase);
 
         public void AddFile(string path) => _files.Add(path);
+
+        public void AddDirectory(string path) => _directories.Add(path);
 
         public bool DirectoryExists(string path) => _directories.Contains(path);
 

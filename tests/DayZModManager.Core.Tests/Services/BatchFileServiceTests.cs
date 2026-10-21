@@ -156,6 +156,39 @@ public class BatchFileServiceTests
         Assert.False(service.HasModListLine(BatPath));
     }
 
+    // --- HasServerProfileLine / HasServerConfigLine ------------------------
+
+    [Fact]
+    public void HasServerProfileLine_ReturnsTrue_WhenPresent_AndFalse_WhenAbsent()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(BatPath, "set \"serverProfile=preset\\profiles\"");
+        var service = new BatchFileService(fs);
+
+        Assert.True(service.HasServerProfileLine(BatPath));
+        Assert.False(service.HasServerConfigLine(BatPath));
+    }
+
+    [Fact]
+    public void HasServerConfigLine_ReturnsTrue_WhenPresent_AndFalse_WhenAbsent()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile(BatPath, "set \"serverConfig=preset\\serverDZ.cfg\"");
+        var service = new BatchFileService(fs);
+
+        Assert.True(service.HasServerConfigLine(BatPath));
+        Assert.False(service.HasServerProfileLine(BatPath));
+    }
+
+    [Fact]
+    public void HasServerLines_ReturnsFalse_WhenFileMissing()
+    {
+        var service = new BatchFileService(new FakeFileSystem());
+
+        Assert.False(service.HasServerProfileLine(BatPath));
+        Assert.False(service.HasServerConfigLine(BatPath));
+    }
+
     // --- WriteServerProfile -------------------------------------------------
 
     [Fact]

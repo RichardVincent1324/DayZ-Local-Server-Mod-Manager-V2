@@ -54,6 +54,13 @@ public interface IEconomyCoreService
     string? GetTypeFilesFolder(string missionPath);
 
     /// <summary>
+    /// Returns the <c>name</c> values of the manager-owned block's
+    /// <c>&lt;file&gt;</c> entries, in document order. Empty when there is no
+    /// managed block or it lists no files.
+    /// </summary>
+    IReadOnlyList<string> GetTypeFileNames(string missionPath);
+
+    /// <summary>
     /// Removes the named <c>&lt;file&gt;</c> entries from the manager-owned (marked)
     /// block only; other blocks are preserved. The marked block itself is kept even
     /// when it becomes empty. Returns false if the file is missing or malformed.
@@ -132,6 +139,22 @@ public sealed class EconomyCoreService : IEconomyCoreService
         XDocument? doc = LoadEconomyCore(missionPath);
         XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsManagedCe);
         return ce is null ? null : (string?)ce.Attribute("folder");
+    }
+
+    public IReadOnlyList<string> GetTypeFileNames(string missionPath)
+    {
+        XDocument? doc = LoadEconomyCore(missionPath);
+        XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsManagedCe);
+        if (ce is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return ce.Elements("file")
+            .Select(file => (string?)file.Attribute("name"))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
+            .ToList();
     }
 
     /// <summary>Convenience overload that targets the configured <c>./db/type_files</c> folder.</summary>
@@ -261,8 +284,10 @@ public sealed class EconomyCoreService : IEconomyCoreService
         {
             return XDocument.Parse(_fileSystem.ReadAllText(configPath), LoadOptions.PreserveWhitespace);
         }
-        catch (XmlException)
+        catch (Exception)
         {
+            // Malformed, locked or unreadable: callers treat this as "no usable
+            // managed block" instead of crashing the Apply or launch preflight.
             return null;
         }
     }

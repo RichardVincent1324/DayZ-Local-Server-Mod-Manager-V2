@@ -1,4 +1,3 @@
-using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 
 namespace DayZModManager.Core.Services;
@@ -8,23 +7,6 @@ public sealed record LaunchWriteResult
 {
     public bool Success { get; init; }
 
-    /// <summary>
-    /// True when the batch file has a <c>serverConfig</c> line (or none was
-    /// requested); false when the preset config had to be copied to the server
-    /// root instead.
-    /// </summary>
-    public bool ServerConfigLineWritten { get; init; } = true;
-
-    public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
-}
-
-/// <summary>Outcome of writing the preset's server location (<c>serverProfile</c>, <c>serverConfig</c>).</summary>
-public sealed record ServerLocationWriteResult
-{
-    public bool ServerProfileLineWritten { get; init; } = true;
-
-    public bool ServerConfigLineWritten { get; init; } = true;
-
     public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
 }
 
@@ -32,26 +14,27 @@ public sealed record ServerLocationWriteResult
 /// Writes the manager-owned launch variables for an environment. Apply writes the
 /// full set (<c>modList</c>, <c>serverProfile</c>, <c>serverConfig</c>), while a map
 /// switch writes only the server location before the subsequent Apply writes the
-/// rest. Sharing this writer keeps the two paths from drifting, in particular the
-/// fallback that copies the preset's <c>serverDZ.cfg</c> to the server root when
-/// the launch template has no <c>serverConfig</c> line.
+/// rest. Sharing this writer keeps the two paths from drifting.
+/// <para>
+/// A missing <c>serverProfile</c> or <c>serverConfig</c> line is a hard failure:
+/// the environment cannot be pointed at the active preset. Nothing is written and
+/// the server-root config is never modified as a fallback.
+/// </para>
 /// </summary>
 public interface ILaunchEnvironmentService
 {
     LaunchWriteResult Write(Settings settings, ServerEnvironment? environment, IReadOnlyList<string> loadedMods);
 
-    ServerLocationWriteResult WriteServerLocation(Settings settings, ServerEnvironment environment);
+    LaunchWriteResult WriteServerLocation(Settings settings, ServerEnvironment environment);
 }
 
 public sealed class LaunchEnvironmentService : ILaunchEnvironmentService
 {
     private readonly IBatchFileService _batchFile;
-    private readonly IFileSystem _fileSystem;
 
-    public LaunchEnvironmentService(IBatchFileService batchFile, IFileSystem fileSystem)
+    public LaunchEnvironmentService(IBatchFileService batchFile)
     {
         _batchFile = batchFile ?? throw new ArgumentNullException(nameof(batchFile));
-        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
     public LaunchWriteResult Write(Settings settings, ServerEnvironment? environment, IReadOnlyList<string> loadedMods)
@@ -71,86 +54,66 @@ public sealed class LaunchEnvironmentService : ILaunchEnvironmentService
             return new LaunchWriteResult { Success = false, Messages = messages };
         }
 
-        bool serverConfigLineWritten = true;
         if (environment is not null)
         {
-            ServerLocationWriteResult location = WriteServerLocation(settings, environment);
+            LaunchWriteResult location = WriteServerLocation(settings, environment);
             messages.AddRange(location.Messages);
-            serverConfigLineWritten = location.ServerConfigLineWritten;
+            if (!location.Success)
+            {
+                return new LaunchWriteResult { Success = false, Messages = messages };
+            }
         }
 
         messages.Add("Batch file updated.");
-        return new LaunchWriteResult
-        {
-            Success = true,
-            ServerConfigLineWritten = serverConfigLineWritten,
-            Messages = messages,
-        };
+        return new LaunchWriteResult { Success = true, Messages = messages };
     }
 
-    public ServerLocationWriteResult WriteServerLocation(Settings settings, ServerEnvironment environment)
+    public LaunchWriteResult WriteServerLocation(Settings settings, ServerEnvironment environment)
     {
         var messages = new List<string>();
         string batPath = settings.BatFilePath;
 
-        bool profileWritten = true;
-        if (!string.IsNullOrWhiteSpace(environment.ServerProfile))
+        // Validate both lines before writing anything so a non-conforming batch
+        // file is rejected atomically. The preset is never pointed at the server
+        // root config as a fallback.
+        bool missingProfile = !string.IsNullOrWhiteSpace(environment.ServerProfile)
+            && !_batchFile.HasServerProfileLine(batPath);
+        bool missingConfig = !string.IsNullOrWhiteSpace(environment.ServerConfig)
+            && !_batchFile.HasServerConfigLine(batPath);
+
+        if (missingProfile)
         {
-            profileWritten = _batchFile.WriteServerProfile(batPath, environment.ServerProfile);
-            if (!profileWritten)
-            {
-                messages.Add("WARNING: The batch file has no serverProfile line; the preset's profiles folder will not be used.");
-            }
+            messages.Add(
+                $"ERROR: The batch file has no serverProfile line ({batPath}). " +
+                "Add a set \"serverProfile=...\" line so the preset's profiles folder is used.");
         }
 
-        bool configWritten = true;
-        if (!string.IsNullOrWhiteSpace(environment.ServerConfig))
+        if (missingConfig)
         {
-            configWritten = _batchFile.WriteServerConfig(batPath, environment.ServerConfig);
-            if (!configWritten)
-            {
-                messages.Add("WARNING: The batch file has no serverConfig line; the preset's serverDZ.cfg will be copied to the server root instead.");
-                CopyPresetConfigToServerRoot(settings, environment, messages);
-            }
+            messages.Add(
+                $"ERROR: The batch file has no serverConfig line ({batPath}). " +
+                "Add a set \"serverConfig=...\" line so the preset's serverDZ.cfg is used.");
         }
 
-        return new ServerLocationWriteResult
+        if (missingProfile || missingConfig)
         {
-            ServerProfileLineWritten = profileWritten,
-            ServerConfigLineWritten = configWritten,
-            Messages = messages,
-        };
-    }
-
-    /// <summary>
-    /// Copies the preset's <c>serverDZ.cfg</c> over the server root config when the
-    /// launch template has no <c>serverConfig</c> line, so the preset is still the
-    /// environment the server runs.
-    /// </summary>
-    private void CopyPresetConfigToServerRoot(Settings settings, ServerEnvironment environment, List<string> messages)
-    {
-        if (string.IsNullOrWhiteSpace(environment.PresetFolder)
-            || string.IsNullOrWhiteSpace(settings.ServerPath))
-        {
-            return;
+            return new LaunchWriteResult { Success = false, Messages = messages };
         }
 
-        string presetConfig = Path.Combine(environment.PresetFolder, ConfigFileNames.ServerConfig);
-        string rootConfig = Path.Combine(settings.ServerPath, ConfigFileNames.ServerConfig);
-        if (!_fileSystem.FileExists(presetConfig)
-            || string.Equals(presetConfig, rootConfig, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(environment.ServerProfile)
+            && !_batchFile.WriteServerProfile(batPath, environment.ServerProfile))
         {
-            return;
+            messages.Add($"ERROR: Failed to update the serverProfile line in {batPath}.");
+            return new LaunchWriteResult { Success = false, Messages = messages };
         }
 
-        try
+        if (!string.IsNullOrWhiteSpace(environment.ServerConfig)
+            && !_batchFile.WriteServerConfig(batPath, environment.ServerConfig))
         {
-            _fileSystem.CopyFile(presetConfig, rootConfig);
-            messages.Add("Copied the preset's serverDZ.cfg to the server root.");
+            messages.Add($"ERROR: Failed to update the serverConfig line in {batPath}.");
+            return new LaunchWriteResult { Success = false, Messages = messages };
         }
-        catch (Exception ex)
-        {
-            messages.Add($"WARNING: Failed to copy the preset's serverDZ.cfg to the server root: {ex.Message}");
-        }
+
+        return new LaunchWriteResult { Success = true, Messages = messages };
     }
 }

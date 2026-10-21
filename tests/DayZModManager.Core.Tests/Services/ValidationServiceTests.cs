@@ -30,7 +30,7 @@ public class ValidationServiceTests
         fs.AddDirectory(ServerPath);
         fs.AddFile($@"{ServerPath}\DayZServer_x64.exe", "");
         fs.AddFile($@"{ServerPath}\serverDZ.cfg", "");
-        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"");
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
         return fs;
     }
 
@@ -86,7 +86,7 @@ public class ValidationServiceTests
         bare.AddDirectory(WorkshopPath, "@CF");
         bare.AddDirectory(ServerPath);
         bare.AddFile($@"{ServerPath}\serverDZ.cfg", "");
-        bare.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"");
+        bare.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
 
         IReadOnlyList<string> errors = CreateService(bare).Validate(CreateContext(bare, new[] { "@CF" }));
 
@@ -102,6 +102,32 @@ public class ValidationServiceTests
         IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF" }));
 
         Assert.Contains(errors, e => e.Contains("modList", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_ReportsMissingServerProfileLine()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        fs.AddFile(
+            $@"{ServerPath}\LocalServer.example.bat",
+            "set \"modList=-mod=@CF;\"\nset \"serverConfig=old\\serverDZ.cfg\"");
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF" }));
+
+        Assert.Contains(errors, e => e.Contains("serverProfile", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_ReportsMissingServerConfigLine()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        fs.AddFile(
+            $@"{ServerPath}\LocalServer.example.bat",
+            "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"");
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF" }));
+
+        Assert.Contains(errors, e => e.Contains("serverConfig", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

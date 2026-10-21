@@ -107,6 +107,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 	/// </summary>
 	public bool SyncEconomyCore()
 	{
+		if (_typesConfig.IsCorrupt)
+		{
+			_log.Warning("cfgeconomycore.xml was not updated because types_config.json is corrupt.");
+			return false;
+		}
+
 		string? missionPath = ResolveAppliedMapPath();
 		if (missionPath is null)
 		{
@@ -166,13 +172,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The active types mapping: the active preset's configured types.</summary>
-    private MapTypesConfig? ActiveMapConfig() => CurrentMapConfig();
+    private TypesConfig? ActiveMapConfig() => CurrentMapConfig();
 
-    /// <summary>Returns the current map's configured types config, if present.</summary>
-    private MapTypesConfig? CurrentMapConfig() =>
-        string.IsNullOrEmpty(_typesConfig.CurrentMap)
-            ? null
-            : _typesConfig.Maps.TryGetValue(_typesConfig.CurrentMap, out MapTypesConfig? map) ? map : null;
+    /// <summary>Returns the active preset's types config, or null when no map is applied.</summary>
+    private TypesConfig? CurrentMapConfig() =>
+        string.IsNullOrEmpty(_typesConfig.CurrentMap) ? null : _typesConfig;
 
     /// <summary>The absolute folder holding the active preset's generated types files.</summary>
     private string? ActiveTypesFolderAbsolute()
@@ -237,7 +241,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             // name is handled transparently.
             string modFolderPath = Path.Combine(_workshopPath, modName);
             IReadOnlyList<ConfiguredTypeFile> configuredFiles =
-                _typesService.GetConfiguredFiles(_typesConfig, _typesConfig.CurrentMap, modName);
+                _typesService.GetConfiguredFiles(_typesConfig, modName);
             var configuredBySource = new Dictionary<string, ConfiguredTypeFile>(StringComparer.OrdinalIgnoreCase);
             foreach (ConfiguredTypeFile configured in configuredFiles)
             {
@@ -312,7 +316,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
 
             TypesOperationResult result = _typesService.ConfigureMod(
-                _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
+                _typesConfig, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
 
             SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
             LogOperation(result, "Types configuration completed.");
@@ -392,7 +396,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
                 TypesOperationResult result = _typesService.RemoveFiles(
-                    _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
+                    _typesConfig, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
                 messages.AddRange(result.Messages);
                 unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
                 if (!result.Success)
@@ -404,7 +408,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             if (untrackedLeaves.Count > 0)
             {
                 TypesOperationResult result = _typesService.RemoveUntrackedFiles(
-                    _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), untrackedLeaves);
+                    _typesConfig, ActiveTypesTarget(missionPath), untrackedLeaves);
                 messages.AddRange(result.Messages);
                 unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
                 if (!result.Success)
@@ -503,7 +507,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
 
             TypesOperationResult result = _typesService.CleanInvalid(
-                _typesConfig, _typesConfig.CurrentMap, ActiveTypesTarget(missionPath), active, LoadedSet());
+                _typesConfig, ActiveTypesTarget(missionPath), active, LoadedSet());
 
             foreach (string message in result.Messages)
             {
@@ -562,7 +566,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        MapTypesConfig? map = ActiveMapConfig();
+        TypesConfig? map = ActiveMapConfig();
         if (map is not null)
         {
             var valid = new HashSet<string>(_allMods, StringComparer.Ordinal);
@@ -677,7 +681,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         var workshop = new HashSet<string>(_allMods, StringComparer.OrdinalIgnoreCase);
         var loaded = new HashSet<string>(_loadedMods, StringComparer.OrdinalIgnoreCase);
         TypesLaunchIssues issues = _typesService.FindLaunchIssues(
-            _typesConfig, _typesConfig.CurrentMap, PresetTypeFilesFolder(_typesConfig.CurrentMap), workshop, loaded);
+            _typesConfig, PresetTypeFilesFolder(_typesConfig.CurrentMap), workshop, loaded);
 
         var messages = new List<string>();
         if (issues.MissingMods.Count > 0)
@@ -688,6 +692,30 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         if (issues.MissingFiles.Count > 0)
         {
             messages.Add($"Types file(s) referenced by cfgeconomycore.xml are missing from type_files: {string.Join(", ", issues.MissingFiles)}");
+        }
+
+        // Verify the managed <ce> block actually matches what the active preset
+        // should load. This catches an Apply/map switch whose economy rewrite failed.
+        if (!_typesConfig.IsCorrupt)
+        {
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is not null)
+            {
+                IReadOnlyList<string> expected = _typesService.GetActiveTypeFileNames(
+                    _typesConfig, loaded);
+                IReadOnlyList<string> actual = _typesService.GetManagedTypeFileNames(missionPath);
+                string expectedFolder = ActiveCeFolderValue(missionPath);
+                string? actualFolder = _typesService.GetActiveTypesFolder(missionPath);
+
+                if ((expected.Count > 0 || actual.Count > 0)
+                    && (!string.Equals(actualFolder, expectedFolder, StringComparison.OrdinalIgnoreCase)
+                        || !expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase)))
+                {
+                    messages.Add(
+                        "cfgeconomycore.xml is not synchronized with the active preset's types. " +
+                        "Re-apply the configuration to restore it.");
+                }
+            }
         }
 
         return messages;

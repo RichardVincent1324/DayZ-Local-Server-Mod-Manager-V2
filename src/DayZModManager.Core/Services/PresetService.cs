@@ -10,6 +10,12 @@ public sealed record PresetResult
 
     public string Message { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Non-fatal notices produced by the operation, for example when the
+    /// server-root instance ID could not be adopted and a fresh one was used.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
     /// <summary>True when the operation succeeded but performed no work.</summary>
     public bool Informational { get; init; }
 }
@@ -70,13 +76,29 @@ public interface IPresetService
     IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName);
 
     /// <summary>
-    /// Reads a preset's dedicated instance ID. The authoritative value lives in
-    /// <c>preset-meta.json</c>; when that is missing or unreadable, the preset's
-    /// own <c>serverDZ.cfg</c> (the value DayZ actually uses) is read as a
-    /// fallback. Returns 0 when neither can supply a valid ID - never a made-up
-    /// value that could collide with an existing world's storage slot.
+    /// Reads a preset's dedicated instance ID. The preset's own
+    /// <c>serverDZ.cfg</c> is authoritative because that is the value DayZ uses
+    /// to locate <c>storage_&lt;id&gt;</c>. The metadata is used only when the
+    /// config has no usable ID. Returns 0 when neither can supply a valid ID -
+    /// never a made-up value that could collide with an existing world's storage
+    /// slot.
     /// </summary>
     int ReadInstanceId(string dataDirectory, string mapName, string presetName);
+
+    /// <summary>
+    /// Returns human-readable problems with preset instance IDs: a metadata value
+    /// that disagrees with <c>serverDZ.cfg</c>, or the same effective ID used by
+    /// more than one preset. Empty when every preset's IDs are consistent and
+    /// unique.
+    /// </summary>
+    IReadOnlyList<string> FindInstanceIdIssues(string dataDirectory);
+
+    /// <summary>
+    /// Returns only the blocking instance-ID problems: the same effective ID used
+    /// by more than one preset (their worlds and <c>ModList</c> junctions would be
+    /// shared). Safe to use in a launch preflight.
+    /// </summary>
+    IReadOnlyList<string> FindInstanceIdConflicts(string dataDirectory);
 
     /// <summary>
     /// Allocates the next free instance ID for <paramref name="mapName"/> as
@@ -90,15 +112,20 @@ public interface IPresetService
 
     /// <summary>
     /// Creates <c>__default_preset__</c> for a map when it does not yet exist,
-    /// seeding its <c>serverDZ.cfg</c> from the server root. A default preset whose
-    /// folder exists but is missing its <c>serverDZ.cfg</c> is reported as a
-    /// failure instead of being re-seeded. Idempotent.
+    /// seeding its <c>serverDZ.cfg</c> from the server root. The root config's
+    /// instance ID is adopted when no preset on any map already uses it, so an
+    /// existing <c>storage_&lt;id&gt;</c> world stays attached; otherwise a fresh ID
+    /// is allocated and reported as a warning. A default preset whose folder exists
+    /// but is missing its <c>serverDZ.cfg</c> is reported as a failure instead of
+    /// being re-seeded. Idempotent.
     /// </summary>
     PresetResult EnsureDefaultPreset(string serverPath, string dataDirectory, string mapName);
 
     /// <summary>
     /// Creates a new named preset for a map with a fresh, dedicated instance ID and
-    /// an empty profiles folder. Presets never share profile data.
+    /// an empty profiles folder. Its <c>serverDZ.cfg</c> is copied from that map's
+    /// <c>__default_preset__</c>; when that config is missing the operation fails
+    /// (there is no server-root fallback). Presets never share profile data.
     /// </summary>
     PresetResult CreatePreset(
         string serverPath, string dataDirectory, string mapName, string presetName);
@@ -107,9 +134,9 @@ public interface IPresetService
     /// Creates a new preset as a copy of an existing preset's environment: its
     /// server configuration (with a fresh, dedicated instance ID), mod order, types
     /// configuration and generated type files. The copy may target the same map as
-    /// the source or a different one; map-scoped settings (the <c>serverDZ.cfg</c>
-    /// template and the types configuration's map key) are rewritten for the
-    /// destination map. Profiles and saves are never copied.
+    /// the source or a different one; only the <c>serverDZ.cfg</c> template is
+    /// rewritten for the destination map (the types configuration is map-agnostic
+    /// and is copied as-is). Profiles and saves are never copied.
     /// </summary>
     PresetResult DuplicatePreset(
         string serverPath, string dataDirectory,
@@ -200,6 +227,7 @@ public sealed class PresetService : IPresetService
             ? dataDirectory
             : presetLookupDirectory;
 
+        IReadOnlyList<string> warnings = Array.Empty<string>();
         if (!PresetExists(lookupDirectory, mapName, activePreset))
         {
             if (IsDefaultPreset(activePreset))
@@ -210,6 +238,8 @@ public sealed class PresetService : IPresetService
                 {
                     return EnvironmentResolution.Failed(healed.Message);
                 }
+
+                warnings = healed.Warnings;
             }
 
             if (!PresetExists(lookupDirectory, mapName, activePreset))
@@ -234,7 +264,7 @@ public sealed class PresetService : IPresetService
             ModListKey = ModListFolder.PresetKey(ReadInstanceId(lookupDirectory, mapName, activePreset)),
         };
 
-        return EnvironmentResolution.Resolved(environment);
+        return EnvironmentResolution.Resolved(environment, warnings);
     }
 
     public IReadOnlyList<string> ListPresetNames(string dataDirectory, string mapName)
@@ -262,22 +292,20 @@ public sealed class PresetService : IPresetService
 
     public int ReadInstanceId(string dataDirectory, string mapName, string presetName)
     {
-        string metaPath = PresetPaths.PresetMetaPath(dataDirectory, mapName, presetName);
-        ConfigLoadResult<PresetMetaData> loaded = ConfigJson.Read<PresetMetaData>(_fileSystem, metaPath);
-        if (loaded.Status == ConfigLoadStatus.Success && loaded.Value is { InstanceId: > 0 })
-        {
-            return loaded.Value.InstanceId;
-        }
-
-        // The metadata is missing or corrupt. Fall back to the preset's own
-        // serverDZ.cfg, which is the value DayZ reads to locate storage_<id>.
-        // This keeps the preset attached to its real world instead of silently
-        // claiming storage_1 and colliding with the default preset.
+        // The value in serverDZ.cfg is what DayZ actually uses to locate
+        // storage_<id>, so it is authoritative. The metadata is the app-managed
+        // record and is used only when the config has no usable ID.
         string configPath = PresetPaths.ServerConfigPath(dataDirectory, mapName, presetName);
         int? fromConfig = _serverConfig.TryReadInstanceId(configPath);
         if (fromConfig is > 0)
         {
             return fromConfig.Value;
+        }
+
+        int fromMeta = TryReadMetaInstanceId(dataDirectory, mapName, presetName);
+        if (fromMeta > 0)
+        {
+            return fromMeta;
         }
 
         // Neither metadata nor config can identify the preset: report 0 rather
@@ -286,20 +314,25 @@ public sealed class PresetService : IPresetService
         return 0;
     }
 
-    public int AllocateInstanceId(string dataDirectory, string serverPath, string mapName) =>
-        ReserveInstanceId(dataDirectory, serverPath, mapName, preferred: null);
+    public IReadOnlyList<string> FindInstanceIdIssues(string dataDirectory) =>
+        FindInstanceIdIssues(dataDirectory, includeMismatches: true);
 
-    /// <summary>
-    /// Reserves every in-use instance ID (presets across all maps plus the live
-    /// storage folders of <paramref name="mapName"/>) and returns a free one,
-    /// honoring <paramref name="preferred"/> when it is valid and unused.
-    /// </summary>
-    private int ReserveInstanceId(string dataDirectory, string serverPath, string mapName, int? preferred)
+    public IReadOnlyList<string> FindInstanceIdConflicts(string dataDirectory) =>
+        FindInstanceIdIssues(dataDirectory, includeMismatches: false);
+
+    private IReadOnlyList<string> FindInstanceIdIssues(string dataDirectory, bool includeMismatches)
     {
-        var presetIds = new HashSet<int>();
-        string root = PresetPaths.PresetsRoot(dataDirectory);
-        if (_fileSystem.DirectoryExists(root))
+        var issues = new List<string>();
+        var owners = new Dictionary<int, string>();
+
+        try
         {
+            string root = PresetPaths.PresetsRoot(dataDirectory);
+            if (!_fileSystem.DirectoryExists(root))
+            {
+                return issues;
+            }
+
             foreach (string map in _fileSystem.GetDirectories(root))
             {
                 string mapRoot = Path.Combine(root, map);
@@ -310,26 +343,104 @@ public sealed class PresetService : IPresetService
 
                 foreach (string preset in _fileSystem.GetDirectories(mapRoot))
                 {
-                    int id = ReadInstanceId(dataDirectory, map, preset);
-                    if (id > 0)
+                    string label = $"preset \"{preset}\" on {map}";
+                    int metaId = TryReadMetaInstanceId(dataDirectory, map, preset);
+                    int? configId = _serverConfig.TryReadInstanceId(
+                        PresetPaths.ServerConfigPath(dataDirectory, map, preset));
+
+                    if (includeMismatches && configId is > 0 && metaId > 0 && configId.Value != metaId)
                     {
-                        presetIds.Add(id);
+                        issues.Add(
+                            $"{label} has instanceId {metaId} in preset-meta.json but {configId} in serverDZ.cfg. " +
+                            $"The server uses {configId}; align the preset metadata with its config.");
+                    }
+
+                    int effectiveId = configId is > 0 ? configId.Value : metaId;
+                    if (effectiveId <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (owners.TryGetValue(effectiveId, out string? existing))
+                    {
+                        issues.Add(
+                            $"Instance ID {effectiveId} is used by both {existing} and {label}. " +
+                            "Their worlds and ModList junctions may be shared; make the IDs unique.");
+                    }
+                    else
+                    {
+                        owners[effectiveId] = label;
                     }
                 }
             }
         }
+        catch (Exception ex)
+        {
+            issues.Add($"Could not inspect preset instance IDs: {ex.Message}");
+        }
+
+        return issues;
+    }
+
+    private int TryReadMetaInstanceId(string dataDirectory, string mapName, string presetName)
+    {
+        try
+        {
+            ConfigLoadResult<PresetMetaData> loaded = ConfigJson.Read<PresetMetaData>(
+                _fileSystem, PresetPaths.PresetMetaPath(dataDirectory, mapName, presetName));
+            return loaded.Status == ConfigLoadStatus.Success && loaded.Value is { InstanceId: > 0 }
+                ? loaded.Value.InstanceId
+                : 0;
+        }
+        catch (Exception)
+        {
+            // A locked/unreadable metadata file must not break startup or a launch
+            // preflight; the config value (or 0) is used instead.
+            return 0;
+        }
+    }
+
+    public int AllocateInstanceId(string dataDirectory, string serverPath, string mapName) =>
+        AllocateFreshInstanceId(dataDirectory, serverPath, mapName);
+
+    /// <summary>
+    /// Returns the instance ID for a newly created default preset. The server
+    /// root's ID is adopted only when it is valid and no preset (on any map) uses
+    /// it; that is what keeps an existing <c>storage_&lt;id&gt;</c> world attached.
+    /// Otherwise a fresh ID is allocated and a warning explains why.
+    /// </summary>
+    private (int InstanceId, string? Warning) ResolveDefaultInstanceId(
+        string serverPath, string dataDirectory, string mapName)
+    {
+        string rootConfig = Path.Combine(serverPath, ConfigFileNames.ServerConfig);
+        int? rootId = _serverConfig.TryReadInstanceId(rootConfig);
+        if (rootId is not > 0)
+        {
+            return (AllocateFreshInstanceId(dataDirectory, serverPath, mapName), null);
+        }
+
+        if (TryDescribePresetUsingId(dataDirectory, rootId.Value, out string owner))
+        {
+            return (AllocateFreshInstanceId(dataDirectory, serverPath, mapName),
+                $"The server-root instanceId {rootId} is already used by {owner}. " +
+                $"The default preset for {mapName} will use a fresh instanceId and will not attach to that world.");
+        }
+
+        return (rootId.Value, null);
+    }
+
+    /// <summary>
+    /// Allocates a fresh ID that is not used by any preset on any map and does not
+    /// match a live <c>storage_&lt;id&gt;</c> folder on the target map.
+    /// </summary>
+    private int AllocateFreshInstanceId(string dataDirectory, string serverPath, string mapName)
+    {
+        var presetIds = new HashSet<int>(CollectPresetIds(dataDirectory).Keys);
 
         // Live storage folders on this map are reserved so a fresh preset is never
-        // bound to a world this tool did not create. The default preset is exempt
-        // for its preferred ID below: adopting the server root's own instance ID
-        // is exactly how an existing world stays attached to the default preset.
+        // bound to a world this tool did not create.
         var storageIds = new HashSet<int>(
             StorageFolders.ListInstanceIds(_fileSystem, serverPath, mapName).Where(id => id > 0));
-
-        if (preferred is > 0 && !presetIds.Contains(preferred.Value))
-        {
-            return preferred.Value;
-        }
 
         int max = 0;
         foreach (int id in presetIds)
@@ -343,6 +454,52 @@ public sealed class PresetService : IPresetService
         }
 
         return max + 1;
+    }
+
+    /// <summary>
+    /// Returns every instance ID currently owned by a preset, keyed by ID, with a
+    /// human-readable description of the owner (preset and map).
+    /// </summary>
+    private IReadOnlyDictionary<int, string> CollectPresetIds(string dataDirectory)
+    {
+        var ids = new Dictionary<int, string>();
+        string root = PresetPaths.PresetsRoot(dataDirectory);
+        if (!_fileSystem.DirectoryExists(root))
+        {
+            return ids;
+        }
+
+        foreach (string map in _fileSystem.GetDirectories(root))
+        {
+            string mapRoot = Path.Combine(root, map);
+            if (!_fileSystem.DirectoryExists(mapRoot))
+            {
+                continue;
+            }
+
+            foreach (string preset in _fileSystem.GetDirectories(mapRoot))
+            {
+                int id = ReadInstanceId(dataDirectory, map, preset);
+                if (id > 0)
+                {
+                    ids.TryAdd(id, $"preset \"{preset}\" on {map}");
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    private bool TryDescribePresetUsingId(string dataDirectory, int instanceId, out string owner)
+    {
+        if (CollectPresetIds(dataDirectory).TryGetValue(instanceId, out string? description))
+        {
+            owner = description;
+            return true;
+        }
+
+        owner = string.Empty;
+        return false;
     }
 
     public PresetResult EnsureDefaultPreset(string serverPath, string dataDirectory, string mapName)
@@ -370,7 +527,7 @@ public sealed class PresetService : IPresetService
             return RepairDefaultPreset(serverPath, dataDirectory, mapName, hasMeta, hasConfig);
         }
 
-        return CreatePresetCore(serverPath, dataDirectory, mapName, PresetPaths.DefaultPresetName);
+        return CreateDefaultPresetCore(serverPath, dataDirectory, mapName);
     }
 
     /// <summary>
@@ -397,10 +554,10 @@ public sealed class PresetService : IPresetService
         // Only the metadata is missing; rebuild it, preserving the instance ID (and
         // therefore the world slot) the config already points at.
         int instanceId = ReadInstanceId(dataDirectory, mapName, PresetPaths.DefaultPresetName);
+        string? warning = null;
         if (instanceId <= 0)
         {
-            int? preferred = _serverConfig.TryReadInstanceId(Path.Combine(serverPath, ConfigFileNames.ServerConfig));
-            instanceId = ReserveInstanceId(dataDirectory, serverPath, mapName, preferred);
+            (instanceId, warning) = ResolveDefaultInstanceId(serverPath, dataDirectory, mapName);
         }
 
         DateTime createdAt = hasMeta
@@ -415,7 +572,7 @@ public sealed class PresetService : IPresetService
         ConfigJson.Write(
             _fileSystem, PresetPaths.PresetMetaPath(dataDirectory, mapName, PresetPaths.DefaultPresetName), meta);
 
-        return Success($"Repaired the default preset metadata for {mapName} (instanceId {instanceId}).");
+        return Success($"Repaired the default preset metadata for {mapName} (instanceId {instanceId}).", warning);
     }
 
     /// <summary>Returns a preset's recorded creation time, or now when it has none.</summary>
@@ -452,7 +609,7 @@ public sealed class PresetService : IPresetService
             return Failure($"A preset named \"{name}\" already exists for {mapName}.");
         }
 
-        return CreatePresetCore(serverPath, dataDirectory, mapName, name);
+        return CreateNamedPresetCore(serverPath, dataDirectory, mapName, name);
     }
 
     public PresetResult DuplicatePreset(
@@ -482,6 +639,13 @@ public sealed class PresetService : IPresetService
             return Failure($"Preset \"{sourcePresetName}\" was not found.");
         }
 
+        string sourceConfig = PresetPaths.ServerConfigPath(dataDirectory, sourceMapName, sourcePresetName);
+        if (!_fileSystem.FileExists(sourceConfig))
+        {
+            return Failure(
+                $"Preset \"{sourcePresetName}\" has no serverDZ.cfg ({sourceConfig}); it cannot be duplicated.");
+        }
+
         string targetFolder = PresetPaths.PresetFolder(dataDirectory, targetMapName, name);
         if (_fileSystem.DirectoryExists(targetFolder))
         {
@@ -494,8 +658,10 @@ public sealed class PresetService : IPresetService
             _fileSystem.CreateDirectory(targetFolder);
             EnsureSubfolders(dataDirectory, targetMapName, name);
             PresetResult seeded = SeedServerConfig(
-                serverPath, dataDirectory, targetMapName, name, instanceId,
-                sourcePreset: sourcePresetName, sourceMapName: sourceMapName);
+                sourceConfig,
+                PresetPaths.ServerConfigPath(dataDirectory, targetMapName, name),
+                targetMapName,
+                instanceId);
             if (!seeded.Success)
             {
                 TryDelete(targetFolder);
@@ -595,17 +761,41 @@ public sealed class PresetService : IPresetService
         return Success($"Deleted preset \"{presetName}\".");
     }
 
-    private PresetResult CreatePresetCore(
+    private PresetResult CreateDefaultPresetCore(
+        string serverPath, string dataDirectory, string mapName)
+    {
+        (int instanceId, string? warning) = ResolveDefaultInstanceId(serverPath, dataDirectory, mapName);
+        string rootConfig = Path.Combine(serverPath, ConfigFileNames.ServerConfig);
+        return CreatePresetAt(
+            dataDirectory, mapName, PresetPaths.DefaultPresetName, instanceId, rootConfig, warning);
+    }
+
+    private PresetResult CreateNamedPresetCore(
         string serverPath, string dataDirectory, string mapName, string presetName)
     {
-        // The default preset deliberately adopts the server root's existing
-        // instance ID when one is configured, so a world the user already played
-        // (storage_<rootId>) stays attached to the default preset instead of
-        // being orphaned. Named presets always get a fresh, collision-free ID.
-        int? preferred = PresetPaths.IsDefaultPreset(presetName)
-            ? _serverConfig.TryReadInstanceId(Path.Combine(serverPath, ConfigFileNames.ServerConfig))
-            : null;
-        int instanceId = ReserveInstanceId(dataDirectory, serverPath, mapName, preferred);
+        string defaultConfig = PresetPaths.ServerConfigPath(
+            dataDirectory, mapName, PresetPaths.DefaultPresetName);
+        if (!_fileSystem.FileExists(defaultConfig))
+        {
+            return Failure(
+                $"The default preset for {mapName} has no serverDZ.cfg ({defaultConfig}); " +
+                "restore it before adding a preset.");
+        }
+
+        int instanceId = AllocateInstanceId(dataDirectory, serverPath, mapName);
+        return CreatePresetAt(dataDirectory, mapName, presetName, instanceId, defaultConfig, warning: null);
+    }
+
+    /// <summary>
+    /// Creates a preset folder and seeds its config from an explicit source. Never
+    /// discovers a fallback source: the caller decides whether the source is the
+    /// server root (default preset), the map's default preset (named preset) or a
+    /// source preset (duplicate).
+    /// </summary>
+    private PresetResult CreatePresetAt(
+        string dataDirectory, string mapName, string presetName, int instanceId,
+        string sourceConfig, string? warning)
+    {
         string presetFolder = PresetPaths.PresetFolder(dataDirectory, mapName, presetName);
 
         try
@@ -613,7 +803,11 @@ public sealed class PresetService : IPresetService
             _fileSystem.CreateDirectory(presetFolder);
             EnsureSubfolders(dataDirectory, mapName, presetName);
 
-            PresetResult seeded = SeedServerConfig(serverPath, dataDirectory, mapName, presetName, instanceId);
+            PresetResult seeded = SeedServerConfig(
+                sourceConfig,
+                PresetPaths.ServerConfigPath(dataDirectory, mapName, presetName),
+                mapName,
+                instanceId);
             if (!seeded.Success)
             {
                 TryDelete(presetFolder);
@@ -633,7 +827,7 @@ public sealed class PresetService : IPresetService
             return Failure($"Failed to create preset: {ex.Message}");
         }
 
-        return Success($"Created preset \"{presetName}\" (instanceId {instanceId}).");
+        return Success($"Created preset \"{presetName}\" (instanceId {instanceId}).", warning);
     }
 
     private void EnsureSubfolders(string dataDirectory, string mapName, string presetName)
@@ -644,73 +838,33 @@ public sealed class PresetService : IPresetService
     }
 
     /// <summary>
-    /// Seeds the preset's <c>serverDZ.cfg</c>: copied from
-    /// <paramref name="sourcePreset"/> (read from <paramref name="sourceMapName"/>,
-    /// or the target map when null) when given, otherwise from the default preset
-    /// (or the server root for the default preset itself), then rewritten so its
-    /// <c>template</c> is the target map and its <c>instanceId</c> is the preset's
-    /// own. Returns a failure when no real source config is available; a
-    /// configuration is never fabricated.
+    /// Copies <paramref name="sourceConfig"/> and rewrites its <c>template</c> and
+    /// <c>instanceId</c> for the new preset. Never fabricates or falls back to
+    /// another config; a missing source is a failure.
     /// </summary>
     private PresetResult SeedServerConfig(
-        string serverPath, string dataDirectory, string mapName, string presetName, int instanceId,
-        string? sourcePreset = null, string? sourceMapName = null)
+        string sourceConfig, string targetConfig, string mapName, int instanceId)
     {
-        string target = PresetPaths.ServerConfigPath(dataDirectory, mapName, presetName);
-
-        string? source = null;
-        if (!string.IsNullOrWhiteSpace(sourcePreset))
+        if (!_fileSystem.FileExists(sourceConfig))
         {
-            string sourceMap = string.IsNullOrWhiteSpace(sourceMapName) ? mapName : sourceMapName;
-            string sourceConfig = PresetPaths.ServerConfigPath(dataDirectory, sourceMap, sourcePreset);
-            if (_fileSystem.FileExists(sourceConfig))
-            {
-                source = sourceConfig;
-            }
-        }
-
-        if (source is null && !PresetPaths.IsDefaultPreset(presetName))
-        {
-            string defaultConfig = PresetPaths.ServerConfigPath(
-                dataDirectory, mapName, PresetPaths.DefaultPresetName);
-            if (_fileSystem.FileExists(defaultConfig))
-            {
-                source = defaultConfig;
-            }
-        }
-
-        if (source is null)
-        {
-            string rootConfig = Path.Combine(serverPath, ConfigFileNames.ServerConfig);
-            if (!string.IsNullOrWhiteSpace(serverPath) && _fileSystem.FileExists(rootConfig))
-            {
-                source = rootConfig;
-            }
-        }
-
-        if (source is null)
-        {
-            // Never fabricate a configuration: a preset must be seeded from a real
-            // server config, otherwise the server would start with a stub that
-            // silently drops the user's settings.
             return Failure(
-                $"serverDZ.cfg was not found in the server directory ({serverPath}). " +
+                $"serverDZ.cfg was not found at \"{sourceConfig}\". " +
                 "Restore it (for example, verify the integrity of the DayZ Server files in Steam), " +
-                "or copy a valid serverDZ.cfg into the server directory.");
+                "or copy a valid serverDZ.cfg there.");
         }
 
-        _fileSystem.CopyFile(source, target);
+        _fileSystem.CopyFile(sourceConfig, targetConfig);
 
         // The source must define the mission template; without it the preset cannot
-        // be pointed at its map, so fail rather than overwrite the config.
-        if (!_serverConfig.UpdateTemplate(target, mapName))
+        // be pointed at its map, so fail rather than leave a broken config.
+        if (!_serverConfig.UpdateTemplate(targetConfig, mapName))
         {
             return Failure(
-                $"The server configuration \"{source}\" has no template line and cannot be used to create a preset.");
+                $"The server configuration \"{sourceConfig}\" has no template line and cannot be used to create a preset.");
         }
 
-        _serverConfig.WriteInstanceId(target, instanceId);
-        return Success($"Seeded serverDZ.cfg from \"{source}\".");
+        _serverConfig.WriteInstanceId(targetConfig, instanceId);
+        return Success($"Seeded serverDZ.cfg from \"{sourceConfig}\".");
     }
 
     private void CopyFileIfExists(string source, string destination)
@@ -730,11 +884,9 @@ public sealed class PresetService : IPresetService
     }
 
     /// <summary>
-    /// Copies a preset's <c>types_config.json</c> to the duplicated preset. Types
-    /// configuration is scoped to a single map, so when the copy targets a different
-    /// map the file is rewritten: its map key and <c>CurrentMap</c> become the
-    /// destination map, otherwise the destination preset's types would be ignored.
-    /// A same-map copy is a straight file copy.
+    /// Copies a preset's <c>types_config.json</c> to the duplicated preset. The
+    /// file is map-agnostic (the preset folder determines the map), so a straight
+    /// copy is correct even when the copy targets a different map.
     /// </summary>
     private void CopyTypesConfig(
         string dataDirectory, string sourceMapName, string sourcePresetName,
@@ -746,23 +898,9 @@ public sealed class PresetService : IPresetService
             return;
         }
 
-        string targetPath = PresetPaths.TypesConfigPath(dataDirectory, targetMapName, targetPresetName);
-        if (string.Equals(sourceMapName, targetMapName, StringComparison.OrdinalIgnoreCase))
-        {
-            _fileSystem.CopyFile(sourcePath, targetPath);
-            return;
-        }
-
-        ConfigLoadResult<TypesConfig> loaded = ConfigJson.Read<TypesConfig>(_fileSystem, sourcePath);
-        var rewritten = new TypesConfig { CurrentMap = targetMapName };
-        if (loaded.Status == ConfigLoadStatus.Success
-            && loaded.Value is not null
-            && loaded.Value.Maps.TryGetValue(sourceMapName, out MapTypesConfig? map))
-        {
-            rewritten.Maps[targetMapName] = map;
-        }
-
-        ConfigJson.Write(_fileSystem, targetPath, rewritten);
+        _fileSystem.CopyFile(
+            sourcePath,
+            PresetPaths.TypesConfigPath(dataDirectory, targetMapName, targetPresetName));
     }
 
     private void TryDelete(string path)
@@ -809,7 +947,13 @@ public sealed class PresetService : IPresetService
         || (c >= '0' && c <= '9')
         || c is '.' or '_' or '-' or '+';
 
-    private static PresetResult Success(string message) => new() { Success = true, Message = message };
+    private static PresetResult Success(string message, string? warning = null) =>
+        new()
+        {
+            Success = true,
+            Message = message,
+            Warnings = warning is null ? Array.Empty<string>() : new[] { warning },
+        };
 
     private static PresetResult Failure(string message) => new() { Success = false, Message = message };
 }

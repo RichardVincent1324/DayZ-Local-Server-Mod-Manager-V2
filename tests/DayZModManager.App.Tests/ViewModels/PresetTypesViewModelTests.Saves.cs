@@ -15,9 +15,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { AskTextResult = "First" };
         var saves = new FakeSaveGameService();
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
 
         vm.AddSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.AddSaveCalls == 1);
@@ -33,9 +35,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { AskTextResult = "First", ConfirmResult = false };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "First" } };
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
 
         vm.AddSaveCommand.Execute(null);
         Assert.True(fakeDialogs.ConfirmCalls >= 1);
@@ -50,13 +54,36 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public void AddSave_NoLiveWorld_LogsErrorWithoutPrompt()
+    {
+        var log = new LogViewModel();
+        var dialogs = new FakeDialogs { AskTextResult = "First" };
+        var saves = new FakeSaveGameService();
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, log: log);
+
+        vm.AddSaveCommand.Execute(null);
+
+        Assert.Equal(0, fakeDialogs.AskTextCalls);
+        Assert.Equal(0, saves.AddSaveCalls);
+        Assert.Contains(log.Entries, entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("No storage folder found at") &&
+            entry.Message.Contains("storage_1") &&
+            entry.Message.Contains("Start the server once before saving progress."));
+    }
+
+    [Fact]
     public void LoadSave_AsksConfirmation_AndAbortsOnNo()
     {
         var dialogs = new FakeDialogs { ConfirmResult = false };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
         SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
@@ -70,9 +97,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
         SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
@@ -83,13 +112,33 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public async Task LoadSave_SkipsConfirmation_WhenNoLiveWorldStorage()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = false };
+        var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        SelectSave(vm, "Alpha");
+
+        vm.LoadSaveCommand.Execute(null);
+        await WaitUntilAsync(() => saves.LoadSaveCalls == 1);
+
+        Assert.Equal(0, fakeDialogs.ConfirmCalls);
+        Assert.Equal(1, saves.LoadSaveCalls);
+        Assert.Equal("Alpha", saves.LastLoadName);
+    }
+
+    [Fact]
     public async Task WipeWorld_AsksConfirmation_AndCallsService()
     {
         var dialogs = new FakeDialogs { ConfirmResult = false };
         var saves = new FakeSaveGameService();
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
 
         vm.WipeWorldCommand.Execute(null);
         Assert.Equal(0, saves.WipeWorldCalls);
@@ -101,14 +150,35 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public void WipeWorld_NoLiveWorld_LogsErrorWithoutConfirmation()
+    {
+        var log = new LogViewModel();
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService();
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, log: log);
+
+        vm.WipeWorldCommand.Execute(null);
+
+        Assert.Equal(0, fakeDialogs.ConfirmCalls);
+        Assert.Equal(0, saves.WipeWorldCalls);
+        Assert.Contains(log.Entries, entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("No existing storage folder found; nothing to delete."));
+    }
+
+    [Fact]
     public async Task IsBusy_IsTrueWhileASaveOperationRuns()
     {
         var saves = new FakeSaveGameService();
         var gate = new TaskCompletionSource();
         saves.WipeWorldGate = gate;
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
-            AppliedConfig(), new FakeTypesService(), new FakeDialogs(), saveGameService: saves);
+            AppliedConfig(), new FakeTypesService(), new FakeDialogs(), saveGameService: saves, fileSystem: fileSystem);
 
         Assert.False(vm.IsBusy);
 
@@ -150,8 +220,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { AskTextResult = "First" };
         var saves = new FakeSaveGameService();
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
-        (PresetTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        (PresetTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
 
         vm.AddSaveCommand.Execute(null);
         await WaitUntilAsync(() => saves.AddSaveCalls == 1);
@@ -165,8 +238,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
-        (PresetTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        (PresetTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
         SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);
@@ -205,9 +281,11 @@ public partial class PresetTypesViewModelTests
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var saves = new FakeSaveGameService();
         var types = new FakeTypesService();
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
         (PresetTypesViewModel vm, _, _) = CreateTypesVm(
-            AppliedConfig(), types, dialogs, saveGameService: saves);
+            AppliedConfig(), types, dialogs, saveGameService: saves, fileSystem: fileSystem);
 
         vm.WipeWorldCommand.Execute(null);
         await WaitUntilAsync(() => saves.WipeWorldCalls == 1);
@@ -221,8 +299,11 @@ public partial class PresetTypesViewModelTests
     {
         var dialogs = new FakeDialogs { ConfirmResult = true };
         var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var fileSystem = new FakeFileSystem();
+        fileSystem.AddDirectory(LiveStoragePath(1));
 
-        (PresetTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves);
+        (PresetTypesViewModel vm, _, _) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
         SelectSave(vm, "Alpha");
 
         vm.LoadSaveCommand.Execute(null);

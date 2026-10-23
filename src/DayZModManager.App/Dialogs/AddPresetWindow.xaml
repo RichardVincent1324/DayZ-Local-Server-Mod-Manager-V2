@@ -7,8 +7,8 @@
         ShowInTaskbar="False" ResizeMode="NoResize">
     <StackPanel Margin="14">
         <TextBlock x:Name="PromptText" Margin="0,0,0,10" TextWrapping="Wrap" />
-        <TextBox x:Name="NameBox" VerticalContentAlignment="Center" Padding="4" />
-        <!-- 横向 Target Map 一行布局 -->
+        <TextBox x:Name="NameBox" VerticalContentAlignment="Center" Padding="4" MaxLength="30" />
+		
         <StackPanel x:Name="DestinationMapPanel" Visibility="Collapsed" Margin="0,12,0,0" Orientation="Horizontal">
             <TextBlock Text="Target Map:" Margin="0,0,8,0" VerticalAlignment="Center"/>
             <ComboBox x:Name="DestinationMapBox" 

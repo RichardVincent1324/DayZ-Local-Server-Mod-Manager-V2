@@ -37,18 +37,22 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-		string message =
-			$"Load save \"{saveName}\" (map: {mapName})?\n\n" +
-			$"This will overwrite the preset's current world in {StorageLabel(mapName)} with the stored world data. " +
-			$"The preset's mod list, types configuration and profiles are left unchanged. " +
-			$"The current progress will be lost.";
-	
-        bool confirmed = _dialogs.Confirm(message, "Load Save");
-
-        if (!confirmed)
+        bool hasLiveWorld = HasLiveWorldStorage(mapName, out int instanceId);
+        if (hasLiveWorld)
         {
-            _log.Info("Load cancelled.");
-            return;
+            string message =
+                $"Load save \"{saveName}\" (map: {mapName})?\n\n" +
+                $"This will overwrite the preset's current world in {StorageLabel(mapName)} with the stored world data. " +
+                $"The preset's mod list, types configuration and profiles are left unchanged. " +
+                $"The current progress will be lost.";
+
+            bool confirmed = _dialogs.Confirm(message, "Load Save");
+
+            if (!confirmed)
+            {
+                _log.Info("Load cancelled.");
+                return;
+            }
         }
 
         if (IsSaveBusy)
@@ -57,7 +61,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        int instanceId = PresetInstanceId(mapName);
         string savesFolder = PresetSavesFolder(mapName);
         IsSaveBusy = true;
         try
@@ -98,6 +101,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
+        if (!HasLiveWorldStorage(mapName, out int instanceId))
+        {
+            string storageFolder = _saveGameService.GetStorageFolderPath(_serverPath, mapName, instanceId);
+            _log.Error(SaveGameService.MissingStorageMessage(storageFolder));
+            return;
+        }
+
         string? name = _dialogs.AskText(
             "Add Save",
             $"Save the current progress of {mapName} ({StorageLabel(mapName)}) as:", string.Empty);
@@ -121,7 +131,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        int instanceId = PresetInstanceId(mapName);
         string savesFolder = PresetSavesFolder(mapName);
         bool overwrite = exists;
         IsSaveBusy = true;
@@ -268,6 +277,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
+        if (!HasLiveWorldStorage(mapName, out int instanceId))
+        {
+            _log.Error("No existing storage folder found; nothing to delete.");
+            return;
+        }
+
         bool confirmed = _dialogs.Confirm(
             $"Wipe the current world on map {mapName}?\n\nThis will DELETE {StorageLabel(mapName)} so the map starts fresh on the next server launch. Continue?",
             "Wipe World");
@@ -283,7 +298,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         string serverPath = _serverPath;
-        int instanceId = PresetInstanceId(mapName);
         IsSaveBusy = true;
         try
         {

@@ -26,7 +26,8 @@ public partial class PresetTypesViewModelTests
         FakeBatchFileService? batchFileService = null,
         FakeProcessLauncher? processLauncher = null,
         FakePresetService? presetService = null,
-        IJunctionService? junctionService = null)
+        IJunctionService? junctionService = null,
+        LogViewModel? log = null)
     {
         mapService ??= new FakeMapService(new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"));
         typesConfigStore ??= new FakeTypesConfigStore();
@@ -48,7 +49,7 @@ public partial class PresetTypesViewModelTests
             new FakeServerConfigService(),
             fileSystem,
             dialogs,
-            new LogViewModel(),
+            log ?? new LogViewModel(),
             config,
             new FakeDataDirectoryProvider(),
             serverProcess,
@@ -89,7 +90,8 @@ public partial class PresetTypesViewModelTests
         FakeSaveGameService? saveGameService = null,
         FakeFileSystem? fileSystem = null,
         FakeTypesConfigStore? typesConfigStore = null,
-        FakeProcessLauncher? processLauncher = null)
+        FakeProcessLauncher? processLauncher = null,
+        LogViewModel? log = null)
     {
         workshopMods ??= new[] { "@CF" };
         loadedMods ??= new[] { "@CF" };
@@ -102,7 +104,8 @@ public partial class PresetTypesViewModelTests
             dialogs: dialogs,
             saveGameService: saveGameService,
             fileSystem: fileSystem,
-            processLauncher: processLauncher);
+            processLauncher: processLauncher,
+            log: log);
         vm.Refresh(Settings(), workshopMods, loadedMods);
         return (vm, types, dialogs);
     }
@@ -695,6 +698,8 @@ public partial class PresetTypesViewModelTests
 
         public string? AskTextResult { get; set; } = null;
 
+        public int AskTextCalls { get; private set; }
+
         public string? LastErrorMessage { get; private set; }
 
         public string? LastErrorTitle { get; private set; }
@@ -746,7 +751,11 @@ public partial class PresetTypesViewModelTests
         LastAlertNote = note;
     }
 
-        public string? AskText(string title, string prompt, string defaultValue = "") => AskTextResult;
+        public string? AskText(string title, string prompt, string defaultValue = "")
+        {
+            AskTextCalls++;
+            return AskTextResult;
+        }
 
         public string? PickFolder(string title = "Select a folder") => null;
 

@@ -155,26 +155,40 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         if (!string.IsNullOrWhiteSpace(mapName))
         {
-            try
-            {
-                instanceId = _presetService.ReadInstanceId(
-                    _dataDirectoryProvider.Current, mapName, _activePresetName);
-
-                if (!string.IsNullOrWhiteSpace(_serverPath) && instanceId > 0)
-                {
-                    string storageFolder = _saveGameService.GetStorageFolderPath(
-                        _serverPath, mapName, instanceId);
-                    exists = _fileSystem.DirectoryExists(storageFolder);
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Warning($"Failed to check the live-world storage folder: {ex.Message}");
-            }
+            exists = HasLiveWorldStorage(mapName, out instanceId);
         }
 
         LiveWorldExists = exists;
         LiveWorldStatusToolTip = BuildLiveWorldStatusToolTip(instanceId, exists);
+    }
+
+    /// <summary>
+    /// Checks whether the active preset's own live storage folder exists on disk
+    /// and returns its instance ID. Never throws: a failed check is logged and
+    /// treated as missing, matching the gray indicator state.
+    /// </summary>
+    private bool HasLiveWorldStorage(string mapName, out int instanceId)
+    {
+        instanceId = 0;
+
+        try
+        {
+            instanceId = _presetService.ReadInstanceId(
+                _dataDirectoryProvider.Current, mapName, _activePresetName);
+
+            if (!string.IsNullOrWhiteSpace(_serverPath) && instanceId > 0)
+            {
+                string storageFolder = _saveGameService.GetStorageFolderPath(
+                    _serverPath, mapName, instanceId);
+                return _fileSystem.DirectoryExists(storageFolder);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning($"Failed to check the live-world storage folder: {ex.Message}");
+        }
+
+        return false;
     }
 
     private static string BuildLiveWorldStatusToolTip(int instanceId, bool exists)

@@ -18,7 +18,22 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    
+    <Version>2.1.0</Version>
+    <AssemblyVersion>2.1.0.0</AssemblyVersion>
+    <FileVersion>2.1.0.0</FileVersion>
+    <InformationalVersion>2.1.0</InformationalVersion>
+    
+    <Product>DayZ Local Server Mod Manager V2</Product>
+    <Company>RichardVincent1324</Company>
+	<Description>A Windows desktop app that makes heavily modded DayZ local servers and single-player PvE easier to set up and manage.</Description>
+    <Copyright>Copyright © 2026 RichardVincent1324</Copyright>
+    
+    <AssemblyTitle>Tool for managing modded DayZ local servers and single-player PvE.</AssemblyTitle>
+    
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
 </Project>

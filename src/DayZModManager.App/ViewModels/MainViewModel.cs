@@ -550,7 +550,30 @@ public sealed class MainViewModel : ViewModelBase
     /// Runs a single Apply at a time: overlapping requests (e.g. tab switch plus
     /// Start Server) share the in-flight apply instead of writing files twice.
     /// </summary>
-    private Task<bool> ApplyAsync() => _pendingApply ??= ApplyCoreAsync();
+    private Task<bool> ApplyAsync() => _pendingApply ?? StartApplyAsync();
+
+    /// <summary>
+    /// Starts the in-flight Apply and clears it only after the core apply has
+    /// completed. Assigning <see cref="_pendingApply"/> after calling
+    /// <see cref="ApplyCoreAsync"/> would otherwise leave a synchronously completed
+    /// apply (for example, a pre-flight validation failure) cached forever.
+    /// </summary>
+    private async Task<bool> StartApplyAsync()
+    {
+        Task<bool> apply = ApplyCoreAsync();
+        _pendingApply = apply;
+        try
+        {
+            return await apply;
+        }
+        finally
+        {
+            if (ReferenceEquals(_pendingApply, apply))
+            {
+                _pendingApply = null;
+            }
+        }
+    }
 
     private async Task<bool> ApplyCoreAsync()
     {
@@ -648,6 +671,7 @@ public sealed class MainViewModel : ViewModelBase
                 bool workshopOrServerChanged = newSettings.WorkshopPath != _settings.WorkshopPath
                     || newSettings.ServerPath != _settings.ServerPath;
                 bool batchChanged = newSettings.BatFileName != _settings.BatFileName;
+                string? autoAppliedMap = null;
 
                 bool cleanupWasEnabled = _settings.AutoCleanServerLogs;
 
@@ -667,7 +691,7 @@ public sealed class MainViewModel : ViewModelBase
                 if (workshopOrServerChanged || batchChanged)
                 {
                     PresetTypes.Refresh(newSettings, ModState.WorkshopMods.ToList(), ModState.LoadedMods.ToList());
-                    PresetTypes.ReconcileAppliedMap();
+                    autoAppliedMap = PresetTypes.ReconcileAppliedMap();
                 }
                 else
                 {
@@ -679,6 +703,17 @@ public sealed class MainViewModel : ViewModelBase
                     Log.Error(
                         "Apply completed, but cfgeconomycore.xml could not be synchronized. " +
                         "Start Server is blocked until the configuration is re-applied successfully.");
+                }
+
+                // The first Apply after configuring the server has no active map yet,
+                // so it wrote an empty mod list and could not save mod_order.json.
+                // Reconcile just auto-applied the first map; run the apply again now
+                // that the map/preset environment is active, so the loaded mods are
+                // written to its mod order, batch file and junctions. The second pass
+                // cannot auto-apply again because CurrentMap is now set.
+                if (autoAppliedMap is not null)
+                {
+                    return await ApplyCoreAsync();
                 }
             }
             catch (Exception ex)
@@ -693,10 +728,6 @@ public sealed class MainViewModel : ViewModelBase
         {
             Log.Error($"Apply failed: {ex.Message}");
             return false;
-        }
-        finally
-        {
-            _pendingApply = null;
         }
     }
 

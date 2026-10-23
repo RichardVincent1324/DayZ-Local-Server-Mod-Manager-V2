@@ -103,6 +103,10 @@ public sealed class SaveGameService : ISaveGameService
     public string GetStorageFolderPath(string serverPath, string mapName, int instanceId) =>
         Path.Combine(serverPath, "mpmissions", mapName, $"storage_{instanceId}");
 
+    /// <summary>Consistent message for a missing live storage folder when saving progress.</summary>
+    public static string MissingStorageMessage(string liveStorage) =>
+        $"No storage folder found at {liveStorage}. Start the server once before saving progress.";
+
     public IReadOnlyList<int> ListStorageInstanceIds(string serverPath, string mapName) =>
         StorageFolders.ListInstanceIds(_fileSystem, serverPath, mapName);
 
@@ -196,7 +200,7 @@ public sealed class SaveGameService : ISaveGameService
         string liveStorage = GetStorageFolderPath(serverPath, mapName, instanceId);
         if (!_fileSystem.DirectoryExists(liveStorage))
         {
-            return Failure($"No storage folder found at {liveStorage}. Start the server once before saving progress.");
+            return Failure(MissingStorageMessage(liveStorage));
         }
 
         string target = Path.Combine(savesFolder, name);

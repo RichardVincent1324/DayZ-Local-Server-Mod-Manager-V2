@@ -430,8 +430,8 @@
                     <!-- Row 2: Types grid | Progress Saves grid -->
                     <Grid Grid.Row="2">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="8*" />
-                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="8.2*" />
+                            <ColumnDefinition Width="1.8*" />
                         </Grid.ColumnDefinitions>
 
                         <DataGrid Grid.Column="0" Margin="0,0,8,0" ItemsSource="{Binding TypesRows}"

@@ -37,8 +37,8 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        bool hasLiveWorld = HasLiveWorldStorage(mapName, out int instanceId);
-        if (hasLiveWorld)
+        LiveWorldStorageState liveWorldState = GetLiveWorldStorageState(mapName, out int instanceId);
+        if (liveWorldState != LiveWorldStorageState.Missing)
         {
             string message =
                 $"Load save \"{saveName}\" (map: {mapName})?\n\n" +
@@ -101,10 +101,19 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        if (!HasLiveWorldStorage(mapName, out int instanceId))
+        LiveWorldStorageState liveWorldState = GetLiveWorldStorageState(mapName, out int instanceId);
+        if (liveWorldState != LiveWorldStorageState.Exists)
         {
-            string storageFolder = _saveGameService.GetStorageFolderPath(_serverPath, mapName, instanceId);
-            _log.Error(SaveGameService.MissingStorageMessage(storageFolder));
+            if (liveWorldState == LiveWorldStorageState.Unknown)
+            {
+                _log.Error("Could not verify the live-world storage folder; saving was cancelled.");
+            }
+            else
+            {
+                string storageFolder = _saveGameService.GetStorageFolderPath(_serverPath, mapName, instanceId);
+                _log.Error(SaveGameService.MissingStorageMessage(storageFolder));
+            }
+
             return;
         }
 
@@ -277,9 +286,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        if (!HasLiveWorldStorage(mapName, out int instanceId))
+        LiveWorldStorageState liveWorldState = GetLiveWorldStorageState(mapName, out int instanceId);
+        if (liveWorldState != LiveWorldStorageState.Exists)
         {
-            _log.Error("No existing storage folder found; nothing to delete.");
+            _log.Error(liveWorldState == LiveWorldStorageState.Unknown
+                ? "Could not verify the live-world storage folder; wiping was cancelled."
+                : SaveGameService.NoExistingStorageMessage);
             return;
         }
 

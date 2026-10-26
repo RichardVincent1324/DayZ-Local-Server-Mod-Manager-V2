@@ -54,6 +54,44 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
+    public void LoadSave_Confirms_WhenStorageCheckFails()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = false };
+        var saves = new FakeSaveGameService { StoredSaves = new[] { "Alpha" } };
+        var fileSystem = new FakeFileSystem { ThrowOnStorageDirectoryExists = true };
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves, fileSystem: fileSystem);
+        SelectSave(vm, "Alpha");
+
+        vm.LoadSaveCommand.Execute(null);
+
+        Assert.True(fakeDialogs.ConfirmCalls >= 1);
+        Assert.Equal(0, saves.LoadSaveCalls);
+    }
+
+    [Fact]
+    public void AddSave_StorageCheckFailure_LogsErrorWithoutPrompt()
+    {
+        var log = new LogViewModel();
+        var dialogs = new FakeDialogs { AskTextResult = "First" };
+        var saves = new FakeSaveGameService();
+        var fileSystem = new FakeFileSystem { ThrowOnStorageDirectoryExists = true };
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves,
+            fileSystem: fileSystem, log: log);
+
+        vm.AddSaveCommand.Execute(null);
+
+        Assert.Equal(0, fakeDialogs.AskTextCalls);
+        Assert.Equal(0, saves.AddSaveCalls);
+        Assert.Contains(log.Entries, entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("Could not verify the live-world storage folder; saving was cancelled."));
+    }
+
+    [Fact]
     public void AddSave_NoLiveWorld_LogsErrorWithoutPrompt()
     {
         var log = new LogViewModel();
@@ -166,6 +204,27 @@ public partial class PresetTypesViewModelTests
         Assert.Contains(log.Entries, entry =>
             entry.Level == LogLevel.Error &&
             entry.Message.Contains("No existing storage folder found; nothing to delete."));
+    }
+
+    [Fact]
+    public void WipeWorld_StorageCheckFailure_LogsErrorWithoutConfirmation()
+    {
+        var log = new LogViewModel();
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        var saves = new FakeSaveGameService();
+        var fileSystem = new FakeFileSystem { ThrowOnStorageDirectoryExists = true };
+
+        (PresetTypesViewModel vm, _, FakeDialogs fakeDialogs) = CreateTypesVm(
+            AppliedConfig(), new FakeTypesService(), dialogs, saveGameService: saves,
+            fileSystem: fileSystem, log: log);
+
+        vm.WipeWorldCommand.Execute(null);
+
+        Assert.Equal(0, fakeDialogs.ConfirmCalls);
+        Assert.Equal(0, saves.WipeWorldCalls);
+        Assert.Contains(log.Entries, entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("Could not verify the live-world storage folder; wiping was cancelled."));
     }
 
     [Fact]

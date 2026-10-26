@@ -107,6 +107,9 @@ public sealed class SaveGameService : ISaveGameService
     public static string MissingStorageMessage(string liveStorage) =>
         $"No storage folder found at {liveStorage}. Start the server once before saving progress.";
 
+    /// <summary>Consistent message for wiping a world when no live storage folder exists.</summary>
+    public const string NoExistingStorageMessage = "No existing storage folder found; nothing to delete.";
+
     public IReadOnlyList<int> ListStorageInstanceIds(string serverPath, string mapName) =>
         StorageFolders.ListInstanceIds(_fileSystem, serverPath, mapName);
 
@@ -367,7 +370,7 @@ public sealed class SaveGameService : ISaveGameService
         string liveStorage = GetStorageFolderPath(serverPath, mapName, instanceId);
         if (!_fileSystem.DirectoryExists(liveStorage))
         {
-            return Notice("No existing storage folder found; nothing to delete.");
+            return Notice(NoExistingStorageMessage);
         }
 
         try

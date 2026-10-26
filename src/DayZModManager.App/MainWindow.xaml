@@ -364,7 +364,6 @@
                             <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
                                       VerticalAlignment="Center"
 									  ScrollViewer.CanContentScroll="False"
-									  VirtualizingStackPanel.IsVirtualizing="False"
                                       MaxDropDownHeight="300" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
                                     Content="&#xE8B7;"
@@ -380,7 +379,6 @@
                                       DisplayMemberPath="DisplayName" Width="240"
                                       VerticalAlignment="Center"
 									  ScrollViewer.CanContentScroll="False"
-									  VirtualizingStackPanel.IsVirtualizing="False"
                                       MaxDropDownHeight="300" />
                         </StackPanel>
                     </DockPanel>
@@ -393,7 +391,6 @@
                                 <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}"
                                           VerticalAlignment="Center"
 										  ScrollViewer.CanContentScroll="False"
-										  VirtualizingStackPanel.IsVirtualizing="False"
                                           MaxDropDownHeight="300" />
                                 <TextBlock Text="Select the mod to be configured"
                                            IsHitTestVisible="False" Foreground="Gray"

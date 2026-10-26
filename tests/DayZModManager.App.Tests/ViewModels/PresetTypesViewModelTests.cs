@@ -615,7 +615,12 @@ public partial class PresetTypesViewModelTests
 
         public void AddDirectory(string path) => _directories.Add(path);
 
-        public bool DirectoryExists(string path) => _directories.Contains(path);
+        public bool ThrowOnStorageDirectoryExists { get; set; }
+
+        public bool DirectoryExists(string path) =>
+            ThrowOnStorageDirectoryExists && path.Contains("storage_", StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException("Simulated storage folder check failure.")
+                : _directories.Contains(path);
 
         public IReadOnlyList<string> GetDirectories(string path) => Array.Empty<string>();
 

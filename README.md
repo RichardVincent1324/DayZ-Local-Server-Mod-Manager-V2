@@ -1,4 +1,6 @@
-﻿# DayZ Local Server Mod Manager V2
+﻿**English** | [简体中文](./README.zh-CN.md)
+
+# DayZ Local Server Mod Manager V2
 
 > **A Windows desktop app that makes heavily modded DayZ local servers and single-player PvE easier to set up and manage.**
 
@@ -41,7 +43,7 @@ V2 brings that workflow into one Windows application so you can spend less time 
 
 ### 1. Install DayZ and DayZ Server
 
-<img width="300" alt="Steam installations" src="./assets/install_dayz_and_server.png" />
+<img width="45%" alt="Steam installations" src="./assets/install_dayz_and_server.png" />
 
 Before you begin, make sure you have:
 
@@ -73,7 +75,7 @@ D:\...\DayZServer\LocalServer.example.bat
 
 Open `LocalServer.example.bat` and set `serverDirectory` to your actual DayZ Server folder:
 
-<img width="300" alt="Settings Tab" src="./assets/set_batch_serverDirectory.png" />
+<img width="45%" alt="Settings Tab" src="./assets/set_batch_serverDirectory.png" />
 
 To find your DayZ Server folder, open Steam and select **DayZ Server → Manage → Browse Local Files**.
 
@@ -109,7 +111,7 @@ Locate this existing line and change the value from `2` to `0`. Do not insert a 
 verifySignatures = 0;
 ```
 
-<img width="300" alt="Disable bikey verification" src="./assets/disable_bikey_verification.png" />
+<img width="45%" alt="Disable bikey verification" src="./assets/disable_bikey_verification.png" />
 
 `verifySignatures = 0` disables PBO signature verification, which is required for this local-mod workflow.
 
@@ -179,10 +181,10 @@ This structure lets you manage multiple maps, presets, and save slots without th
 
 ### 1. Drag to reorder mods
 
-- While dragging, scroll the list with the mouse wheel.
+- While dragging, scroll the list using the mouse wheel, or hover near the top/bottom edge for auto-scrolling.
 - The `#` markers represent the mods' actual load order in the launch batch file.
 
-<img width="300" alt="Mod drag-reorder tip" src="./assets/tip1.png" />
+<img width="45%" alt="Mod drag-reorder tip" src="./assets/drag_to_reorder.png" />
 
 ### 2. Type-file selection
 
@@ -191,22 +193,21 @@ This structure lets you manage multiple maps, presets, and save slots without th
 - For unrecognized files, inspect them before assigning a role using the **Open Mod Folder** button. An arbitrary or incorrect role assignment may prevent the server from starting.
 - When you select an unrecognized file, it is assigned the **Types** role by default. If it is a Spawnable Types file, expand the dropdown and choose **Spawnable**.
 
-<img width="300" alt="Type file selection example 1" src="./assets/type_select_example_1.png" /> <img width="300" alt="Type file selection example 2" src="./assets/type_select_example_2.png" />
+<img width="45%" alt="Type file selection example 1" src="./assets/type_select_example_1.png" /> <img width="45%" alt="Type file selection example 2" src="./assets/type_select_example_2.png" />
 
 ### 3. Folder shortcuts for frequently edited files
 
 - The icon beside **Current Map** opens the active preset's `profiles` folder, where you can edit mod configurations such as VppAdminTools.
 - The icon beside **Types Config** opens the active preset's `type_files` folder, which contains its configured type files. Mod authors provide these template files, which are copied from the Workshop; you can edit them if needed.
 
-<img width="300" alt="Open folder icons" src="./assets/open_in_file_explore_icons.png" />
+<img width="45%" alt="Open folder icons" src="./assets/open_in_file_explore_icons.png" />
 
 ### 4. Edit a preset's server configuration
 
 - Click either folder icon to open its folder, then go up one level to reach the preset folder.
 - `serverDZ.cfg` is stored in that preset folder. Edit its settings as needed.
 
-<img width="300" alt="Preset folder path" src="./assets/click_preset_path_name.png" />
-<img width="300" alt="Edit preset world config" src="./assets/edit_preset_world_config.png" />
+<img width="45%" alt="Preset folder path" src="./assets/reach_preset_folder.png" /> <img width="45%" alt="Edit preset world config" src="./assets/edit_preset_world_config.png" />
 
 > [!WARNING]
 > Do NOT alter the line **`instanceId = N;`**. It is fixed by the preset's `instanceId` stored in `preset-meta.json`; changing it points the server at a different `storage_<id>` and makes the preset fall out of sync.
@@ -215,13 +216,13 @@ This structure lets you manage multiple maps, presets, and save slots without th
 
 - Click and drag to select multiple type files, or press `Ctrl+A` to select all.
 
-<img width="300" alt="Multi-select type files" src="./assets/data_multi_select.png" />
+<img width="45%" alt="Multi-select type files" src="./assets/types_list_multi_select.png" />
 
 ### 6. Live-world storage indicator
 
 A small circular indicator in the bottom-right corner of the main window stays visible across all tabs and shows whether the active preset has a live world.
 
-<img width="300" alt="Steam installations" src="./assets/live_world_indicator - Copy.png" />
+<img width="45%" alt="Steam installations" src="./assets/live_world_indicator.png" />
 
 
 - **Green** — the active preset's live storage folder `mpmissions\<currentMapName>\storage_<instanceId>` exists on disk. Its tooltip shows the associated folder.
@@ -287,7 +288,7 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 - Discover maps from the server's `mpmissions` directory (mission folders that contain `cfgeconomycore.xml`).
 - Switch the active map via the dropdown list.
 - Update the active mission `template` (DayZ uses the keyword `template` to store the map name) in the active preset's `serverDZ.cfg`.
-<img width="400" alt="Steam installations" src="./assets/switch_map_template_line.png" />
+<img width="70%" alt="Steam installations" src="./assets/switch_map_template_line.png" />
 - Update the batch file's `serverProfile` and `serverConfig` lines to point at the active preset's `profiles` folder and `serverDZ.cfg`.
 
 #### Type-file discovery and role assignment
@@ -304,7 +305,7 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 - Insert a managed CE block into `cfgeconomycore.xml` between `<economycore>` and `<classes>`.
 - Update the CE block's folder path to point to the correct `type_files` folder when switching presets or maps.
 - V2 owns its `<ce>` block outright: it marks the block it manages with `dzmmv2-managed-by="DayZ-Mod-Manager-V2"` and fully rewrites that block's `<file>` entries (and its `folder` attribute) whenever it syncs the economy (Apply, map switch, preset switch and types edits). The `<ce>` element and its marker are always kept, even when the block becomes empty.
-<img width="400" alt="Steam installations" src="./assets/cfgcore_ce_block.png" />
+<img width="80%" alt="Steam installations" src="./assets/cfgcore_ce_block.png" />
 - V2 leaves every other `<ce>` block untouched, including legacy V2's `./db/ModTypes` block and blocks written by other tools. Entries V2 does not own are never modified.
 
 #### Type-file maintenance

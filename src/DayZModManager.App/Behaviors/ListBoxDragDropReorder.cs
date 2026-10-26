@@ -27,6 +27,10 @@ public static class ListBoxDragDropReorder
 {
     private static readonly ConditionalWeakTable<ListBox, DragState> States = new();
 
+    // Kept in a field so EndDrag can remove the exact same delegate instance.
+    private static readonly RequestBringIntoViewEventHandler SuppressBringIntoViewHandler =
+        OnRequestBringIntoView;
+
     public static readonly DependencyProperty ReorderCommandProperty =
         DependencyProperty.RegisterAttached(
             "ReorderCommand",
@@ -145,6 +149,16 @@ public static class ListBoxDragDropReorder
         {
             EndDrag(listBox, state);
             throw;
+        }
+        finally
+        {
+            // While a drag is in progress, block the bubbling MouseMove event.
+            // This prevents the ListBox's internal edge auto-scroll logic from 
+            // triggering when the mouse is dragged beyond the top/bottom edges.
+            if (state.IsDragging)
+            {
+                e.Handled = true;
+            }
         }
     }
 
@@ -281,6 +295,27 @@ public static class ListBoxDragDropReorder
 
         listBox.SetValue(IsDragActiveProperty, true);
 
+        // Suppress WPF's focus transfer. Without this, ListBoxItems will try to
+        // grab focus as the cursor moves, firing RequestBringIntoView and causing
+        // the gray focus visual to jump around or auto-scroll.
+        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
+        listBox.PreviewGotKeyboardFocus += OnPreviewGotKeyboardFocus;
+        
+        // Steal focus away from the clicked item to stop it from requesting visibility.
+        listBox.Focus();
+
+        // Block the ScrollViewer's auto-scroll (BringIntoView) for the duration of
+        // the drag; see OnRequestBringIntoView. The handler must sit on the
+        // ItemsPresenter because it is below the ScrollViewer on the bubbling
+        // route, so it can mark the request handled before the ScrollViewer sees it.
+        if (FindDescendant<ItemsPresenter>(listBox) is { } itemsPresenter)
+        {
+            itemsPresenter.AddHandler(
+                FrameworkElement.RequestBringIntoViewEvent,
+                SuppressBringIntoViewHandler,
+                handledEventsToo: true);
+        }
+
         // Pin the drag-start selection (corrects any cursor-follow churn that
         // happened in the brief pre-drag window).
         RestoreSelection(listBox, state.DragStartSelection);
@@ -328,6 +363,9 @@ public static class ListBoxDragDropReorder
         state.Ghost?.Position(ScreenPoint(listBox));
         ReassertDragSelection(listBox, state);
         UpdateInsertionIndicator(listBox, state);
+        
+        // Handle hover detection for controlled edge scrolling.
+        UpdateEdgeScroll(listBox, state);
     }
 
     private static void ReassertDragSelection(ListBox listBox, DragState state)
@@ -379,6 +417,9 @@ public static class ListBoxDragDropReorder
 
     private static void EndDrag(ListBox listBox, DragState state)
     {
+        // Stop any active edge auto-scroll countdowns or timers immediately.
+        StopEdgeScroll(state);
+
         state.Ghost?.Close();
 
         if (state.IndicatorLayer is { } layer && state.Indicator is { } indicator)
@@ -386,10 +427,150 @@ public static class ListBoxDragDropReorder
             layer.Remove(indicator);
         }
 
+        // Re-enable the ScrollViewer's auto-scroll (BringIntoView) that was
+        // suppressed in BeginDrag.
+        if (FindDescendant<ItemsPresenter>(listBox) is { } itemsPresenter)
+        {
+            itemsPresenter.RemoveHandler(
+                FrameworkElement.RequestBringIntoViewEvent,
+                SuppressBringIntoViewHandler);
+        }
+
+        // Restore normal focus management.
+        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
+
         listBox.SetValue(IsDragActiveProperty, false);
 
         state.Reset();
         ReleaseCapture(listBox);
+    }
+
+    /// <summary>
+    /// While a drag is in progress nothing may be brought into view: moving the
+    /// cursor to the top or bottom edge would otherwise make the ScrollViewer
+    /// auto-scroll to follow the item, recycle containers and make the selection
+    /// highlight jump. The handler is attached to the ItemsPresenter, which sits
+    /// below the ScrollViewer on the bubbling route, so it can stop the request
+    /// before the ScrollViewer handles it. Wheel scrolling is unaffected because
+    /// it drives the ScrollViewer directly from OnPreviewMouseWheel.
+    /// </summary>
+    private static void OnRequestBringIntoView(object sender, RequestBringIntoViewEventArgs e)
+    {
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Blocks keyboard focus from transferring to ListBoxItems during a drag,
+    /// which prevents the native gray focus visual from jumping to other rows.
+    /// </summary>
+    private static void OnPreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ListBox listBox && GetState(listBox).IsDragging)
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Monitors mouse position to trigger edge auto-scrolling.
+    /// Only triggers when the cursor is INSIDE the ListBox bounds (preventing 
+    /// uncontrolled scrolling when dragging outside), and requires a short 
+    /// hover delay to avoid accidental triggers.
+    /// </summary>
+    private static void UpdateEdgeScroll(ListBox listBox, DragState state)
+    {
+        if (FindDescendant<ScrollViewer>(listBox) is not { } scrollViewer) return;
+
+        // Skip if the list has already reached its scroll limits.
+        bool canScrollUp = scrollViewer.VerticalOffset > 0;
+        bool canScrollDown = scrollViewer.VerticalOffset < scrollViewer.ScrollableHeight;
+
+        // Absolute pixel threshold (30px) from the top/bottom edges.
+        const double edgeThreshold = 30.0; 
+        Point position = Mouse.GetPosition(listBox);
+
+        int newDirection = 0;
+        
+        // Top edge: must be strictly inside the control (Y >= 0) and within threshold.
+        if (canScrollUp && position.Y >= 0 && position.Y < edgeThreshold)
+        {
+            newDirection = -1;
+        }
+        // Bottom edge: must be strictly inside the control (Y <= ActualHeight) and within threshold.
+        else if (canScrollDown && position.Y <= listBox.ActualHeight && position.Y > listBox.ActualHeight - edgeThreshold)
+        {
+            newDirection = 1;
+        }
+
+        // If the direction changes (entered edge, left edge, or jumped from top to bottom)
+        if (newDirection != state.EdgeDirection)
+        {
+            StopEdgeScroll(state);
+            state.EdgeDirection = newDirection;
+
+            if (newDirection != 0)
+            {
+                // 0.5 seconds hover delay before initiating scroll.
+                state.HoverTimer = new DispatcherTimer(DispatcherPriority.Input)
+                {
+                    Interval = TimeSpan.FromSeconds(0.5) 
+                };
+                state.HoverTimer.Tick += (s, e) =>
+                {
+                    state.HoverTimer?.Stop();
+                    state.HoverTimer = null;
+                    StartScrollTimer(listBox, state, newDirection);
+                };
+                state.HoverTimer.Start();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Starts the actual scrolling logic. Uses LineDown/LineUp to ensure the list 
+    /// scrolls exactly one logical item at a time, avoiding pixel-based visual glitches.
+    /// </summary>
+    private static void StartScrollTimer(ListBox listBox, DragState state, int direction)
+    {
+        if (state.ScrollTimer != null) return;
+
+        // Scroll one row every 150ms (approx. 6-7 rows per second), providing 
+        // a smooth "stepped" scrolling experience.
+        state.ScrollTimer = new DispatcherTimer(DispatcherPriority.Input)
+        {
+            Interval = TimeSpan.FromMilliseconds(150)
+        };
+        state.ScrollTimer.Tick += (s, e) =>
+        {
+            if (FindDescendant<ScrollViewer>(listBox) is { } scrollViewer)
+            {
+                if (direction > 0)
+                {
+                    scrollViewer.LineDown();
+                }
+                else
+                {
+                    scrollViewer.LineUp();
+                }
+
+                // Critical: Manually refresh the insertion indicator. Since the 
+                // mouse isn't moving while scrolling, OnPreviewMouseMove won't fire,
+                // which would otherwise leave the blue line stuck at its old position.
+                UpdateInsertionIndicator(listBox, state);
+            }
+        };
+        state.ScrollTimer.Start();
+    }
+
+    /// <summary>
+    /// Stops and cleans up both the hover delay timer and the scroll timer.
+    /// </summary>
+    private static void StopEdgeScroll(DragState state)
+    {
+        state.HoverTimer?.Stop();
+        state.HoverTimer = null;
+        state.ScrollTimer?.Stop();
+        state.ScrollTimer = null;
     }
 
     private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
@@ -669,6 +850,12 @@ public static class ListBoxDragDropReorder
         public DragGhost? Ghost;
         public AdornerLayer? IndicatorLayer;
         public InsertionIndicatorAdorner? Indicator;
+
+        // Timers for the controlled edge auto-scrolling.
+        public DispatcherTimer? HoverTimer; 
+        public DispatcherTimer? ScrollTimer;
+        public int EdgeDirection; // -1 = top, 1 = bottom, 0 = none
+
         public void Reset()
         {
             DraggedItem = null;
@@ -678,6 +865,13 @@ public static class ListBoxDragDropReorder
             Ghost = null;
             IndicatorLayer = null;
             Indicator = null;
+
+            // Ensure timers are stopped and cleaned up
+            HoverTimer?.Stop();
+            HoverTimer = null;
+            ScrollTimer?.Stop();
+            ScrollTimer = null;
+            EdgeDirection = 0;
         }
     }
 

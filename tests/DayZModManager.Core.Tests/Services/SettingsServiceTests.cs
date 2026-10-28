@@ -57,13 +57,15 @@ public class SettingsServiceTests
     {
         var fs = new FakeFileSystem();
         var service = new SettingsService(fs);
-        service.Save(@"C:\data", new Settings { WorkshopPath = @"D:\x" });
+        service.Save(@"C:\data", new Settings { WorkshopPath = @"D:\x", BatFileName = "run.bat" });
 
         string? json = fs.TryGetFileContents(@"C:\data\settings.json");
 
         Assert.NotNull(json);
         Assert.Contains("\"workshopPath\"", json);
         Assert.DoesNotContain("\"WorkshopPath\"", json);
+        Assert.Contains("\"batFileName\"", json);
+        Assert.DoesNotContain("\"batFilePath\"", json);
         Assert.False(json.Contains('\uFEFF'), "settings.json should not contain a UTF-8 BOM");
     }
 

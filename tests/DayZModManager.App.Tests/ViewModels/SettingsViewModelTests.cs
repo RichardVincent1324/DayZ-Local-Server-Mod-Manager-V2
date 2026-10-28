@@ -2,6 +2,7 @@ using System.IO;
 using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
 using DayZModManager.Core;
+using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
 
@@ -12,7 +13,7 @@ public class SettingsViewModelTests
     [Fact]
     public void Load_ReflectsSettings_AndIsNotDirty()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         var settings = new Settings
         {
             WorkshopPath = @"D:\workshop",
@@ -33,7 +34,7 @@ public class SettingsViewModelTests
     [Fact]
     public void SettingWorkshopPath_MarksDirty()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = @"D:\workshop" });
 
         vm.WorkshopPath = @"D:\other";
@@ -44,7 +45,7 @@ public class SettingsViewModelTests
     [Fact]
     public void TogglingAutoCleanServerLogs_MarksDirty_UntilApplied()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings());
         Assert.False(vm.AutoCleanServerLogs);
 
@@ -58,7 +59,7 @@ public class SettingsViewModelTests
     [Fact]
     public void ClickValueWrite_ReflectsCheckedAndUncheckedStates()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings());
         Assert.False(vm.IsDirty);
 
@@ -82,7 +83,7 @@ public class SettingsViewModelTests
     [Fact]
     public void TogglingAutoClean_WithPathsConfigured_RaisesApplyRequested()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings
         {
             WorkshopPath = @"D:\workshop",
@@ -102,7 +103,7 @@ public class SettingsViewModelTests
     [Fact]
     public void TogglingAutoClean_WithoutPathsConfigured_DoesNotAutoApply()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings());
         int raises = 0;
         vm.ApplyRequested += () => raises++;
@@ -117,7 +118,7 @@ public class SettingsViewModelTests
     [Fact]
     public void SettingSameAutoCleanValueTwice_RaisesOnlyOnce()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings
         {
             WorkshopPath = @"D:\workshop",
@@ -136,7 +137,7 @@ public class SettingsViewModelTests
     [Fact]
     public void ToSettings_RoundTripsValues()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "b.bat" });
 
         vm.WorkshopPath = "ws2";
@@ -153,7 +154,7 @@ public class SettingsViewModelTests
     [Fact]
     public void EffectiveDataDirectory_WithServerPath_UsesServerPathDefault()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings { ServerPath = @"D:\DayZServer" });
 
         Assert.Equal(
@@ -164,7 +165,7 @@ public class SettingsViewModelTests
     [Fact]
     public void EffectiveDataDirectory_WithoutServerPath_UsesBootstrapDirectory()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings());
 
         Assert.Equal(AppPaths.BootstrapDirectory(), vm.EffectiveDataDirectory);
@@ -173,7 +174,7 @@ public class SettingsViewModelTests
     [Fact]
     public void MarkApplied_ClearsDirtyFlag()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = "ws", ServerPath = "srv", BatFileName = "b.bat" });
 
         vm.WorkshopPath = "ws2";
@@ -187,52 +188,76 @@ public class SettingsViewModelTests
     [Fact]
     public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenServerPathNotSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs);
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.False(raised);
     }
 
     [Fact]
     public void BrowseWorkshop_RaisesApplyRequested_WhenServerAndBatchSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs);
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         vm.Load(new Settings { ServerPath = @"D:\server", BatFileName = "run.bat" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.True(raised);
     }
 
     [Fact]
     public void BrowseWorkshop_SetsPath_ButSkipsApply_WhenBatchNotSet()
     {
-        var dialogs = new FakeDialogs { Folder = @"D:\picked" };
-        var vm = new SettingsViewModel(dialogs);
+        var dialogs = new FakeDialogs { Folder = @"D:\picked\!Workshop" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\picked\!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
         vm.Load(new Settings { ServerPath = @"D:\server" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
         vm.BrowseWorkshopCommand.Execute(null);
 
-        Assert.Equal(@"D:\picked", vm.WorkshopPath);
+        Assert.Equal(@"D:\picked\!Workshop", vm.WorkshopPath);
         Assert.False(raised, "auto-apply must wait until a batch file is selected");
+    }
+
+    [Fact]
+    public void BrowseWorkshop_InvalidFolder_IsRefused_AndWarns()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\random" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\random", "stuff");
+        var vm = new SettingsViewModel(dialogs, fs);
+        vm.Load(new Settings { WorkshopPath = @"D:\existing\!Workshop" });
+        bool raised = false;
+        vm.ApplyRequested += () => raised = true;
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\existing\!Workshop", vm.WorkshopPath);
+        Assert.False(raised);
+        Assert.NotNull(dialogs.LastErrorMessage);
     }
 
     [Fact]
     public void BrowseServer_SetsPath_ButSkipsApply_WhenWorkshopPathNotSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\server" };
-        var vm = new SettingsViewModel(dialogs);
+        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
@@ -246,7 +271,7 @@ public class SettingsViewModelTests
     public void BrowseServer_RaisesApplyRequested_WhenWorkshopAndBatchSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\server" };
-        var vm = new SettingsViewModel(dialogs);
+        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = @"D:\workshop", BatFileName = "run.bat" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
@@ -261,7 +286,7 @@ public class SettingsViewModelTests
     public void BrowseServer_SetsPath_ButSkipsApply_WhenBatchNotSet()
     {
         var dialogs = new FakeDialogs { Folder = @"D:\server" };
-        var vm = new SettingsViewModel(dialogs);
+        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = @"D:\workshop" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
@@ -275,7 +300,7 @@ public class SettingsViewModelTests
     [Fact]
     public void CanApply_RequiresWorkshopServerAndBatch()
     {
-        var vm = new SettingsViewModel(new FakeDialogs());
+        var vm = new SettingsViewModel(new FakeDialogs(), new FakeFileSystem());
 
         vm.Load(new Settings());
         Assert.False(vm.CanApply);
@@ -297,7 +322,7 @@ public class SettingsViewModelTests
     public void BrowseBatchFile_SetsPath_ButSkipsApply_WhenPathsNotSet()
     {
         var dialogs = new FakeDialogs { File = @"D:\start.bat" };
-        var vm = new SettingsViewModel(dialogs);
+        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
 
@@ -311,7 +336,7 @@ public class SettingsViewModelTests
     public void BrowseBatchFile_RaisesApplyRequested_WhenPathsSet()
     {
         var dialogs = new FakeDialogs { File = @"D:\start.bat" };
-        var vm = new SettingsViewModel(dialogs);
+        var vm = new SettingsViewModel(dialogs, new FakeFileSystem());
         vm.Load(new Settings { WorkshopPath = @"D:\workshop", ServerPath = @"D:\server" });
         bool raised = false;
         vm.ApplyRequested += () => raised = true;
@@ -322,19 +347,55 @@ public class SettingsViewModelTests
         Assert.True(raised, "selecting the last of the three paths must auto-apply");
     }
 
+    [Fact]
+    public void BrowseWorkshop_AppendsWorkshopFolder_WhenDayZFolderSelected()
+    {
+        var dialogs = new FakeDialogs { Folder = @"D:\SteamLibrary\steamapps\common\DayZ" };
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\SteamLibrary\steamapps\common\DayZ", "!Workshop");
+        var vm = new SettingsViewModel(dialogs, fs);
+
+        vm.BrowseWorkshopCommand.Execute(null);
+
+        Assert.Equal(@"D:\SteamLibrary\steamapps\common\DayZ\!Workshop", vm.WorkshopPath);
+    }
+
+    [Fact]
+    public void Load_NormalizesWorkshopPath_AndIsNotDirty()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddDirectory(@"D:\SteamLibrary\steamapps\common\DayZ", "!Workshop");
+        var vm = new SettingsViewModel(new FakeDialogs(), fs);
+
+        vm.Load(new Settings { WorkshopPath = @"D:\SteamLibrary\steamapps\common\DayZ" });
+
+        Assert.Equal(@"D:\SteamLibrary\steamapps\common\DayZ\!Workshop", vm.WorkshopPath);
+        Assert.False(vm.IsDirty);
+    }
+
     private sealed class FakeDialogs : IDialogService
     {
         public string? Folder { get; set; }
 
         public string? File { get; set; }
 
-        public void ShowMessage(string message, string title, bool isError = false) { }
+        public string? LastErrorMessage { get; private set; }
+
+        public void ShowMessage(string message, string title, bool isError = false)
+        {
+            if (isError)
+            {
+                LastErrorMessage = message;
+            }
+        }
 
         public bool Confirm(string message, string title) => true;
 
         public bool ConfirmWithWarning(string message, string title, string warning, string note = "") => true;
 
         public void ShowWarning(string message, string title, string warning, string note = "") { }
+
+        public void ShowAlert(string message, string title, string warning, string note = "") { }
 
         public string? AskText(string title, string prompt, string defaultValue = "") => defaultValue;
 
@@ -345,5 +406,49 @@ public class SettingsViewModelTests
         public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
             string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
             IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null) => null;
+
+        public AddPresetRequest? AskAddPreset(string mapName) => null;
+
+        public DuplicatePresetRequest? AskDuplicatePreset(
+            string sourcePresetName, IReadOnlyList<string> maps, string defaultMap) => null;
+    }
+
+    private sealed class FakeFileSystem : IFileSystem
+    {
+        private readonly HashSet<string> _directories = new(StringComparer.OrdinalIgnoreCase);
+
+        public void AddDirectory(string path, params string[] children)
+        {
+            _directories.Add(path);
+            foreach (string child in children)
+            {
+                _directories.Add(Path.Combine(path, child));
+            }
+        }
+
+        public bool DirectoryExists(string path) => _directories.Contains(path);
+
+        public bool FileExists(string path) => false;
+
+        public IReadOnlyList<string> GetDirectories(string path) => Array.Empty<string>();
+
+        public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive) => Array.Empty<string>();
+
+        public void CopyFile(string sourcePath, string destinationPath) { }
+
+        public void DeleteFile(string path) { }
+
+        public string ReadAllText(string path) => string.Empty;
+
+        public void WriteAllText(string path, string contents) { }
+
+        public void CreateDirectory(string path) => _directories.Add(path);
+
+        public void CopyDirectory(string sourcePath, string destinationPath) { }
+
+        public void DeleteDirectory(string path, bool recursive) => _directories.Remove(path);
+
+        public void MoveDirectory(string sourcePath, string destinationPath) { }
     }
 }
+

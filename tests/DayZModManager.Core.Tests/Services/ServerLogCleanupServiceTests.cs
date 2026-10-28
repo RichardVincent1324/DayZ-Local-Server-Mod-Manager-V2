@@ -5,7 +5,7 @@ namespace DayZModManager.Core.Tests.Services;
 
 public class ServerLogCleanupServiceTests
 {
-    private const string Folder = @"D:\server\map_profiles\dayzOffline.chernarusplus";
+    private const string Folder = @"D:\app\data\Presets\dayzOffline.chernarusplus\__default_preset__\profiles";
 
     [Fact]
     public void Cleanup_DoesNothing_WhenAtThreshold()

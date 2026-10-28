@@ -27,6 +27,10 @@ public static class ListBoxDragDropReorder
 {
     private static readonly ConditionalWeakTable<ListBox, DragState> States = new();
 
+    // Kept in a field so EndDrag can remove the exact same delegate instance.
+    private static readonly RequestBringIntoViewEventHandler SuppressBringIntoViewHandler =
+        OnRequestBringIntoView;
+
     public static readonly DependencyProperty ReorderCommandProperty =
         DependencyProperty.RegisterAttached(
             "ReorderCommand",
@@ -146,6 +150,16 @@ public static class ListBoxDragDropReorder
             EndDrag(listBox, state);
             throw;
         }
+        finally
+        {
+            // While a drag is in progress, block the bubbling MouseMove event.
+            // This prevents the ListBox's internal edge auto-scroll logic from 
+            // triggering when the mouse is dragged beyond the top/bottom edges.
+            if (state.IsDragging)
+            {
+                e.Handled = true;
+            }
+        }
     }
 
     private static void OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -165,7 +179,7 @@ public static class ListBoxDragDropReorder
             }
 
             Point position = e.GetPosition(listBox);
-            int insertIndex = ComputeInsertIndex(listBox, position);
+            int insertIndex = ComputeInsertIndex(listBox, position, GetRealizedBounds(listBox));
 
             // Capture before EndDrag clears the drag state.
             List<ModItemViewModel>? dragStartSelection = state.DragStartSelection;
@@ -281,6 +295,27 @@ public static class ListBoxDragDropReorder
 
         listBox.SetValue(IsDragActiveProperty, true);
 
+        // Suppress WPF's focus transfer. Without this, ListBoxItems will try to
+        // grab focus as the cursor moves, firing RequestBringIntoView and causing
+        // the gray focus visual to jump around or auto-scroll.
+        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
+        listBox.PreviewGotKeyboardFocus += OnPreviewGotKeyboardFocus;
+        
+        // Steal focus away from the clicked item to stop it from requesting visibility.
+        listBox.Focus();
+
+        // Block the ScrollViewer's auto-scroll (BringIntoView) for the duration of
+        // the drag; see OnRequestBringIntoView. The handler must sit on the
+        // ItemsPresenter because it is below the ScrollViewer on the bubbling
+        // route, so it can mark the request handled before the ScrollViewer sees it.
+        if (FindDescendant<ItemsPresenter>(listBox) is { } itemsPresenter)
+        {
+            itemsPresenter.AddHandler(
+                FrameworkElement.RequestBringIntoViewEvent,
+                SuppressBringIntoViewHandler,
+                handledEventsToo: true);
+        }
+
         // Pin the drag-start selection (corrects any cursor-follow churn that
         // happened in the brief pre-drag window).
         RestoreSelection(listBox, state.DragStartSelection);
@@ -328,6 +363,9 @@ public static class ListBoxDragDropReorder
         state.Ghost?.Position(ScreenPoint(listBox));
         ReassertDragSelection(listBox, state);
         UpdateInsertionIndicator(listBox, state);
+        
+        // Handle hover detection for controlled edge scrolling.
+        UpdateEdgeScroll(listBox, state);
     }
 
     private static void ReassertDragSelection(ListBox listBox, DragState state)
@@ -347,22 +385,30 @@ public static class ListBoxDragDropReorder
     }
 
     /// <summary>
-    /// Clears the current selection and selects exactly <paramref name="selection"/>
-    /// by item reference. Realized containers get IsSelected set directly (which
-    /// keeps the Selector's bookkeeping in sync); virtualized items fall back to
-    /// SelectedItems.Add and get highlighted when their container is realized.
+    /// Makes the current selection match <paramref name="selection"/> by item
+    /// reference using only the deltas: items no longer selected are removed and
+    /// missing ones are added. Clearing and re-adding the whole selection flips
+    /// every realized container's <c>IsSelected</c> and transiently mis-paints
+    /// recycled containers (the grey highlight jump). The Selector's
+    /// <c>SelectedItems</c> API is used directly so no container has to be
+    /// generated.
     /// </summary>
     private static void RestoreSelection(ListBox listBox, IReadOnlyList<ModItemViewModel> selection)
     {
-        listBox.SelectedItems.Clear();
+        var target = new HashSet<ModItemViewModel>(selection);
 
+        for (int i = listBox.SelectedItems.Count - 1; i >= 0; i--)
+        {
+            if (listBox.SelectedItems[i] is ModItemViewModel vm && !target.Contains(vm))
+            {
+                listBox.SelectedItems.RemoveAt(i);
+            }
+        }
+
+        var selected = new HashSet<ModItemViewModel>(listBox.SelectedItems.OfType<ModItemViewModel>());
         foreach (ModItemViewModel vm in selection)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromItem(vm) is ListBoxItem container)
-            {
-                container.IsSelected = true;
-            }
-            else
+            if (selected.Add(vm))
             {
                 listBox.SelectedItems.Add(vm);
             }
@@ -371,6 +417,9 @@ public static class ListBoxDragDropReorder
 
     private static void EndDrag(ListBox listBox, DragState state)
     {
+        // Stop any active edge auto-scroll countdowns or timers immediately.
+        StopEdgeScroll(state);
+
         state.Ghost?.Close();
 
         if (state.IndicatorLayer is { } layer && state.Indicator is { } indicator)
@@ -378,10 +427,150 @@ public static class ListBoxDragDropReorder
             layer.Remove(indicator);
         }
 
+        // Re-enable the ScrollViewer's auto-scroll (BringIntoView) that was
+        // suppressed in BeginDrag.
+        if (FindDescendant<ItemsPresenter>(listBox) is { } itemsPresenter)
+        {
+            itemsPresenter.RemoveHandler(
+                FrameworkElement.RequestBringIntoViewEvent,
+                SuppressBringIntoViewHandler);
+        }
+
+        // Restore normal focus management.
+        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
+
         listBox.SetValue(IsDragActiveProperty, false);
 
         state.Reset();
         ReleaseCapture(listBox);
+    }
+
+    /// <summary>
+    /// While a drag is in progress nothing may be brought into view: moving the
+    /// cursor to the top or bottom edge would otherwise make the ScrollViewer
+    /// auto-scroll to follow the item, recycle containers and make the selection
+    /// highlight jump. The handler is attached to the ItemsPresenter, which sits
+    /// below the ScrollViewer on the bubbling route, so it can stop the request
+    /// before the ScrollViewer handles it. Wheel scrolling is unaffected because
+    /// it drives the ScrollViewer directly from OnPreviewMouseWheel.
+    /// </summary>
+    private static void OnRequestBringIntoView(object sender, RequestBringIntoViewEventArgs e)
+    {
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Blocks keyboard focus from transferring to ListBoxItems during a drag,
+    /// which prevents the native gray focus visual from jumping to other rows.
+    /// </summary>
+    private static void OnPreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ListBox listBox && GetState(listBox).IsDragging)
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Monitors mouse position to trigger edge auto-scrolling.
+    /// Only triggers when the cursor is INSIDE the ListBox bounds (preventing 
+    /// uncontrolled scrolling when dragging outside), and requires a short 
+    /// hover delay to avoid accidental triggers.
+    /// </summary>
+    private static void UpdateEdgeScroll(ListBox listBox, DragState state)
+    {
+        if (FindDescendant<ScrollViewer>(listBox) is not { } scrollViewer) return;
+
+        // Skip if the list has already reached its scroll limits.
+        bool canScrollUp = scrollViewer.VerticalOffset > 0;
+        bool canScrollDown = scrollViewer.VerticalOffset < scrollViewer.ScrollableHeight;
+
+        // Absolute pixel threshold (30px) from the top/bottom edges.
+        const double edgeThreshold = 30.0; 
+        Point position = Mouse.GetPosition(listBox);
+
+        int newDirection = 0;
+        
+        // Top edge: must be strictly inside the control (Y >= 0) and within threshold.
+        if (canScrollUp && position.Y >= 0 && position.Y < edgeThreshold)
+        {
+            newDirection = -1;
+        }
+        // Bottom edge: must be strictly inside the control (Y <= ActualHeight) and within threshold.
+        else if (canScrollDown && position.Y <= listBox.ActualHeight && position.Y > listBox.ActualHeight - edgeThreshold)
+        {
+            newDirection = 1;
+        }
+
+        // If the direction changes (entered edge, left edge, or jumped from top to bottom)
+        if (newDirection != state.EdgeDirection)
+        {
+            StopEdgeScroll(state);
+            state.EdgeDirection = newDirection;
+
+            if (newDirection != 0)
+            {
+                // 0.5 seconds hover delay before initiating scroll.
+                state.HoverTimer = new DispatcherTimer(DispatcherPriority.Input)
+                {
+                    Interval = TimeSpan.FromSeconds(0.5) 
+                };
+                state.HoverTimer.Tick += (s, e) =>
+                {
+                    state.HoverTimer?.Stop();
+                    state.HoverTimer = null;
+                    StartScrollTimer(listBox, state, newDirection);
+                };
+                state.HoverTimer.Start();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Starts the actual scrolling logic. Uses LineDown/LineUp to ensure the list 
+    /// scrolls exactly one logical item at a time, avoiding pixel-based visual glitches.
+    /// </summary>
+    private static void StartScrollTimer(ListBox listBox, DragState state, int direction)
+    {
+        if (state.ScrollTimer != null) return;
+
+        // Scroll one row every 150ms (approx. 6-7 rows per second), providing 
+        // a smooth "stepped" scrolling experience.
+        state.ScrollTimer = new DispatcherTimer(DispatcherPriority.Input)
+        {
+            Interval = TimeSpan.FromMilliseconds(150)
+        };
+        state.ScrollTimer.Tick += (s, e) =>
+        {
+            if (FindDescendant<ScrollViewer>(listBox) is { } scrollViewer)
+            {
+                if (direction > 0)
+                {
+                    scrollViewer.LineDown();
+                }
+                else
+                {
+                    scrollViewer.LineUp();
+                }
+
+                // Critical: Manually refresh the insertion indicator. Since the 
+                // mouse isn't moving while scrolling, OnPreviewMouseMove won't fire,
+                // which would otherwise leave the blue line stuck at its old position.
+                UpdateInsertionIndicator(listBox, state);
+            }
+        };
+        state.ScrollTimer.Start();
+    }
+
+    /// <summary>
+    /// Stops and cleans up both the hover delay timer and the scroll timer.
+    /// </summary>
+    private static void StopEdgeScroll(DragState state)
+    {
+        state.HoverTimer?.Stop();
+        state.HoverTimer = null;
+        state.ScrollTimer?.Stop();
+        state.ScrollTimer = null;
     }
 
     private static void UpdateInsertionIndicator(ListBox listBox, DragState state)
@@ -391,64 +580,142 @@ public static class ListBoxDragDropReorder
             return;
         }
 
-        int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox));
-        double y = -1;
+        List<RealizedContainer> realized = GetRealizedBounds(listBox);
+        int index = ComputeInsertIndex(listBox, Mouse.GetPosition(listBox), realized);
+        indicator.InsertPositionKind = InsertKind.None;
 
-        if (index >= 0)
+        if (index < 0)
         {
-            y = index < listBox.Items.Count
-                ? GetContainerTopY(listBox, index)
-                : GetListBottomY(listBox);
-
-            if (y < 0) y = 0;
-            if (y > listBox.ActualHeight) y = listBox.ActualHeight;
+            indicator.Y = -1;
+            indicator.InvalidateVisual();
+            return;
         }
+
+        double y = GetInsertionY(listBox, index, realized);
+
+        // When no position can be computed, hide the indicator instead of falling
+        // back to 0.
+        if (y < 0)
+        {
+            indicator.Y = -1;
+            indicator.InvalidateVisual();
+            return;
+        }
+
+        // Clamp the bottom indicator inside the viewport so the AdornerLayer does
+        // not clip it.
+        if (y > listBox.ActualHeight)
+        {
+            y = listBox.ActualHeight;
+        }
+
+        indicator.InsertPositionKind = index == 0
+            ? InsertKind.TopOfList
+            : index == listBox.Items.Count
+                ? InsertKind.BottomOfList
+                : InsertKind.BetweenItems;
 
         indicator.Y = y;
         indicator.InvalidateVisual();
     }
 
-    private static double GetContainerTopY(ListBox listBox, int index)
+    /// <summary>
+    /// The Y at which the insertion line for <paramref name="index"/> is drawn: the
+    /// top of that realized row, the bottom of the last row when appending, or the
+    /// nearest realized boundary when the exact row is virtualized.
+    /// </summary>
+    private static double GetInsertionY(ListBox listBox, int index, IReadOnlyList<RealizedContainer> realized)
     {
-        if (listBox.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement container)
+        if (realized.Count == 0)
         {
-            return container.TranslatePoint(new Point(0, 0), listBox).Y;
+            return -1;
         }
 
-        // The target container may be virtualized; fall back to a realized neighbor.
-        for (int i = index + 1; i < listBox.Items.Count; i++)
+        foreach (RealizedContainer container in realized)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement next)
+            if (container.Index == index)
             {
-                return next.TranslatePoint(new Point(0, 0), listBox).Y;
+                return container.Top;
             }
         }
 
-        for (int i = index - 1; i >= 0; i--)
+        if (index >= listBox.Items.Count)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement prev)
+            return realized[^1].Bottom;
+        }
+
+        foreach (RealizedContainer container in realized)
+        {
+            if (container.Index > index)
             {
-                return prev.TranslatePoint(new Point(0, 0), listBox).Y + prev.ActualHeight;
+                return container.Top;
             }
         }
 
-        return 0;
+        return realized[^1].Bottom;
     }
 
-    private static double GetListBottomY(ListBox listBox)
+    /// <summary>
+    /// The realized rows in item order, read straight from the ItemsPanel's
+    /// children. This avoids calling ItemContainerGenerator per index on every drag
+    /// move (which can force realization and recycle other containers) and gives
+    /// the insert calculation a single consistent snapshot.
+    /// </summary>
+    private static List<RealizedContainer> GetRealizedBounds(ListBox listBox)
     {
-        for (int i = listBox.Items.Count - 1; i >= 0; i--)
+        var bounds = new List<RealizedContainer>();
+        if (GetItemsHostPanel(listBox) is not { } panel || listBox.ItemContainerGenerator is not { } generator)
         {
-            if (listBox.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement last)
+            return bounds;
+        }
+
+        foreach (UIElement child in panel.Children)
+        {
+            if (child is not FrameworkElement element || !element.IsVisible)
             {
-                return last.TranslatePoint(new Point(0, 0), listBox).Y + last.ActualHeight;
+                continue;
+            }
+
+            int index = generator.IndexFromContainer(element);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            double top = element.TranslatePoint(new Point(0, 0), listBox).Y;
+            bounds.Add(new RealizedContainer(index, top, top + element.ActualHeight));
+        }
+
+        bounds.Sort(static (a, b) => a.Index.CompareTo(b.Index));
+        return bounds;
+    }
+
+    /// <summary>
+    /// The panel that hosts the ListBox's item containers (the ItemsPresenter's
+    /// child). Read without going through the (protected) ItemsPanelRoot.
+    /// </summary>
+    private static Panel? GetItemsHostPanel(ListBox listBox)
+    {
+        if (FindDescendant<ItemsPresenter>(listBox) is not { } presenter)
+        {
+            return null;
+        }
+
+        int count = VisualTreeHelper.GetChildrenCount(presenter);
+        for (int i = 0; i < count; i++)
+        {
+            if (VisualTreeHelper.GetChild(presenter, i) is Panel panel)
+            {
+                return panel;
             }
         }
 
-        return listBox.ActualHeight;
+        return null;
     }
 
-    private static int ComputeInsertIndex(ListBox listBox, Point position)
+    private readonly record struct RealizedContainer(int Index, double Top, double Bottom);
+
+    private static int ComputeInsertIndex(ListBox listBox, Point position, IReadOnlyList<RealizedContainer> realized)
     {
         if (IsOverScrollBar(listBox, position))
         {
@@ -470,7 +737,37 @@ public static class ListBoxDragDropReorder
             return -1;
         }
 
-        return position.Y < listBox.ActualHeight / 2.0 ? 0 : listBox.Items.Count;
+        // The cursor is not over a row. Anchor the decision to the realized content
+        // bounds rather than the control's midpoint: with only a few items the
+        // content ends well above ActualHeight / 2, so a position just below the
+        // last item would otherwise fall in the "upper half" and wrongly report 0.
+        if (realized.Count == 0)
+        {
+            return listBox.Items.Count;
+        }
+
+        if (position.Y <= realized[0].Top)
+        {
+            return realized[0].Index;
+        }
+
+        RealizedContainer last = realized[^1];
+        if (position.Y >= last.Bottom)
+        {
+            return last.Index + 1;
+        }
+
+        // A gap between two realized rows: insert at the nearer edge.
+        for (int i = 0; i < realized.Count - 1; i++)
+        {
+            if (position.Y < realized[i + 1].Top)
+            {
+                double middle = (realized[i].Bottom + realized[i + 1].Top) / 2.0;
+                return position.Y < middle ? realized[i].Index + 1 : realized[i + 1].Index;
+            }
+        }
+
+        return listBox.Items.Count;
     }
 
     private static Point ScreenPoint(UIElement element)
@@ -554,6 +851,11 @@ public static class ListBoxDragDropReorder
         public AdornerLayer? IndicatorLayer;
         public InsertionIndicatorAdorner? Indicator;
 
+        // Timers for the controlled edge auto-scrolling.
+        public DispatcherTimer? HoverTimer; 
+        public DispatcherTimer? ScrollTimer;
+        public int EdgeDirection; // -1 = top, 1 = bottom, 0 = none
+
         public void Reset()
         {
             DraggedItem = null;
@@ -563,14 +865,29 @@ public static class ListBoxDragDropReorder
             Ghost = null;
             IndicatorLayer = null;
             Indicator = null;
+
+            // Ensure timers are stopped and cleaned up
+            HoverTimer?.Stop();
+            HoverTimer = null;
+            ScrollTimer?.Stop();
+            ScrollTimer = null;
+            EdgeDirection = 0;
         }
+    }
+
+    private enum InsertKind
+    {
+        None,
+        BetweenItems,
+        TopOfList,
+        BottomOfList
     }
 
     private sealed class InsertionIndicatorAdorner : Adorner
     {
         private static readonly Pen LinePen = CreateLinePen();
-
         public double Y = -1;
+        public InsertKind InsertPositionKind { get; set; } = InsertKind.None;
 
         public InsertionIndicatorAdorner(UIElement adornedElement) : base(adornedElement)
         {
@@ -580,19 +897,40 @@ public static class ListBoxDragDropReorder
         private static Pen CreateLinePen()
         {
             var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x2D, 0x9C, 0xD8)), 2.0);
+            pen.StartLineCap = PenLineCap.Round;
+            pen.EndLineCap = PenLineCap.Round;
             pen.Freeze();
             return pen;
         }
 
-        protected override void OnRender(DrawingContext drawingContext)
-        {
-            if (Y < 0)
-            {
-                return;
-            }
-
-            drawingContext.DrawLine(LinePen, new Point(0, Y), new Point(AdornedElement.RenderSize.Width, Y));
-        }
+		protected override void OnRender(DrawingContext drawingContext)
+		{
+			if (Y < 0 || InsertPositionKind == InsertKind.None)
+			{
+				return;
+			}
+		
+			var totalWidth = AdornedElement.RenderSize.Width;
+			double leftPadding = AdornedElement is Control control ? control.Padding.Left : 0;
+			double scrollBarWidth = SystemParameters.VerticalScrollBarWidth;
+			double contentRight = totalWidth - scrollBarWidth;
+		
+			Point p1, p2;
+			if (InsertPositionKind == InsertKind.BetweenItems)
+			{
+				const double rightGap = 20;
+				p1 = new Point(leftPadding, Y);
+				p2 = new Point(contentRight - rightGap, Y);
+			}
+			else
+			{
+				double sideMargin = 80;
+				p1 = new Point(leftPadding + sideMargin, Y);
+				p2 = new Point(contentRight - sideMargin, Y);
+			}
+		
+			drawingContext.DrawLine(LinePen, p1, p2);
+		}
     }
 
     private sealed class DragGhost : Window
@@ -607,7 +945,6 @@ public static class ListBoxDragDropReorder
             Topmost = true;
             ShowActivated = false;
             SizeToContent = SizeToContent.WidthAndHeight;
-
             Content = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x2D, 0x4A, 0x6B)),
@@ -623,7 +960,6 @@ public static class ListBoxDragDropReorder
                 },
             };
         }
-
         public void Position(Point screen)
         {
             Left = screen.X + 4;

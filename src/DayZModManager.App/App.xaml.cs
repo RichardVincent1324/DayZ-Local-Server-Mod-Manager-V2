@@ -61,9 +61,12 @@ public partial class App : Application
         services.AddSingleton<IModOrderStore, ModOrderStore>();
         services.AddSingleton<ITypesConfigStore, TypesConfigStore>();
         services.AddSingleton<IBatchFileService, BatchFileService>();
+        services.AddSingleton<ILaunchEnvironmentService, LaunchEnvironmentService>();
         services.AddSingleton<IModDiscoveryService, ModDiscoveryService>();
         services.AddSingleton<IJunctionService, JunctionService>();
+        services.AddSingleton<ITypeFileJunctionService, TypeFileJunctionService>();
         services.AddSingleton<IServerConfigService, ServerConfigService>();
+        services.AddSingleton<IPresetService, PresetService>();
         services.AddSingleton<IEconomyCoreService, EconomyCoreService>();
         services.AddSingleton<ITypesService, TypesService>();
         services.AddSingleton<ISaveGameService, SaveGameService>();
@@ -85,13 +88,17 @@ public partial class App : Application
             sp.GetRequiredService<ITypesService>(),
             sp.GetRequiredService<ISaveGameService>(),
             sp.GetRequiredService<IServerConfigService>(),
-            sp.GetRequiredService<IBatchFileService>(),
+            sp.GetRequiredService<ILaunchEnvironmentService>(),
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<IProcessLauncher>(),
             sp.GetRequiredService<IServerLogCleanupService>(),
             sp.GetRequiredService<IDayZServerProcessState>(),
-            dataDirectoryProvider));
+            dataDirectoryProvider,
+            sp.GetRequiredService<IPresetService>(),
+            sp.GetRequiredService<IJunctionService>(),
+            sp.GetRequiredService<ITypeFileJunctionService>(),
+            sp.GetRequiredService<IValidationService>()));
 
         return services.BuildServiceProvider();
     }

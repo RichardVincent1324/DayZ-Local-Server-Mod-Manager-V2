@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DayZModManager.Core.Models;
 
 /// <summary>
@@ -18,16 +20,38 @@ public sealed record Settings
 
     /// <summary>
     /// When enabled, DayZ server log files (<c>.rpt</c> and <c>.log</c>) in the
-    /// active map's profile folder are all cleared on app startup once more than
-    /// 20 of them have accumulated.
+    /// active preset's profiles folder are all cleared on app startup once more
+    /// than 20 of them have accumulated.
     /// </summary>
     public bool AutoCleanServerLogs { get; init; }
 
     /// <summary>
-    /// Full path to the launch batch file. Empty while no batch file is selected;
-    /// a rooted <see cref="BatFileName"/> is used directly, otherwise it is
-    /// combined with <see cref="ServerPath"/>.
+    /// The map whose preset is currently active. Empty until a map is applied.
+    /// Preset-level configuration always comes from the active preset of this map.
     /// </summary>
+    public string ActiveMap { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The preset active for each map, keyed by map (mission folder) name. The
+    /// active save's world state comes from the selected save of the active preset.
+    /// </summary>
+    public Dictionary<string, string> ActivePresets
+    {
+        get => _activePresets;
+        init => _activePresets = value is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private Dictionary<string, string> _activePresets = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Full path to the launch batch file. Derived from <see cref="BatFileName"/>
+    /// and <see cref="ServerPath"/>; never persisted, so it cannot go stale.
+    /// Empty while no batch file is selected; a rooted <see cref="BatFileName"/> is
+    /// used directly, otherwise it is combined with <see cref="ServerPath"/>.
+    /// </summary>
+    [JsonIgnore]
     public string BatFilePath =>
         string.IsNullOrWhiteSpace(BatFileName)
             ? string.Empty

@@ -12,8 +12,10 @@ public class DataDirectoryProviderTests
 
     private static string SettingsPath() => Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.Settings);
 
+    private static string PresetsPath(string root) => Path.Combine(root, PresetPaths.PresetsDirectoryName);
+
     [Fact]
-    public void Initialize_FreshInstall_ReturnsLegacyAndWritesNoPointer()
+    public void Initialize_FreshInstall_ReturnsBootstrapAndWritesNoPointer()
     {
         var fs = new FakeFileSystem();
         var provider = new DataDirectoryProvider(fs);
@@ -25,7 +27,7 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Initialize_ExistingInstall_UsesLegacy_WithoutPointer()
+    public void Initialize_ExistingInstall_UsesBootstrap_WithoutPointer()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
@@ -51,7 +53,7 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Initialize_StalePointerToMissingDirectory_FallsBackToLegacy()
+    public void Initialize_StalePointerToMissingDirectory_FallsBackToBootstrap()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(PointerPath(), @"D:\deleted");
@@ -63,7 +65,7 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void Initialize_EmptyPointer_FallsBackToLegacy()
+    public void Initialize_EmptyPointer_FallsBackToBootstrap()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(PointerPath(), "   ");
@@ -99,11 +101,14 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void MoveTo_MigratesTypesConfig_UpdatesPointerAndCurrent()
+    public void MoveTo_MigratesPresets_UpdatesPointerAndCurrent()
     {
         var fs = new FakeFileSystem();
         fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.TypesConfig), "{}");
+        string sourcePresetDir =
+            Path.Combine(PresetsPath(AppPaths.BootstrapDirectory()), "map", "__default_preset__");
+        fs.AddDirectory(sourcePresetDir);
+        fs.AddFile(Path.Combine(sourcePresetDir, "mod_order.json"), "[\"@mod\"]");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
@@ -112,8 +117,9 @@ public class DataDirectoryProviderTests
 
         Assert.Equal(target, provider.Current);
         Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.Settings)));
-        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.TypesConfig)));
-        Assert.False(fs.FileExists(Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.TypesConfig)));
+        Assert.True(fs.FileExists(
+            Path.Combine(PresetsPath(target), "map", "__default_preset__", "mod_order.json")));
+        Assert.False(fs.DirectoryExists(PresetsPath(AppPaths.BootstrapDirectory())));
         Assert.Equal(target, fs.TryGetFileContents(PointerPath()));
     }
 
@@ -128,49 +134,6 @@ public class DataDirectoryProviderTests
         provider.MoveTo(AppPaths.BootstrapDirectory(), new Settings());
 
         Assert.True(fs.FileExists(SettingsPath()));
-    }
-
-    [Fact]
-    public void MoveTo_DoesNotOverwriteTargetModOrder()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile(SettingsPath(), "{}");
-        fs.AddFile(Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.TypesConfig), "{}");
-        fs.AddFile(Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.ModOrder), "[\"@mod\"]");
-
-        // The ApplyService has already written the authoritative mod order into
-        // the target before relocation runs.
-        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
-        fs.AddFile(Path.Combine(target, ConfigFileNames.ModOrder), "[\"@applied\"]");
-        var provider = new DataDirectoryProvider(fs);
-        provider.Initialize();
-
-        provider.MoveTo(target, new Settings());
-
-        Assert.Equal(target, provider.Current);
-        Assert.Equal("[\"@applied\"]", fs.TryGetFileContents(Path.Combine(target, ConfigFileNames.ModOrder)));
-        Assert.True(fs.FileExists(Path.Combine(target, ConfigFileNames.TypesConfig)));
-    }
-
-    [Fact]
-    public void MoveTo_MigratesSavesLibrary()
-    {
-        var fs = new FakeFileSystem();
-        fs.AddFile(SettingsPath(), "{}");
-        string sourceSaves = Path.Combine(AppPaths.BootstrapDirectory(), SaveGameService.SavesRootName);
-        string map = "dayzOffline.chernarusplus";
-        fs.AddDirectory(sourceSaves, map);
-        fs.AddDirectory(Path.Combine(sourceSaves, map), "Alpha");
-        fs.AddFile(Path.Combine(sourceSaves, map, "Alpha", "players.db"), "data");
-        var provider = new DataDirectoryProvider(fs);
-        provider.Initialize();
-
-        string target = Path.Combine(@"D:\server", AppPaths.DataDirectoryName);
-        provider.MoveTo(target, new Settings());
-
-        string targetSave = Path.Combine(target, SaveGameService.SavesRootName, map, "Alpha", "players.db");
-        Assert.True(fs.FileExists(targetSave));
-        Assert.False(fs.DirectoryExists(sourceSaves));
     }
 
     [Fact]
@@ -202,39 +165,24 @@ public class DataDirectoryProviderTests
     }
 
     [Fact]
-    public void MoveTo_Throws_WhenTypesConfigMigrationFails_AndKeepsSource()
-    {
-        var fs = new FailingFileSystem { ThrowOnCopyFile = true };
-        fs.AddFile(SettingsPath(), "{}");
-        string sourceTypes = Path.Combine(AppPaths.BootstrapDirectory(), ConfigFileNames.TypesConfig);
-        fs.AddFile(sourceTypes, "{}");
-        var provider = new DataDirectoryProvider(fs);
-        provider.Initialize();
-
-        Assert.Throws<IOException>(() => provider.MoveTo(@"D:\new", new Settings()));
-
-        // The pointer and current directory stay on the source so the types
-        // configuration is not orphaned.
-        Assert.Equal(AppPaths.BootstrapDirectory(), provider.Current);
-        Assert.True(fs.FileExists(sourceTypes));
-        Assert.False(fs.FileExists(PointerPath()));
-    }
-
-    [Fact]
-    public void MoveTo_Throws_WhenSavesMigrationFails_AndKeepsSource()
+    public void MoveTo_Throws_WhenPresetsMigrationFails_AndKeepsSource()
     {
         var fs = new FailingFileSystem { ThrowOnCopyDirectory = true };
         fs.AddFile(SettingsPath(), "{}");
-        string sourceSaves = Path.Combine(AppPaths.BootstrapDirectory(), SaveGameService.SavesRootName);
-        fs.AddDirectory(sourceSaves);
-        fs.AddFile(Path.Combine(sourceSaves, "players.db"), "data");
+        string sourcePresetDir =
+            Path.Combine(PresetsPath(AppPaths.BootstrapDirectory()), "map", "__default_preset__");
+        fs.AddDirectory(sourcePresetDir);
+        string sourcePresetFile = Path.Combine(sourcePresetDir, "settings.json");
+        fs.AddFile(sourcePresetFile, "{}");
         var provider = new DataDirectoryProvider(fs);
         provider.Initialize();
 
         Assert.Throws<IOException>(() => provider.MoveTo(@"D:\new", new Settings()));
 
+        // The pointer and current directory stay on the source so the presets are
+        // not orphaned.
         Assert.Equal(AppPaths.BootstrapDirectory(), provider.Current);
-        Assert.True(fs.FileExists(Path.Combine(sourceSaves, "players.db")));
+        Assert.True(fs.FileExists(sourcePresetFile));
         Assert.False(fs.FileExists(PointerPath()));
     }
 

@@ -21,6 +21,12 @@ public interface IBatchFileService
     /// <summary>Returns true if the file contains a <c>modList</c> line.</summary>
     bool HasModListLine(string batFilePath);
 
+    /// <summary>Returns true if the file contains a <c>serverProfile</c> line.</summary>
+    bool HasServerProfileLine(string batFilePath);
+
+    /// <summary>Returns true if the file contains a <c>serverConfig</c> line.</summary>
+    bool HasServerConfigLine(string batFilePath);
+
     /// <summary>
     /// Rewrites the <c>modList</c> block with the given ordered mod paths,
     /// ten per physical line. Returns false if the file or the line is missing.
@@ -32,6 +38,13 @@ public interface IBatchFileService
     /// Returns false if the file or the line is missing.
     /// </summary>
     bool WriteServerProfile(string batFilePath, string relativeProfile);
+
+    /// <summary>
+    /// Rewrites the <c>serverConfig</c> line with the given server configuration
+    /// path (typically the active preset's <c>serverDZ.cfg</c>). Returns false if
+    /// the file or the line is missing.
+    /// </summary>
+    bool WriteServerConfig(string batFilePath, string serverConfigPath);
 }
 
 public sealed partial class BatchFileService : IBatchFileService
@@ -46,14 +59,20 @@ public sealed partial class BatchFileService : IBatchFileService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public bool HasModListLine(string batFilePath)
+    public bool HasModListLine(string batFilePath) => MatchesLine(batFilePath, StartLineRegex());
+
+    public bool HasServerProfileLine(string batFilePath) => MatchesLine(batFilePath, ServerProfileLineRegex());
+
+    public bool HasServerConfigLine(string batFilePath) => MatchesLine(batFilePath, ServerConfigLineRegex());
+
+    private bool MatchesLine(string batFilePath, Regex pattern)
     {
         if (string.IsNullOrWhiteSpace(batFilePath) || !_fileSystem.FileExists(batFilePath))
         {
             return false;
         }
 
-        return StartLineRegex().IsMatch(_fileSystem.ReadAllText(batFilePath));
+        return pattern.IsMatch(_fileSystem.ReadAllText(batFilePath));
     }
 
     public bool WriteModList(string batFilePath, IReadOnlyList<string> modPaths)
@@ -64,6 +83,11 @@ public sealed partial class BatchFileService : IBatchFileService
     public bool WriteServerProfile(string batFilePath, string relativeProfile)
     {
         return ReplaceSingleLine(batFilePath, ServerProfileLineRegex(), $"set \"serverProfile={relativeProfile}\"");
+    }
+
+    public bool WriteServerConfig(string batFilePath, string serverConfigPath)
+    {
+        return ReplaceSingleLine(batFilePath, ServerConfigLineRegex(), $"set \"serverConfig={serverConfigPath}\"");
     }
 
     /// <summary>
@@ -204,4 +228,7 @@ public sealed partial class BatchFileService : IBatchFileService
 
     [GeneratedRegex(@"^\s*set\s+""serverProfile=.*""\s*$", RegexOptions.Multiline)]
     private static partial Regex ServerProfileLineRegex();
+
+    [GeneratedRegex(@"^\s*set\s+""serverConfig=.*""\s*$", RegexOptions.Multiline)]
+    private static partial Regex ServerConfigLineRegex();
 }

@@ -44,7 +44,7 @@ public sealed class TypesRowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// True when the file physically exists in db/ModTypes but is not tracked by
+    /// True when the file physically exists in type_files but is not tracked by
     /// this manager's types configuration.
     /// </summary>
     public bool IsUntracked

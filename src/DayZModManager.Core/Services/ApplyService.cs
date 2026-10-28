@@ -10,8 +10,15 @@ public sealed record ApplyContext
 
     public required IReadOnlyList<string> LoadedMods { get; init; }
 
-    /// <summary>Directory where configuration files are persisted.</summary>
+    /// <summary>Directory where global configuration (settings.json) is persisted.</summary>
     public required string DataDirectory { get; init; }
+
+    /// <summary>
+    /// The active map/preset's launch environment, or null when no map is applied.
+    /// When set, the preset folder, profile, config and junction key all come from
+    /// it, so Apply and map switching use the same resolved paths.
+    /// </summary>
+    public ServerEnvironment? Environment { get; init; }
 }
 
 /// <summary>Outcome of an Apply operation, including ordered human-readable logs.</summary>
@@ -22,17 +29,18 @@ public sealed record ApplyResult
     public IReadOnlyList<string> Logs { get; init; } = Array.Empty<string>();
 }
 
-    /// <summary>
-    /// Synchronizes the desired configuration with the actual server. Sequence:
-    /// validate, prepare junctions (non-destructive), update batch file, save
-    /// config, finalize junctions (destructive), verify. A preparation failure
-    /// aborts before the batch file or any configuration is touched; a batch-file
-    /// failure aborts before configuration is persisted and before any junction is
-    /// deleted or re-pointed, so a failed Apply never tears down the links the
-    /// unchanged launch batch file still depends on. Destructive junction cleanup
-    /// only runs after the configuration is committed and degrades to a warning
-    /// when a link cannot be removed.
-    /// </summary>
+/// <summary>
+/// Synchronizes the desired configuration with the actual server. Sequence:
+/// validate, prepare mod and mission type-file junctions (non-destructive),
+/// update the launch batch, save configuration, finalize junctions
+/// (destructive), verify. A preparation failure
+/// aborts before the batch file or any configuration is touched; a batch-file
+/// failure aborts before configuration is persisted and before any junction is
+/// deleted or re-pointed, so a failed Apply never tears down the links the
+/// unchanged launch batch file still depends on. Destructive junction cleanup
+/// only runs after the configuration is committed and degrades to a warning
+/// when a link cannot be removed.
+/// </summary>
 public interface IApplyService
 {
     ApplyResult Apply(ApplyContext context);
@@ -42,23 +50,26 @@ public sealed class ApplyService : IApplyService
 {
     private readonly ISettingsService _settings;
     private readonly IModOrderStore _modOrder;
-    private readonly IBatchFileService _batchFile;
+    private readonly ILaunchEnvironmentService _launch;
     private readonly IJunctionService _junctions;
+    private readonly ITypeFileJunctionService _typeFileJunctions;
     private readonly IValidationService _validation;
     private readonly IFileSystem _fileSystem;
 
     public ApplyService(
         ISettingsService settings,
         IModOrderStore modOrder,
-        IBatchFileService batchFile,
+        ILaunchEnvironmentService launch,
         IJunctionService junctions,
+        ITypeFileJunctionService typeFileJunctions,
         IValidationService validation,
         IFileSystem fileSystem)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _modOrder = modOrder ?? throw new ArgumentNullException(nameof(modOrder));
-        _batchFile = batchFile ?? throw new ArgumentNullException(nameof(batchFile));
+        _launch = launch ?? throw new ArgumentNullException(nameof(launch));
         _junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
+        _typeFileJunctions = typeFileJunctions ?? throw new ArgumentNullException(nameof(typeFileJunctions));
         _validation = validation ?? throw new ArgumentNullException(nameof(validation));
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
@@ -66,12 +77,14 @@ public sealed class ApplyService : IApplyService
     public ApplyResult Apply(ApplyContext context)
     {
         var logs = new List<string>();
+        ServerEnvironment? environment = context.Environment;
 
         // 1. Validate
         IReadOnlyList<string> errors = _validation.Validate(new ValidationContext
         {
             Settings = context.Settings,
             LoadedMods = context.LoadedMods,
+            ActiveServerConfigPath = ResolveActiveServerConfigPath(context, environment),
         });
 
         if (errors.Count > 0)
@@ -83,16 +96,30 @@ public sealed class ApplyService : IApplyService
 
         logs.Add("Validation passed.");
 
-        // 2. Prepare junctions for the loaded mods. This phase is non-destructive:
-        //    it creates missing junctions and validates that every target can be
-        //    resolved, but it never deletes or re-points existing junctions. A
-        //    failure aborts here so the batch file and configuration are never
-        //    touched while a previously-working junction (or a still-referenced
-        //    mod's link) is left broken.
-        JunctionSyncResult prepared = _junctions.PrepareLoaded(
-            context.Settings.ServerPath,
-            context.Settings.WorkshopPath,
-            context.LoadedMods);
+        // Report missing mods once. They are tolerated: the mod stays in the -mod
+        // line and simply gets no junction. Only a launch is blocked by them, so an
+        // Apply must never fail because of one.
+        IReadOnlyList<string> missing =
+            _validation.FindMissingMods(context.Settings.WorkshopPath, context.LoadedMods);
+        if (missing.Count > 0)
+        {
+            logs.Add($"WARNING: {missing.Count} loaded mod(s) are missing from the workshop: {string.Join(", ", missing)}");
+        }
+
+        // 2. Prepare junctions for the loaded mods under the active preset's own
+        //    DZMMV2_ModList subfolder. This phase is non-destructive: it creates missing
+        //    junctions and validates that every target can be resolved, but it never
+        //    deletes or re-points existing junctions. A failure aborts here so the
+        //    batch file and configuration are never touched while a previously-working
+        //    junction (or a still-referenced mod's link) is left broken.
+        bool junctionsEnabled = !string.IsNullOrWhiteSpace(environment?.JunctionKey);
+        JunctionSyncResult prepared = junctionsEnabled
+            ? _junctions.PrepareLoaded(
+                context.Settings.ServerPath,
+                context.Settings.WorkshopPath,
+                environment!.JunctionKey,
+                context.LoadedMods)
+            : new JunctionSyncResult();
 
         logs.AddRange(prepared.Messages);
 
@@ -102,21 +129,55 @@ public sealed class ApplyService : IApplyService
             return new ApplyResult { Success = false, Logs = logs };
         }
 
-        // 3. Update the batch file. A failure here aborts before any configuration
-        //    is persisted AND before any destructive junction work (re-pointing or
-        //    removing the links of unloaded mods), so the launch batch file and the
-        //    junctions the current mod set depends on stay consistent with each
-        //    other. Junctions created for newly-loaded mods are harmless and are
-        //    reconciled again on the next Apply. The previous contents are kept so
-        //    a later failure can restore the file instead of leaving it diverged.
-        IReadOnlyList<string> modPaths = context.LoadedMods.Select(ModListFolder.Entry).ToList();
+        // 2b. Prepare the single mission-local junction that exposes the active
+        //     preset's type_files inside mpmissions/<map>/db. Like the mod
+        //     junctions this is non-destructive and must succeed before the batch
+        //     file or configuration is touched, so the managed CE block never
+        //     references a link that could not be created.
+        //
+        //     A junction created here is intentionally left in place if a later
+        //     pre-commit step fails, matching the mod-junction behavior. The
+        //     launch preflight verifies it against the active preset, and the
+        //     next Apply repairs any divergence.
+        string? typeMissionPath = null;
+        string? typeFilesFolder = null;
+        bool typeFilesEnabled = environment is not null
+            && !string.IsNullOrWhiteSpace(context.Settings.ServerPath)
+            && !string.IsNullOrWhiteSpace(environment.MapName);
+        if (typeFilesEnabled)
+        {
+            typeMissionPath = MissionTypeFiles.MissionPath(
+                context.Settings.ServerPath, environment!.MapName);
+            typeFilesFolder = PresetPaths.TypeFilesFolder(
+                context.DataDirectory, environment.MapName, environment.PresetName);
+
+            JunctionSyncResult typePrepared = _typeFileJunctions.Prepare(typeMissionPath, typeFilesFolder);
+            logs.AddRange(typePrepared.Messages);
+            if (typePrepared.Failed > 0)
+            {
+                logs.Add("ERROR: Type-file junction preparation failed. No changes were made.");
+                return new ApplyResult { Success = false, Logs = logs };
+            }
+        }
+
+        // 3. Update the launch batch file. A failure here aborts before any
+        //    configuration is persisted AND before any destructive junction work
+        //    (re-pointing or removing the links of unloaded mods), so the launch
+        //    batch file and the junctions the current mod set depends on stay
+        //    consistent with each other. Junctions created for newly-loaded mods are
+        //    harmless and are reconciled again on the next Apply. The previous
+        //    contents are kept so a later failure can restore the file instead of
+        //    leaving it diverged.
         string batchPath = context.Settings.BatFilePath;
         string? batchSnapshot = ReadFileSnapshot(batchPath);
         try
         {
-            if (!_batchFile.WriteModList(batchPath, modPaths))
+            LaunchWriteResult write = _launch.Write(context.Settings, environment, context.LoadedMods);
+            logs.AddRange(write.Messages);
+
+            if (!write.Success)
             {
-                logs.Add("ERROR: Failed to update the batch file. No changes were made.");
+                RestoreFileSnapshot(batchPath, batchSnapshot);
                 return new ApplyResult { Success = false, Logs = logs };
             }
         }
@@ -127,15 +188,16 @@ public sealed class ApplyService : IApplyService
             return new ApplyResult { Success = false, Logs = logs };
         }
 
-        logs.Add("Batch file updated.");
-
         // 4. Save configuration. Persisting can still fail (disk full, permissions,
         //    locked data directory). If it does, restore the batch file so the
         //    launcher does not reference a mod list that was never committed.
         try
         {
             _settings.Save(context.DataDirectory, context.Settings);
-            _modOrder.Save(context.DataDirectory, context.LoadedMods);
+            if (!string.IsNullOrWhiteSpace(environment?.PresetFolder))
+            {
+                _modOrder.Save(environment!.PresetFolder, context.LoadedMods);
+            }
         }
         catch (Exception ex)
         {
@@ -146,14 +208,51 @@ public sealed class ApplyService : IApplyService
 
         logs.Add($"Saved configuration: {context.LoadedMods.Count} mod(s) loaded.");
 
+        // 4b. Re-point the mission-local type-files junction now that the
+        //     configuration is committed. A failure here is not allowed to roll
+        //     back the already-committed Apply: the launch preflight verifies the
+        //     junction and blocks Start Server until a later Apply repairs it.
+        if (typeFilesEnabled)
+        {
+            try
+            {
+                JunctionSyncResult typeFinalized = _typeFileJunctions.Finalize(typeMissionPath!, typeFilesFolder!);
+                logs.AddRange(typeFinalized.Messages);
+                if (typeFinalized.Failed > 0)
+                {
+                    logs.Add(
+                        "WARNING: The type files junction could not be re-targeted. " +
+                        "Launch will be blocked until the configuration is re-applied.");
+                }
+                else if (!_typeFileJunctions.Verify(typeMissionPath!, typeFilesFolder!))
+                {
+                    logs.Add(
+                        "WARNING: The type files junction is not synchronized with the active preset. " +
+                        "Launch will be blocked until the configuration is re-applied.");
+                }
+            }
+            catch (Exception ex)
+            {
+                // The Apply is already committed; an unexpected junction failure
+                // must not flip it to failed or trigger an inconsistent UI rollback.
+                logs.Add(
+                    $"WARNING: Failed to finalize the type files junction: {ex.Message}. " +
+                    "Launch will be blocked until the configuration is re-applied.");
+            }
+        }
+
         // 5. Destructive junction finalization: re-point stale links and remove the
-        //    junctions of mods that are no longer loaded. Runs only after the batch
-        //    file and configuration are committed, so a stuck junction degrades to
-        //    a warning (retried on the next Apply) instead of aborting the Apply.
-        JunctionSyncResult finalized = _junctions.Finalize(
-            context.Settings.ServerPath,
-            context.Settings.WorkshopPath,
-            context.LoadedMods);
+        //    junctions of mods that are no longer loaded, within the active preset's
+        //    own DZMMV2_ModList subfolder. Runs only after the batch file and configuration
+        //    are committed, so a stuck junction degrades to a warning (retried on the
+        //    next Apply) instead of aborting the Apply.
+        JunctionSyncResult finalized = junctionsEnabled
+            ? _junctions.Finalize(
+                context.Settings.ServerPath,
+                context.Settings.WorkshopPath,
+                environment!.JunctionKey,
+                context.LoadedMods)
+            : new JunctionSyncResult();
 
         logs.AddRange(finalized.Messages);
         if (finalized.Failed > 0)
@@ -162,10 +261,12 @@ public sealed class ApplyService : IApplyService
         }
 
         // 6. Verify
-        IReadOnlyList<string> missing = _junctions.Verify(context.Settings.ServerPath, context.LoadedMods);
-        if (missing.Count > 0)
+        IReadOnlyList<string> unlinked = junctionsEnabled
+            ? _junctions.Verify(context.Settings.ServerPath, environment!.JunctionKey, context.LoadedMods)
+            : Array.Empty<string>();
+        if (unlinked.Count > 0)
         {
-            logs.Add($"WARNING: {missing.Count} loaded mod(s) have no junction: {string.Join(", ", missing)}");
+            logs.Add($"WARNING: {unlinked.Count} loaded mod(s) have no junction: {string.Join(", ", unlinked)}");
         }
 
         // 7. Report
@@ -175,6 +276,28 @@ public sealed class ApplyService : IApplyService
         logs.Add($"Junctions: {created} created, {removed} removed, {skipped} skipped.");
         logs.Add("Apply complete.");
         return new ApplyResult { Success = true, Logs = logs };
+    }
+
+    /// <summary>
+    /// Resolves the absolute path of the active preset's <c>serverDZ.cfg</c> so
+    /// validation checks the configuration the server will actually load. Returns
+    /// null (the server-root config is validated instead) when no environment is
+    /// active or its config is not present yet.
+    /// </summary>
+    private string? ResolveActiveServerConfigPath(ApplyContext context, ServerEnvironment? environment)
+    {
+        if (environment is null
+            || string.IsNullOrWhiteSpace(environment.ServerConfig)
+            || string.IsNullOrWhiteSpace(context.Settings.ServerPath))
+        {
+            return null;
+        }
+
+        string path = Path.IsPathRooted(environment.ServerConfig)
+            ? environment.ServerConfig
+            : Path.Combine(context.Settings.ServerPath, environment.ServerConfig);
+
+        return _fileSystem.FileExists(path) ? path : null;
     }
 
     /// <summary>Reads a file's contents for later rollback, or null when it cannot be read.</summary>

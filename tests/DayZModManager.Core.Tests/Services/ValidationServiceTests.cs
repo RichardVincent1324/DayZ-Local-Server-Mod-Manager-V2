@@ -30,7 +30,7 @@ public class ValidationServiceTests
         fs.AddDirectory(ServerPath);
         fs.AddFile($@"{ServerPath}\DayZServer_x64.exe", "");
         fs.AddFile($@"{ServerPath}\serverDZ.cfg", "");
-        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"");
+        fs.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
         return fs;
     }
 
@@ -59,6 +59,25 @@ public class ValidationServiceTests
     }
 
     [Fact]
+    public void Validate_ReportsWorkshopFolderThatIsNotAWorkshopOrModsFolder()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        // The @mod folders live one level deeper (under DayZ\!Workshop), so this
+        // parent folder is not a valid Workshop/mods folder.
+        fs.AddDirectory(@"D:\SteamLibrary\steamapps\common", "DayZ");
+
+        var context = CreateContext(fs, new[] { "@CF" });
+        context = context with
+        {
+            Settings = context.Settings with { WorkshopPath = @"D:\SteamLibrary\steamapps\common" },
+        };
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(context);
+
+        Assert.Contains(errors, e => e.Contains("Workshop", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Validate_ReportsMissingExecutable()
     {
         FakeFileSystem fs = SeedValidEnvironment();
@@ -67,7 +86,7 @@ public class ValidationServiceTests
         bare.AddDirectory(WorkshopPath, "@CF");
         bare.AddDirectory(ServerPath);
         bare.AddFile($@"{ServerPath}\serverDZ.cfg", "");
-        bare.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"");
+        bare.AddFile($@"{ServerPath}\LocalServer.example.bat", "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"\nset \"serverConfig=old\\serverDZ.cfg\"");
 
         IReadOnlyList<string> errors = CreateService(bare).Validate(CreateContext(bare, new[] { "@CF" }));
 
@@ -86,26 +105,57 @@ public class ValidationServiceTests
     }
 
     [Fact]
-    public void Validate_ReportsModNotInWorkshop()
+    public void Validate_ReportsMissingServerProfileLine()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        fs.AddFile(
+            $@"{ServerPath}\LocalServer.example.bat",
+            "set \"modList=-mod=@CF;\"\nset \"serverConfig=old\\serverDZ.cfg\"");
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF" }));
+
+        Assert.Contains(errors, e => e.Contains("serverProfile", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_ReportsMissingServerConfigLine()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+        fs.AddFile(
+            $@"{ServerPath}\LocalServer.example.bat",
+            "set \"modList=-mod=@CF;\"\nset \"serverProfile=old\\profiles\"");
+
+        IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF" }));
+
+        Assert.Contains(errors, e => e.Contains("serverConfig", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void FindMissingMods_ReturnsLoadedModsAbsentFromWorkshop()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+
+        IReadOnlyList<string> missing = CreateService(fs).FindMissingMods(WorkshopPath, new[] { "@CF", "@Ghost" });
+
+        Assert.Equal(new[] { "@Ghost" }, missing);
+    }
+
+    [Fact]
+    public void FindMissingMods_ReturnsEmpty_WhenWorkshopPathUnsetOrMissing()
+    {
+        FakeFileSystem fs = SeedValidEnvironment();
+
+        Assert.Empty(CreateService(fs).FindMissingMods("", new[] { "@Ghost" }));
+        Assert.Empty(CreateService(fs).FindMissingMods(@"D:\missing", new[] { "@Ghost" }));
+    }
+
+    [Fact]
+    public void Validate_DoesNotReportMissingMods_SoApplyToleratesThem()
     {
         FakeFileSystem fs = SeedValidEnvironment();
 
         IReadOnlyList<string> errors = CreateService(fs).Validate(CreateContext(fs, new[] { "@CF", "@Ghost" }));
 
-        Assert.Contains(errors, e => e.Contains("@Ghost"));
-    }
-
-    [Fact]
-    public void Validate_DoesNotReportPerModMissing_WhenWorkshopPathUnset()
-    {
-        FakeFileSystem fs = SeedValidEnvironment();
-
-        var context = CreateContext(fs, new[] { "@CF", "@Ghost" });
-        context = context with { Settings = context.Settings with { WorkshopPath = "" } };
-
-        IReadOnlyList<string> errors = CreateService(fs).Validate(context);
-
-        Assert.Contains(errors, e => e.Contains("Workshop path is not set"));
-        Assert.DoesNotContain(errors, e => e.Contains("@Ghost") || e.Contains("@CF"));
+        Assert.DoesNotContain(errors, e => e.Contains("@Ghost"));
     }
 }

@@ -1,4 +1,5 @@
 using DayZModManager.Core;
+using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Models;
 using DayZModManager.App.Services;
 
@@ -8,6 +9,7 @@ namespace DayZModManager.App.ViewModels;
 public sealed class SettingsViewModel : ViewModelBase
 {
     private readonly IDialogService _dialogs;
+    private readonly IFileSystem _fileSystem;
 
     private string _workshopPath = string.Empty;
     private string _serverPath = string.Empty;
@@ -18,9 +20,10 @@ public sealed class SettingsViewModel : ViewModelBase
     private bool _autoCleanServerLogs;
     private bool _savedAutoCleanServerLogs;
 
-    public SettingsViewModel(IDialogService dialogs)
+    public SettingsViewModel(IDialogService dialogs, IFileSystem fileSystem)
     {
-        _dialogs = dialogs;
+        _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
+        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
 
         BrowseWorkshopCommand = new RelayCommand(BrowseWorkshop);
         BrowseServerCommand = new RelayCommand(BrowseServer);
@@ -65,8 +68,8 @@ public sealed class SettingsViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// When enabled, all <c>.rpt</c>/<c>.log</c> files in the active map profile
-    /// folder are cleared on app startup once more than 20 have accumulated.
+    /// When enabled, all <c>.rpt</c>/<c>.log</c> files in the active preset's
+    /// profiles folder are cleared on app startup once more than 20 have accumulated.
     /// </summary>
     public bool AutoCleanServerLogs
     {
@@ -103,11 +106,14 @@ public sealed class SettingsViewModel : ViewModelBase
     /// <summary>Loads settings into the editable fields.</summary>
     public void Load(Settings settings)
     {
-        _workshopPath = settings.WorkshopPath;
+        // Auto-correct a workshop path that points at the DayZ game folder rather
+        // than its "!Workshop" subfolder, so discovery and junctions use the right
+        // location even when the saved value is stale.
+        _workshopPath = WorkshopPathResolver.Resolve(_fileSystem, settings.WorkshopPath);
         _serverPath = settings.ServerPath;
         _batFileName = settings.BatFileName;
         _autoCleanServerLogs = settings.AutoCleanServerLogs;
-        _savedWorkshopPath = settings.WorkshopPath;
+        _savedWorkshopPath = _workshopPath;
         _savedServerPath = settings.ServerPath;
         _savedBatFileName = settings.BatFileName;
         _savedAutoCleanServerLogs = settings.AutoCleanServerLogs;
@@ -150,13 +156,30 @@ public sealed class SettingsViewModel : ViewModelBase
     private void BrowseWorkshop()
     {
         string? folder = _dialogs.PickFolder("Select the Steam Workshop folder (!Workshop)");
-        if (folder is not null)
+        if (folder is null)
         {
-            WorkshopPath = folder;
-            if (CanApply)
-            {
-                ApplyRequested?.Invoke();
-            }
+            return;
+        }
+
+        // Correct a folder that points at the DayZ game directory rather than its
+        // "!Workshop" child, then require the result to be a real Workshop/mods
+        // folder (named !Workshop/DayZ, or directly containing "@..." mod folders).
+        string resolved = WorkshopPathResolver.Resolve(_fileSystem, folder);
+        if (!WorkshopPathResolver.IsValidWorkshopPath(_fileSystem, resolved))
+        {
+            _dialogs.ShowMessage(
+                "The selected folder is not a valid DayZ Workshop or mods folder.\n\n" +
+                "Choose the DayZ \"!Workshop\" folder, the DayZ game folder, or a folder that " +
+                "directly contains \"@...\" mod folders.",
+                "Invalid Workshop path",
+                isError: true);
+            return;
+        }
+
+        WorkshopPath = resolved;
+        if (CanApply)
+        {
+            ApplyRequested?.Invoke();
         }
     }
 

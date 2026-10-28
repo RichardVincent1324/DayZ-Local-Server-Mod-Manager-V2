@@ -1,0 +1,753 @@
+﻿using System.Collections.ObjectModel;
+using System.IO;
+using DayZModManager.Core;
+using DayZModManager.Core.Abstractions;
+using DayZModManager.Core.Models;
+using DayZModManager.Core.Services;
+using DayZModManager.App.Services;
+
+namespace DayZModManager.App.ViewModels;
+
+public sealed partial class PresetTypesViewModel : ViewModelBase
+{
+    /// <summary>Where the current types operation writes files and economy references.</summary>
+    private TypesTarget ActiveTypesTarget(string missionPath) =>
+        new(missionPath, PresetTypeFilesFolder(_typesConfig.CurrentMap), EconomyCoreService.ManagedFolder);
+
+    /// <summary>
+    /// Warning shown before a types edit when the preset already holds world data:
+    /// the change only affects future spawns, not entities already in the world.
+    /// </summary>
+    private const string SaveWarningText =
+        "\u26A0\uFE0F WARNING: This preset has existing saves. Types edits will NOT modify items already spawned in the world. Changes only affect future spawns and newly created saves.";
+
+    /// <summary>
+    /// Returns the save warning when the active preset already has stored saves or
+    /// a live world storage folder; otherwise null.
+    /// </summary>
+    private string? SaveWarning()
+    {
+        string mapName = _typesConfig.CurrentMap;
+        return PresetHasWorldData(mapName) ? SaveWarningText : null;
+    }
+
+    /// <summary>
+    /// True when the active preset has at least one stored save or a live world
+    /// storage folder. Never throws.
+    /// </summary>
+    private bool PresetHasWorldData(string mapName)
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(mapName))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (_saveGameService.ListSaves(PresetSavesFolder(mapName)).Count > 0)
+            {
+                return true;
+            }
+
+            return _fileSystem.DirectoryExists(
+                _saveGameService.GetStorageFolderPath(_serverPath, mapName, PresetInstanceId(mapName)));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Rebuilds the types-config mod dropdown from the currently loaded mods.</summary>
+    public void RefreshModNames(IReadOnlyList<string> loadedMods)
+    {
+        ModNames.Clear();
+        foreach (string mod in loadedMods)
+        {
+            ModNames.Add(mod);
+        }
+
+        // The dropdown is an action, not persistent state: always start with no
+        // selection so the placeholder shows and any mod can be selected again.
+        SetRestoringModSelection(null);
+    }
+
+    /// <summary>Sets <see cref="SelectedMod"/> without triggering the configure action.</summary>
+    private void SetRestoringModSelection(string? modName)
+    {
+        _isRestoringMod = true;
+        try
+        {
+            SelectedMod = modName;
+        }
+        finally
+        {
+            _isRestoringMod = false;
+        }
+    }
+
+    /// <summary>
+    /// Runs the configure flow for a mod chosen from the Types Config dropdown and
+    /// clears the selection so the action can be repeated. Deferred by one dispatcher
+    /// tick so the modal picker does not open while the ComboBox is still updating.
+    /// </summary>
+    private async void HandleModSelection(string modName)
+    {
+        await Task.Yield();
+        SetRestoringModSelection(null);
+        ConfigureModCommand.Execute(modName);
+    }
+
+	/// <summary>
+	/// Regenerates the manager-owned (marked) type_files block in cfgeconomycore.xml
+	/// for the applied map. The block always points at the stable mission-local
+	/// <c>db/DZMMV2_Types</c> junction, which Apply re-targets to the active
+	/// preset's <c>type_files</c>. The block is fully overwritten, so a preset
+	/// switch cannot accumulate entries from a previously active preset; unmanaged
+	/// blocks are left untouched.
+	/// </summary>
+	public bool SyncEconomyCore()
+	{
+		if (_typesConfig.IsCorrupt)
+		{
+			_log.Warning("cfgeconomycore.xml was not updated because types_config.json is corrupt.");
+			return false;
+		}
+
+		string? missionPath = ResolveAppliedMapPath();
+		if (missionPath is null)
+		{
+			return false;
+		}
+	
+		TypesOperationResult result = _typesService.SyncEconomyCore(
+			ActiveMapConfig(), missionPath, EconomyCoreService.ManagedFolder, LoadedSet());
+	
+		foreach (string message in result.Messages)
+		{
+			_log.Warning(message);
+		}
+	
+		SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+	
+		if (!result.Success)
+		{
+			_log.Warning("Failed to update cfgeconomycore.xml.");
+		}
+	
+		return result.Success;
+	}
+	
+	/// <summary>Title of the one-time unmanaged CE block alert.</summary>
+	private const string UnmanagedCeAlertTitle = "Unmanaged CE block detected";
+	
+	/// <summary>Red-banner body of the one-time unmanaged CE block alert.</summary>
+	private const string UnmanagedCeAlertWarning =
+		"DayZ loads all <ce> blocks simultaneously. Please manually remove the old unmarked <ce> " +
+		"from cfgeconomycore.xml to avoid duplicate type loading / server boot issues.";
+	
+	/// <summary>
+	/// Raises the alert when a sync created the V2 marker while an unmanaged legacy
+	/// <c>&lt;ce&gt;</c> block was present. Core only reports this when it creates the
+	/// marker, so a given <c>cfgeconomycore.xml</c> alerts once (on its first sync);
+	/// each affected map's config alerts independently.
+	/// </summary>
+	private void SurfaceUnmanagedCeAlert(bool detected, string missionPath)
+	{
+		if (!detected)
+		{
+			return;
+		}
+	
+		string cfgXmlPath = Path.Combine(missionPath, "cfgeconomycore.xml");
+		string alertMessage = "Detected an unmanaged <ce> block in cfgeconomycore.xml. A new managed <ce> block has been created.";
+		string alertNote = $"To edit and remove the old entry, open:\n{cfgXmlPath}";
+	
+		_dialogs.ShowAlert(
+			alertMessage,
+			UnmanagedCeAlertTitle,
+			UnmanagedCeAlertWarning,
+			alertNote);
+	}
+
+    private HashSet<string> LoadedSet() => new(_loadedMods, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The active types mapping: the active preset's configured types.</summary>
+    private TypesConfig? ActiveMapConfig() => CurrentMapConfig();
+
+    /// <summary>Returns the active preset's types config, or null when no map is applied.</summary>
+    private TypesConfig? CurrentMapConfig() =>
+        string.IsNullOrEmpty(_typesConfig.CurrentMap) ? null : _typesConfig;
+
+    /// <summary>The absolute folder holding the active preset's generated types files.</summary>
+    private string? ActiveTypesFolderAbsolute()
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            return null;
+        }
+
+        return PresetTypeFilesFolder(_typesConfig.CurrentMap);
+    }
+
+    private async void ConfigureMod(string? modName)
+    {
+        if (string.IsNullOrWhiteSpace(modName))
+        {
+            _log.Warning("Select a mod to configure first.");
+            return;
+        }
+
+        if (RefuseWhileServerRunning("configuring types files"))
+        {
+            return;
+        }
+
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
+        try
+        {
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
+
+            IReadOnlyList<string> files = _typesService.DiscoverXmlFiles(_workshopPath, modName);
+            _log.Info($"Found {files.Count} XML file(s) in {modName}.");
+
+            // Pre-select only the files that are currently configured for this
+            // mod (and restore an unrecognized file's assigned role) so a re-run
+            // with no edits does not silently change anything. Matching is by
+            // mod-relative source path so a disambiguated (numbered) generated
+            // name is handled transparently.
+            string modFolderPath = Path.Combine(_workshopPath, modName);
+            IReadOnlyList<ConfiguredTypeFile> configuredFiles =
+                _typesService.GetConfiguredFiles(_typesConfig, modName);
+            var configuredBySource = new Dictionary<string, ConfiguredTypeFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (ConfiguredTypeFile configured in configuredFiles)
+            {
+                if (!string.IsNullOrWhiteSpace(configured.SourceRelative))
+                {
+                    configuredBySource[configured.SourceRelative] = configured;
+                }
+            }
+
+            var activeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var activeRoles = new Dictionary<string, TypesFileRole>(StringComparer.OrdinalIgnoreCase);
+            foreach (string file in files)
+            {
+                string relative = Path.GetRelativePath(modFolderPath, file);
+                if (configuredBySource.TryGetValue(relative, out ConfiguredTypeFile? configured))
+                {
+                    activeFiles.Add(file);
+                    activeRoles[file] = configured.Role;
+                }
+            }
+
+            IReadOnlyList<TypeFileSelection>? selected = _dialogs.PickTypeFiles(modName, files, activeFiles, activeRoles, modFolderPath);
+            if (selected is null || selected.Count == 0)
+            {
+                return;
+            }
+
+            // Reconfiguring a mod that is already configured overwrites its files
+            // in type_files; never do that silently, even when the same file is
+            // selected again. When the preset already holds world data, the save
+            // warning is stacked on top of the overwrite warning in one dialog.
+            string? overwriteWarning = null;
+            if (configuredFiles.Count > 0)
+            {
+                var selectedSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (TypeFileSelection selection in selected)
+                {
+                    selectedSources.Add(Path.GetRelativePath(modFolderPath, selection.SourceFile));
+                }
+
+                List<string> removed = configuredFiles
+                    .Where(configured => !selectedSources.Contains(configured.SourceRelative))
+                    .Select(configured => string.IsNullOrWhiteSpace(configured.GeneratedLeaf)
+                        ? configured.SourceRelative
+                        : configured.GeneratedLeaf)
+                    .ToList();
+                overwriteWarning = $"Mod {modName} already has configured type file(s). Reconfiguring will overwrite its current configuration in type_files with the newly selected file(s).";
+                if (removed.Count > 0)
+                {
+                    string list = string.Join("\n", removed.Select(name => "  \u2022 " + name));
+                    overwriteWarning += $"\n\nThe following currently configured file(s) will be deleted because they are no longer selected:\n{list}";
+                }
+            }
+
+            string? saveWarning = SaveWarning();
+            if (saveWarning is not null || overwriteWarning is not null)
+            {
+                string message = string.Join(
+                    "\n\n",
+                    new[] { saveWarning, overwriteWarning }.Where(part => !string.IsNullOrEmpty(part)));
+                message += "\n\nContinue?";
+                if (!_dialogs.Confirm(message, "Configure types files?"))
+                {
+                    _log.Info("Types configuration cancelled.");
+                    return;
+                }
+            }
+
+            if (!await EnsureAppliedBeforeAsync("types configuration"))
+            {
+                return;
+            }
+
+            TypesOperationResult result = _typesService.ConfigureMod(
+                _typesConfig, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
+
+            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+            LogOperation(result, "Types configuration completed.");
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Types configuration failed: {ex.Message}");
+        }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
+    }
+
+    private async void RemoveSelected()
+    {
+        if (RefuseWhileServerRunning("removing types files"))
+        {
+            return;
+        }
+
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
+        try
+        {
+            List<TypesRowViewModel> rows = SelectedTypesRows.ToList();
+            if (rows.Count == 0)
+            {
+                _log.Warning("Select rows in the table first.");
+                return;
+            }
+
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
+
+            List<TypesRowViewModel> trackedRows = rows.Where(r => !r.IsUntracked).ToList();
+            var untrackedLeaves = new HashSet<string>(
+                rows.Where(r => r.IsUntracked).Select(r => r.FileName), StringComparer.Ordinal);
+
+            string confirm = $"Delete the selected {rows.Count} type file(s) from type_files?";
+            if (untrackedLeaves.Count > 0)
+            {
+                confirm += $"\n\n{untrackedLeaves.Count} of them are untracked (present in type_files but not managed by this app). Removing them also deletes their entries from cfgeconomycore.xml.";
+            }
+
+            confirm += "\n\nThis permanently removes the file(s) from the mission folder.";
+            string? saveWarning = SaveWarning();
+            if (saveWarning is not null)
+            {
+                confirm = saveWarning + "\n\n" + confirm;
+            }
+
+            confirm += "\n\nContinue?";
+            if (!_dialogs.Confirm(confirm, "Remove type files"))
+            {
+                _log.Info("Removal cancelled.");
+                return;
+            }
+
+            if (!await EnsureAppliedBeforeAsync("removal"))
+            {
+                return;
+            }
+
+            bool success = true;
+            bool unmanagedLegacy = false;
+            var messages = new List<string>();
+            foreach (IGrouping<string, TypesRowViewModel> group in trackedRows.GroupBy(r => r.ModName, StringComparer.Ordinal))
+            {
+                var leaves = new HashSet<string>(group.Select(r => r.FileName), StringComparer.Ordinal);
+                TypesOperationResult result = _typesService.RemoveFiles(
+                    _typesConfig, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
+                messages.AddRange(result.Messages);
+                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
+                if (!result.Success)
+                {
+                    success = false;
+                }
+            }
+
+            if (untrackedLeaves.Count > 0)
+            {
+                TypesOperationResult result = _typesService.RemoveUntrackedFiles(
+                    _typesConfig, ActiveTypesTarget(missionPath), untrackedLeaves);
+                messages.AddRange(result.Messages);
+                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
+                if (!result.Success)
+                {
+                    success = false;
+                }
+            }
+
+            foreach (string message in messages)
+            {
+                _log.Info(message);
+            }
+
+            SurfaceUnmanagedCeAlert(unmanagedLegacy, missionPath);
+
+            if (success)
+            {
+                if (trackedRows.Count > 0)
+                {
+                    _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
+                }
+
+                _log.Success("Removed selected types files.");
+                RebuildRows();
+                NotifyCommandStates();
+            }
+            else
+            {
+                _log.Error("Operation failed.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Removal failed: {ex.Message}");
+        }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
+    }
+
+    private async void CleanInvalid()
+    {
+        if (RefuseWhileServerRunning("cleaning up invalid types configurations"))
+        {
+            return;
+        }
+
+        if (!TryBeginTypesOperation())
+        {
+            _log.Warning("Another types or map operation is already in progress; please retry.");
+            return;
+        }
+
+        try
+        {
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is null)
+            {
+                return;
+            }
+
+            var workshop = new HashSet<string>(_allMods, StringComparer.Ordinal);
+            var active = new HashSet<string>(_loadedMods.Where(workshop.Contains), StringComparer.Ordinal);
+
+            List<string> invalidMods = CurrentMapConfig() is { } mapConfig
+                ? mapConfig.Mods
+                    .Where(entry => !active.Contains(entry.ModName))
+                    .Select(entry => entry.ModName)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList()
+                : new List<string>();
+
+            if (invalidMods.Count > 0)
+            {
+                string list = string.Join("\n", invalidMods.Select(name => "  \u2022 " + name));
+                string message = $"The following mod(s) are no longer active (not loaded or missing from the workshop) and their generated type file(s) will be DELETED from type_files:\n\n{list}";
+                string? saveWarning = SaveWarning();
+                if (saveWarning is not null)
+                {
+                    message = saveWarning + "\n\n" + message;
+                }
+
+                bool clean = _dialogs.Confirm(message + "\n\nContinue?", "Clean invalid types configurations?");
+                if (!clean)
+                {
+                    _log.Info("Cleanup cancelled.");
+                    return;
+                }
+            }
+
+            if (!await EnsureAppliedBeforeAsync("cleanup"))
+            {
+                return;
+            }
+
+            TypesOperationResult result = _typesService.CleanInvalid(
+                _typesConfig, ActiveTypesTarget(missionPath), active, LoadedSet());
+
+            foreach (string message in result.Messages)
+            {
+                _log.Info(message);
+            }
+
+            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+
+            if (result.Success)
+            {
+                _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
+                RebuildRows();
+            }
+            else
+            {
+                _log.Error("Operation failed.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Cleanup failed: {ex.Message}");
+        }
+        finally
+        {
+            EndTypesOperation();
+            DrainPendingMapSwitch();
+        }
+    }
+
+    private void LogOperation(TypesOperationResult result, string successMessage)
+    {
+        foreach (string message in result.Messages)
+        {
+            _log.Info(message);
+        }
+
+        if (result.Success)
+        {
+            _typesConfigStore.Save(PresetFolder(_typesConfig.CurrentMap), _typesConfig);
+            _log.Success(successMessage);
+            RebuildRows();
+            NotifyCommandStates();
+        }
+        else
+        {
+            _log.Error("Operation failed.");
+        }
+    }
+
+    private void RebuildRows()
+    {
+        TypesRows.Clear();
+        if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            return;
+        }
+
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        TypesConfig? map = ActiveMapConfig();
+        if (map is not null)
+        {
+            var valid = new HashSet<string>(_allMods, StringComparer.Ordinal);
+            var loaded = LoadedSet();
+            foreach (ModTypesEntry entry in map.Mods)
+            {
+                bool inactive = !valid.Contains(entry.ModName) || !loaded.Contains(entry.ModName);
+                foreach (string generated in entry.GeneratedFiles)
+                {
+                    string leaf = Path.GetFileName(generated);
+                    if (string.IsNullOrWhiteSpace(leaf))
+                    {
+                        continue;
+                    }
+
+                    owned.Add(leaf);
+                    TypesRows.Add(new TypesRowViewModel(entry.ModName, leaf, inactive, fileType: FileTypeLabel(entry, leaf)));
+                }
+            }
+        }
+
+        AddUntrackedRows(owned);
+    }
+
+    /// <summary>Returns the display label ("type"/"spawnable") for a tracked generated file.</summary>
+    private static string FileTypeLabel(ModTypesEntry entry, string leaf)
+    {
+        TypesFileRole role = entry.FileRoles.TryGetValue(leaf, out string? stored)
+            ? TypesFileRoles.ToRole(stored)
+            : TypesFileRole.Types;
+        return role == TypesFileRole.SpawnableTypes ? "spawnable" : "type";
+    }
+
+    /// <summary>
+    /// Appends rows for XML files that physically exist in the mission's
+    /// <c>type_files</c> folder but are not tracked by the types configuration,
+    /// so orphaned files cannot silently linger. File system failures are ignored
+    /// so they never break the grid.
+    /// </summary>
+    private void AddUntrackedRows(IReadOnlySet<string> ownedLeaves)
+    {
+        if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(_typesConfig.CurrentMap))
+        {
+            return;
+        }
+
+        try
+        {
+            string? typesFolder = ActiveTypesFolderAbsolute();
+            if (typesFolder is null)
+            {
+                return;
+            }
+
+            foreach (string file in _fileSystem.GetFiles(typesFolder, "*.xml", recursive: false))
+            {
+                string leaf = Path.GetFileName(file);
+                if (string.IsNullOrWhiteSpace(leaf) || ownedLeaves.Contains(leaf))
+                {
+                    continue;
+                }
+
+                TypesRows.Add(new TypesRowViewModel(UntrackedLabel, leaf, isInactive: false, isUntracked: true));
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: a locked/missing folder must not break the row grid.
+        }
+    }
+
+    /// <summary>
+    /// Opens the active preset's <c>type_files</c> folder in File Explorer. The
+    /// folder is created when missing; failures are logged, never thrown.
+    /// </summary>
+    private void OpenTypeFilesFolder()
+    {
+        string folder = PresetTypeFilesFolder(_typesConfig.CurrentMap);
+        try
+        {
+            _fileSystem.CreateDirectory(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the type_files folder: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            _processLauncher.OpenFolder(folder);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to open the type_files folder: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Returns the launch-blocking problems with the active map's types
+    /// configuration: entries whose mod is missing from the Workshop, generated
+    /// files of loaded mods that are absent from the preset's <c>type_files</c>
+    /// folder, and a mission-local type-files junction that is missing or points
+    /// at another preset. Empty when the types configuration is ready to launch.
+    /// </summary>
+    public IReadOnlyList<string> PreflightTypesIssues()
+    {
+        if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        {
+            return Array.Empty<string>();
+        }
+
+        var workshop = new HashSet<string>(_allMods, StringComparer.OrdinalIgnoreCase);
+        var loaded = new HashSet<string>(_loadedMods, StringComparer.OrdinalIgnoreCase);
+        TypesLaunchIssues issues = _typesService.FindLaunchIssues(
+            _typesConfig, PresetTypeFilesFolder(_typesConfig.CurrentMap), workshop, loaded);
+
+        var messages = new List<string>();
+        if (issues.MissingMods.Count > 0)
+        {
+            messages.Add($"Types configuration references mod(s) missing from the Workshop: {string.Join(", ", issues.MissingMods)}");
+        }
+
+        if (issues.MissingFiles.Count > 0)
+        {
+            messages.Add($"Types file(s) referenced by cfgeconomycore.xml are missing from type_files: {string.Join(", ", issues.MissingFiles)}");
+        }
+
+        // Verify the managed <ce> block actually matches what the active preset
+        // should load. This catches an Apply/map switch whose economy rewrite failed.
+        if (!_typesConfig.IsCorrupt)
+        {
+            string? missionPath = ResolveAppliedMapPath();
+            if (missionPath is not null)
+            {
+                IReadOnlyList<ManagedTypeFileEntry> expected = _typesService.GetActiveTypeFiles(
+                    _typesConfig, loaded);
+                IReadOnlyList<ManagedTypeFileEntry> actual = _typesService.GetManagedTypeFiles(missionPath);
+                string expectedFolder = EconomyCoreService.ManagedFolder;
+                string? actualFolder = _typesService.GetActiveTypesFolder(missionPath);
+
+                if ((expected.Count > 0 || actual.Count > 0)
+                    && (!string.Equals(actualFolder, expectedFolder, StringComparison.OrdinalIgnoreCase)
+                        || !TypeFileEntriesMatch(expected, actual)))
+                {
+                    messages.Add(
+                        "cfgeconomycore.xml is not synchronized with the active preset's types. " +
+                        "Re-apply the configuration to restore it.");
+                }
+            }
+        }
+
+        // The managed CE block always references the stable mission-local folder.
+        // Verify the junction behind it still exposes the active preset's
+        // type_files, so a failed re-target can never launch against another
+        // preset's files.
+        if (!string.IsNullOrWhiteSpace(_serverPath))
+        {
+            string missionPath = MissionTypeFiles.MissionPath(
+                _serverPath, _typesConfig.CurrentMap);
+            string targetFolder = PresetTypeFilesFolder(_typesConfig.CurrentMap);
+            if (!_typeFileJunctions.Verify(missionPath, targetFolder))
+            {
+                messages.Add(
+                    $"The managed type files junction ({MissionTypeFiles.CeFolder}) is missing or does not point at the active preset. " +
+                    "Re-apply the configuration before starting the server.");
+            }
+        }
+
+        return messages;
+    }
+
+    /// <summary>
+    /// True when both managed-entry lists reference the same files, in the same
+    /// order, with the same economy type. The stable CE folder no longer signals a
+    /// preset change, so roles must be compared explicitly.
+    /// </summary>
+    private static bool TypeFileEntriesMatch(
+        IReadOnlyList<ManagedTypeFileEntry> expected, IReadOnlyList<ManagedTypeFileEntry> actual)
+    {
+        if (expected.Count != actual.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expected.Count; i++)
+        {
+            if (!string.Equals(expected[i].Name, actual[i].Name, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(expected[i].Type, actual[i].Type, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+

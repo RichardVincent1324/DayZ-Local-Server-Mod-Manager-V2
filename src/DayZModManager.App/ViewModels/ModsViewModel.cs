@@ -163,6 +163,13 @@ public sealed class ModsViewModel : ViewModelBase
         _state.SetWorkshopMods(workshopMods);
         _log.Info($"Found {workshopMods.Count} mod(s) in workshop.");
 
+        if (workshopMods.Count == 0 && !string.IsNullOrWhiteSpace(_workshopPath))
+        {
+            _log.Warning(
+                "No mods were found in the workshop path. Make sure it points at the DayZ \"!Workshop\" folder " +
+                "(e.g. ...\\steamapps\\common\\DayZ\\!Workshop).");
+        }
+
         int missing = _state.MissingMods.Count;
         if (missing > 0)
         {
@@ -276,6 +283,12 @@ public sealed class ModsViewModel : ViewModelBase
     {
         var missing = new HashSet<string>(_state.MissingMods, StringComparer.Ordinal);
         Reconcile(LoadedItems, _state.LoadedMods, missing);
+
+        for (int i = 0; i < LoadedItems.Count; i++)
+        {
+            LoadedItems[i].Position = i + 1;
+        }
+
         OnPropertyChanged(nameof(LoadedCountText));
     }
 

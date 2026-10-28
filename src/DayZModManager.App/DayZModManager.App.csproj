@@ -1,24 +1,39 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <ProjectReference Include="..\DayZModManager.Core\DayZModManager.Core.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+	<ProjectReference Include="..\DayZModManager.Core\DayZModManager.Core.csproj" />
+	</ItemGroup>
+	
+	<ItemGroup>
+	<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+	</ItemGroup>
+	
+	<ItemGroup>
+	<Resource Include="Resources\app.ico" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Resource Include="Resources\app.ico" />
-  </ItemGroup>
-
-  <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
-    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-  </PropertyGroup>
+	<PropertyGroup>
+	<OutputType>WinExe</OutputType>
+	<TargetFramework>net8.0-windows</TargetFramework>
+	<Nullable>enable</Nullable>
+	<ImplicitUsings>enable</ImplicitUsings>
+	<UseWPF>true</UseWPF>
+		
+	<ApplicationIcon>Resources\app.ico</ApplicationIcon>
+		
+	<AssemblyName>DayZModManager</AssemblyName>
+	<FileDescription>A Windows desktop app that makes heavily modded DayZ local servers and single-player PvE easier to set up and manage.</FileDescription>
+	
+	<Version>2.1.0</Version>
+	<AssemblyVersion>2.1.0.0</AssemblyVersion>
+	<FileVersion>2.1.0.0</FileVersion>
+	<InformationalVersion>2.1.0</InformationalVersion>
+		
+	<Product>DayZ Local Server Mod Manager V2</Product>
+	<Company>RichardVincent1324</Company>
+	<Copyright>Copyright © 2026 RichardVincent1324</Copyright>
+		
+	<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+	</PropertyGroup>
 
 </Project>

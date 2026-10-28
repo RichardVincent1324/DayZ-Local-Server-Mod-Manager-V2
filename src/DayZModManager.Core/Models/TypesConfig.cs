@@ -1,31 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace DayZModManager.Core.Models;
 
 /// <summary>
-/// Persistent per-map "types" configuration.
-///
-/// Maps are keyed by their mission folder name (e.g. "dayzOffline.chernarusplus")
-/// rather than a full path, so the configuration is portable across machines.
-/// The full path is resolved at runtime via map discovery.
+/// Persistent types configuration for one preset. A preset is scoped to a single
+/// map, so the file holds only that map's mods; the map is implied by the preset
+/// folder path (<c>Presets\&lt;map&gt;\&lt;preset&gt;</c>) and is not serialized.
 /// </summary>
 public sealed class TypesConfig
-{
-    private Dictionary<string, MapTypesConfig> _maps = new(StringComparer.OrdinalIgnoreCase);
-
-    public Dictionary<string, MapTypesConfig> Maps
-    {
-        get => _maps;
-        // System.Text.Json assigns a new dictionary (and a JSON null) directly, so
-        // coerce null and restore the case-insensitive comparer here.
-        set => _maps = value is null
-            ? new Dictionary<string, MapTypesConfig>(StringComparer.OrdinalIgnoreCase)
-            : new Dictionary<string, MapTypesConfig>(value, StringComparer.OrdinalIgnoreCase);
-    }
-
-    public string CurrentMap { get; set; } = string.Empty;
-}
-
-/// <summary>Types configuration for a single map.</summary>
-public sealed class MapTypesConfig
 {
     private List<ModTypesEntry> _mods = new();
 
@@ -34,6 +16,21 @@ public sealed class MapTypesConfig
         get => _mods;
         set => _mods = value ?? new List<ModTypesEntry>();
     }
+
+    /// <summary>
+    /// The map whose preset is currently loaded. Runtime-only (never serialized);
+    /// the preset folder is the persistent source of truth for the map.
+    /// </summary>
+    [JsonIgnore]
+    public string CurrentMap { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when the active preset's <c>types_config.json</c> could not be read.
+    /// Runtime-only: automatic saves and economy rewrites are skipped so the
+    /// corrupt file is not replaced with an empty configuration.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsCorrupt { get; set; }
 }
 
 /// <summary>

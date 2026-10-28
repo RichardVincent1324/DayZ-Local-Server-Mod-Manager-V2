@@ -6,9 +6,9 @@ namespace DayZModManager.Core.Services;
 public sealed record ServerLogCleanupResult(bool FolderExists, int Removed);
 
 /// <summary>
-/// Clears DayZ server log files inside a map profile folder
-/// (<c>map_profiles\&lt;map&gt;</c>). All <c>.rpt</c> and <c>.log</c> files are
-/// counted together and, when that combined total exceeds
+/// Clears DayZ server log files inside a preset's profile folder
+/// (<c>Presets\&lt;map&gt;\&lt;preset&gt;\profiles</c>). All <c>.rpt</c> and <c>.log</c>
+/// files are counted together and, when that combined total exceeds
 /// <see cref="ServerLogCleanupService.CleanupThreshold"/>, every one of them is
 /// deleted. Other files are never touched.
 /// </summary>

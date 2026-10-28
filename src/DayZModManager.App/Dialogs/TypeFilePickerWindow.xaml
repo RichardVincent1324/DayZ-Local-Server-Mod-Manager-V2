@@ -16,8 +16,8 @@
                        Text="Files whose name contains &quot;type&quot; or &quot;spawnable&quot; are classified automatically. For any other file, choose whether it is a Types or Spawnable Types file; the choice is recorded in the types configuration." />
             <Grid>
                 <Button Content="Open mod folder" Width="130" HorizontalAlignment="Left"
-                        IsEnabled="{Binding HasUnrecognizedOptions}" Click="OpenModFolder_Click"
-                        ToolTip="Open this mod's Workshop folder so you can inspect the unrecognized XML files." />
+                        Click="OpenModFolder_Click"
+                        ToolTip="Open this mod's Workshop folder to inspect its XML files." />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="OK" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Ok_Click" />
                     <Button Content="Cancel" Width="80" IsCancel="True" Click="Cancel_Click" />

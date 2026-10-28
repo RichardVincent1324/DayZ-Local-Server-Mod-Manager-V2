@@ -5,6 +5,7 @@ public sealed class ModItemViewModel : ViewModelBase
 {
     private string _name;
     private bool _isMissing;
+    private int _position;
 
     public ModItemViewModel(string name, bool isMissing)
     {
@@ -22,5 +23,12 @@ public sealed class ModItemViewModel : ViewModelBase
     {
         get => _isMissing;
         set => SetField(ref _isMissing, value);
+    }
+
+    /// <summary>1-based position in the loaded list, i.e. the mod's load order.</summary>
+    public int Position
+    {
+        get => _position;
+        set => SetField(ref _position, value);
     }
 }

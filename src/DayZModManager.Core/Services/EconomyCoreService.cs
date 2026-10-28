@@ -5,6 +5,9 @@ using DayZModManager.Core.Abstractions;
 
 namespace DayZModManager.Core.Services;
 
+/// <summary>A file entry in the manager-owned CE block: its leaf name and economy type.</summary>
+public sealed record ManagedTypeFileEntry(string Name, string Type);
+
 /// <summary>Outcome of rewriting the manager-owned type_files block, plus any warnings.</summary>
 public sealed record EconomyCoreUpdateResult(
     bool Success,
@@ -33,11 +36,13 @@ public interface IEconomyCoreService
     /// Rewrites the manager-owned <c>&lt;ce&gt;</c> block to reference exactly
     /// <paramref name="desiredFileNames"/> (leaf names only, e.g. "CF_types.xml").
     /// <paramref name="folder"/> is written to the block's <c>folder</c> attribute
-    /// and is rewritten on every call (the active preset's <c>type_files</c> folder,
-    /// or a save's). The block's children are fully replaced; the element, its
-    /// marker and its <c>folder</c> are preserved. When no marked block exists, a
-    /// new one is created; an existing unmarked <c>ce</c> block is left untouched
-    /// and reported as a warning. <paramref name="fileTypes"/> assigns each desired
+    /// and is rewritten on every call. Production callers pass the stable
+    /// mission-local folder <see cref="ManagedFolder"/>, which resolves through
+    /// the app-managed junction to the active preset's <c>type_files</c>. The
+    /// block's children are fully replaced; the element, its marker and its
+    /// <c>folder</c> are preserved. When no marked block exists, a new one is
+    /// created; an existing unmarked <c>ce</c> block is left untouched and
+    /// reported as a warning. <paramref name="fileTypes"/> assigns each desired
     /// leaf its economy type (keyed case-insensitively); a missing entry is treated
     /// as a types file.
     /// </summary>
@@ -61,6 +66,13 @@ public interface IEconomyCoreService
     IReadOnlyList<string> GetTypeFileNames(string missionPath);
 
     /// <summary>
+    /// Returns the manager-owned block's <c>&lt;file&gt;</c> entries with their
+    /// <c>name</c> and <c>type</c> attributes, in document order. Empty when there
+    /// is no managed block or it lists no files.
+    /// </summary>
+    IReadOnlyList<ManagedTypeFileEntry> GetTypeFileEntries(string missionPath);
+
+    /// <summary>
     /// Removes the named <c>&lt;file&gt;</c> entries from the manager-owned (marked)
     /// block only; other blocks are preserved. The marked block itself is kept even
     /// when it becomes empty. Returns false if the file is missing or malformed.
@@ -70,8 +82,12 @@ public interface IEconomyCoreService
 
 public sealed class EconomyCoreService : IEconomyCoreService
 {
-    /// <summary>The <c>folder</c> value used for the configured (world-less) types folder.</summary>
-    public const string ConfiguredFolder = "./db/type_files";
+    /// <summary>
+    /// The stable mission-local <c>folder</c> value for the managed CE block. It
+    /// points at the app-managed junction, never directly at a preset folder
+    /// outside the mission.
+    /// </summary>
+    public const string ManagedFolder = MissionTypeFiles.CeFolder;
 
     /// <summary>Attribute marking a <c>&lt;ce&gt;</c> block as fully owned by this manager.</summary>
     public const string ManagerMarkerAttribute = "dzmmv2-managed-by";
@@ -141,26 +157,30 @@ public sealed class EconomyCoreService : IEconomyCoreService
         return ce is null ? null : (string?)ce.Attribute("folder");
     }
 
-    public IReadOnlyList<string> GetTypeFileNames(string missionPath)
+    public IReadOnlyList<string> GetTypeFileNames(string missionPath) =>
+        GetTypeFileEntries(missionPath).Select(file => file.Name).ToList();
+
+    public IReadOnlyList<ManagedTypeFileEntry> GetTypeFileEntries(string missionPath)
     {
         XDocument? doc = LoadEconomyCore(missionPath);
         XElement? ce = doc?.Root?.Descendants("ce").FirstOrDefault(IsManagedCe);
         if (ce is null)
         {
-            return Array.Empty<string>();
+            return Array.Empty<ManagedTypeFileEntry>();
         }
 
         return ce.Elements("file")
-            .Select(file => (string?)file.Attribute("name"))
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name!)
+            .Select(file => new ManagedTypeFileEntry(
+                (string?)file.Attribute("name") ?? string.Empty,
+                (string?)file.Attribute("type") ?? TypesFileRoles.Types))
+            .Where(file => !string.IsNullOrWhiteSpace(file.Name))
             .ToList();
     }
 
-    /// <summary>Convenience overload that targets the configured <c>./db/type_files</c> folder.</summary>
+    /// <summary>Convenience overload that targets the stable mission-local managed folder.</summary>
     public EconomyCoreUpdateResult UpdateTypeFiles(
         string missionPath, IReadOnlyList<string> desiredFileNames, IReadOnlyDictionary<string, string> fileTypes) =>
-        UpdateTypeFiles(missionPath, ConfiguredFolder, desiredFileNames, fileTypes);
+        UpdateTypeFiles(missionPath, ManagedFolder, desiredFileNames, fileTypes);
 
     public bool RemoveTypeFiles(string missionPath, IReadOnlySet<string> fileNames)
     {

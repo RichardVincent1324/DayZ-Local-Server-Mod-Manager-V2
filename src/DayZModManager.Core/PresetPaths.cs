@@ -7,7 +7,7 @@ namespace DayZModManager.Core;
 /// own server configuration, mod order, types configuration, its generated type
 /// files, profiles and world saves. This type is the single source of truth for that layout, in
 /// the same spirit as <see cref="AppPaths"/> and
-/// <c>DayZModManager.Core.Services.ModListFolder</c>.
+/// <c>DayZModManager.Core.Services.Dzmmv2ModListFolder</c>.
 /// </summary>
 public static class PresetPaths
 {

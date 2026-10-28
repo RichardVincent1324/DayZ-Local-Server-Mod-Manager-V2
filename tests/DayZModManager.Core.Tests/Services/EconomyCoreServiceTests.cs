@@ -63,7 +63,7 @@ public class EconomyCoreServiceTests
 
         XElement? ce = FindManaged(doc);
         Assert.NotNull(ce);
-        Assert.Equal("./db/type_files", (string?)ce!.Attribute("folder"));
+        Assert.Equal(EconomyCoreService.ManagedFolder, (string?)ce!.Attribute("folder"));
 
         var files = ce.Elements("file").ToList();
         Assert.Equal(2, files.Count);
@@ -91,6 +91,26 @@ public class EconomyCoreServiceTests
         Assert.Equal(
             new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" },
             service.GetTypeFileNames(MissionPath));
+    }
+
+    [Fact]
+    public void GetTypeFileEntries_ReturnsNamesAndTypesInOrder()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", ConfigXml);
+        var service = CreateService(fs);
+        service.UpdateTypeFiles(
+            MissionPath,
+            new[] { "CF_types.xml", "Expansion_spawnabletypes.xml" },
+            Types("CF_types.xml", "Expansion_spawnabletypes.xml"));
+
+        Assert.Equal(
+            new[]
+            {
+                new ManagedTypeFileEntry("CF_types.xml", "types"),
+                new ManagedTypeFileEntry("Expansion_spawnabletypes.xml", "spawnabletypes"),
+            },
+            service.GetTypeFileEntries(MissionPath));
     }
 
     [Fact]
@@ -138,7 +158,7 @@ public class EconomyCoreServiceTests
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
         XElement ce = FindManaged(doc)!;
         Assert.Single(doc.Descendants("ce"));
-        Assert.Equal("./db/type_files", (string?)ce.Attribute("folder"));
+        Assert.Equal(EconomyCoreService.ManagedFolder, (string?)ce.Attribute("folder"));
         Assert.Equal(new[] { "CF_types.xml" }, FileNames(ce));
     }
 
@@ -281,7 +301,7 @@ public class EconomyCoreServiceTests
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files" {Marker}>
+            	<ce folder="{EconomyCoreService.ManagedFolder}" {Marker}>
             		<file name="SpawnableItems_types.xml" type="spawnabletypes" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
@@ -304,7 +324,7 @@ public class EconomyCoreServiceTests
         string original = $"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="./db/type_files" {Marker}>
+            	<ce folder="{EconomyCoreService.ManagedFolder}" {Marker}>
             		<file name="CF_types.xml" type="types" />
             		<file name="CF_spawnabletypes.xml" type="spawnabletypes" />
             	</ce>
@@ -342,7 +362,7 @@ public class EconomyCoreServiceTests
 
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
         XElement ce = doc.Descendants("ce").Single();
-        Assert.Equal("./db/type_files", (string?)ce.Attribute("folder"));
+        Assert.Equal(EconomyCoreService.ManagedFolder, (string?)ce.Attribute("folder"));
         Assert.Equal(new[] { "CF_types.xml" }, FileNames(ce));
     }
 

@@ -30,6 +30,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private readonly IProcessLauncher _processLauncher;
     private readonly IPresetService _presetService;
     private readonly IJunctionService _junctions;
+    private readonly ITypeFileJunctionService _typeFileJunctions;
     private readonly ILaunchEnvironmentService _launchEnvironment;
     private string _serverPath = string.Empty;
     private string _workshopPath = string.Empty;
@@ -67,6 +68,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         IProcessLauncher processLauncher,
         IPresetService presetService,
         IJunctionService junctions,
+        ITypeFileJunctionService typeFileJunctions,
         ILaunchEnvironmentService launchEnvironment)
     {
         _mapService = mapService;
@@ -83,6 +85,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _processLauncher = processLauncher;
         _presetService = presetService;
         _junctions = junctions;
+        _typeFileJunctions = typeFileJunctions;
         _launchEnvironment = launchEnvironment;
 
         ConfigureModCommand = new RelayCommand<string>(ConfigureMod, () => MapApplied);

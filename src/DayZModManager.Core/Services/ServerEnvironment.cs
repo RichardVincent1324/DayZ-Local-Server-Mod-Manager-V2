@@ -22,7 +22,7 @@ public sealed record ServerEnvironment
     public required string ServerConfig { get; init; }
 
     /// <summary>The active preset's junction-folder key (its instanceId as a string).</summary>
-    public required string ModListKey { get; init; }
+    public required string JunctionKey { get; init; }
 }
 
 /// <summary>

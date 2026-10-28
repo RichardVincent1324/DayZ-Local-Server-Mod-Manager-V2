@@ -18,7 +18,7 @@ public sealed record JunctionSyncResult
 
 /// <summary>
 /// Synchronizes junctions under a preset's own folder
-/// (<c>&lt;serverRoot&gt;\ModList\&lt;presetKey&gt;</c>) with that preset's desired
+/// (<c>&lt;serverRoot&gt;\DZMMV2_ModList\&lt;presetKey&gt;</c>) with that preset's desired
 /// loaded-mod set. Because each preset has its own subfolder, synchronizing one
 /// preset never touches another preset's junctions, so switching presets does not
 /// recreate or delete links. Junction work is split into a non-destructive
@@ -36,7 +36,7 @@ public interface IJunctionService
     JunctionSyncResult Sync(string serverPath, string workshopPath, string presetKey, IReadOnlyList<string> loadedMods);
 
     /// <summary>
-    /// Non-destructive preparation: ensures the preset's ModList folder exists and
+    /// Non-destructive preparation: ensures the preset's DZMMV2_ModList folder exists and
     /// creates junctions for loaded mods that have none, skipping links that
     /// already point at the right target. Links pointing elsewhere (e.g. a changed
     /// workshop path) are validated but NOT re-pointed here - that is deferred to
@@ -102,7 +102,7 @@ public sealed class JunctionService : IJunctionService
         var messages = new List<string>();
         int created = 0, skipped = 0, failed = 0;
 
-        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        string junctionDir = Dzmmv2ModListFolder.Directory(serverPath, presetKey);
         if (!EnsureJunctionDirectory(junctionDir, presetKey, messages, ref failed))
         {
             return new JunctionSyncResult
@@ -186,7 +186,7 @@ public sealed class JunctionService : IJunctionService
         var messages = new List<string>();
         int created = 0, removed = 0, skipped = 0, failed = 0;
 
-        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        string junctionDir = Dzmmv2ModListFolder.Directory(serverPath, presetKey);
         if (!_fileSystem.DirectoryExists(junctionDir))
         {
             return new JunctionSyncResult
@@ -278,14 +278,14 @@ public sealed class JunctionService : IJunctionService
 
     public IReadOnlyList<string> FindOrphanedJunctions(string serverPath, string presetKey, IReadOnlySet<string> validModNames)
     {
-        return GetJunctionedMods(ModListFolder.Directory(serverPath, presetKey))
+        return GetJunctionedMods(Dzmmv2ModListFolder.Directory(serverPath, presetKey))
             .Where(mod => !validModNames.Contains(mod))
             .ToList();
     }
 
     public IReadOnlyList<string> Verify(string serverPath, string presetKey, IReadOnlyList<string> loadedMods)
     {
-        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        string junctionDir = Dzmmv2ModListFolder.Directory(serverPath, presetKey);
         var missing = new List<string>();
         foreach (string mod in loadedMods)
         {
@@ -300,7 +300,7 @@ public sealed class JunctionService : IJunctionService
 
     public void DeleteJunctionFolder(string serverPath, string presetKey)
     {
-        string junctionDir = ModListFolder.Directory(serverPath, presetKey);
+        string junctionDir = Dzmmv2ModListFolder.Directory(serverPath, presetKey);
         if (!_fileSystem.DirectoryExists(junctionDir))
         {
             return;
@@ -323,7 +323,7 @@ public sealed class JunctionService : IJunctionService
         }
     }
 
-    /// <summary>Ensures the preset's ModList junction folder exists, returning false when it cannot be created.</summary>
+    /// <summary>Ensures the preset's DZMMV2_ModList junction folder exists, returning false when it cannot be created.</summary>
     private bool EnsureJunctionDirectory(string junctionDir, string presetKey, List<string> messages, ref int failed)
     {
         if (_fileSystem.DirectoryExists(junctionDir))
@@ -342,7 +342,7 @@ public sealed class JunctionService : IJunctionService
             return false;
         }
 
-        messages.Add($"Mod folder created: {ModListFolder.Name}/{presetKey}");
+        messages.Add($"Mod folder created: {Dzmmv2ModListFolder.Name}/{presetKey}");
         return true;
     }
 

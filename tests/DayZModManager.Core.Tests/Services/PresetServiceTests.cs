@@ -684,7 +684,7 @@ public class PresetServiceTests
         Assert.NotNull(result.Environment);
         Assert.Equal(PresetPaths.DefaultPresetName, result.Environment!.PresetName);
         Assert.Equal(PresetFolder(PresetPaths.DefaultPresetName), result.Environment.PresetFolder);
-        Assert.Equal("1", result.Environment.ModListKey);
+        Assert.Equal("1", result.Environment.JunctionKey);
         Assert.True(fs.FileExists(ConfigPath(PresetPaths.DefaultPresetName)));
     }
 

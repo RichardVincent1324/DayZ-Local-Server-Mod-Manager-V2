@@ -9,7 +9,7 @@ public class JunctionServiceTests
     private const string WorkshopPath = @"D:\DayZ\!Workshop";
     private const string PresetKey = "1";
 
-    private static string ModFolder => Path.Combine(ServerPath, ModListFolder.Name, PresetKey);
+    private static string ModFolder => Path.Combine(ServerPath, Dzmmv2ModListFolder.Name, PresetKey);
 
     private static (JunctionService Service, FakeFileSystem Fs, FakeJunctionOperations Junctions) CreateService()
     {
@@ -94,7 +94,7 @@ public class JunctionServiceTests
     }
 
     [Fact]
-    public void Sync_LeavesRootJunctionsOutsideModListUntouched()
+    public void Sync_LeavesRootJunctionsOutsideDzmmv2ModListUntouched()
     {
         (JunctionService service, FakeFileSystem fs, FakeJunctionOperations junctions) = CreateService();
         fs.AddDirectory(WorkshopPath, "@CF");
@@ -244,7 +244,7 @@ public class JunctionServiceTests
         fs.AddDirectory(WorkshopPath, "@CF");
         fs.AddDirectory(ServerPath);
 
-        string otherFolder = Path.Combine(ServerPath, ModListFolder.Name, "2");
+        string otherFolder = Path.Combine(ServerPath, Dzmmv2ModListFolder.Name, "2");
         fs.AddDirectory(otherFolder, "@CF", "@OtherOnly");
         junctions.Create(Path.Combine(otherFolder, "@CF"), Path.Combine(WorkshopPath, "@CF"));
         junctions.Create(Path.Combine(otherFolder, "@OtherOnly"), Path.Combine(WorkshopPath, "@OtherOnly"));

@@ -95,7 +95,7 @@ public interface IPresetService
 
     /// <summary>
     /// Returns only the blocking instance-ID problems: the same effective ID used
-    /// by more than one preset (their worlds and <c>ModList</c> junctions would be
+    /// by more than one preset (their worlds and <c>DZMMV2_ModList</c> junctions would be
     /// shared). Safe to use in a launch preflight.
     /// </summary>
     IReadOnlyList<string> FindInstanceIdConflicts(string dataDirectory);
@@ -103,7 +103,7 @@ public interface IPresetService
     /// <summary>
     /// Allocates the next free instance ID for <paramref name="mapName"/> as
     /// <c>max(reserved) + 1</c>. Reserved IDs are every preset's ID across every
-    /// map (IDs key the shared <c>ModList</c> junction folder, so they must be
+    /// map (IDs key the shared <c>DZMMV2_ModList</c> junction folder, so they must be
     /// globally unique) plus every live <c>storage_&lt;id&gt;</c> folder already
     /// present in the map's mission folder. Reserving the live storage IDs ensures
     /// a new preset is never bound to a world this tool did not create.
@@ -261,7 +261,7 @@ public sealed class PresetService : IPresetService
             ServerConfig = PresetPaths.RelativeToServer(
                 settings.ServerPath,
                 PresetPaths.ServerConfigPath(dataDirectory, mapName, activePreset)),
-            ModListKey = ModListFolder.PresetKey(ReadInstanceId(lookupDirectory, mapName, activePreset)),
+            JunctionKey = Dzmmv2ModListFolder.PresetKey(ReadInstanceId(lookupDirectory, mapName, activePreset)),
         };
 
         return EnvironmentResolution.Resolved(environment, warnings);
@@ -365,7 +365,7 @@ public sealed class PresetService : IPresetService
                     {
                         issues.Add(
                             $"Instance ID {effectiveId} is used by both {existing} and {label}. " +
-                            "Their worlds and ModList junctions may be shared; make the IDs unique.");
+                            "Their worlds and DZMMV2_ModList junctions may be shared; make the IDs unique.");
                     }
                     else
                     {

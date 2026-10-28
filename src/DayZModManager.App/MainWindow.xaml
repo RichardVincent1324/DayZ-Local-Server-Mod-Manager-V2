@@ -38,7 +38,8 @@
                            FontSize="10" Foreground="#FF9A9A9A" VerticalAlignment="Center"
                            Margin="0,0,5,0" />
 
-                <TextBlock Grid.Column="1" Text="{Binding Name}" Padding="2" VerticalAlignment="Center">
+                <TextBlock Grid.Column="1" Text="{Binding Name}" Padding="2" VerticalAlignment="Center"
+						   TextTrimming="CharacterEllipsis">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Style.Triggers>
@@ -306,6 +307,7 @@
                         <DockPanel Grid.Column="0">
                             <TextBlock DockPanel.Dock="Top" Text="{Binding LoadedCountText}" FontWeight="Bold" Margin="0,0,0,4" />
                             <ListBox x:Name="LoadedListBox" ItemsSource="{Binding LoadedItems}" SelectionMode="Extended"
+									 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ItemContainerStyle="{StaticResource LoadedModListItemStyle}"
                                      beh:ListBoxSelection.SelectedItems="{Binding SelectedLoadedItems}"
                                      beh:MouseDoubleClickBehavior.Command="{Binding UnloadSelectedCommand}"

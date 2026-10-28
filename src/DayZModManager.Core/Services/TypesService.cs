@@ -23,9 +23,10 @@ public sealed record ConfiguredTypeFile(string SourceRelative, string GeneratedL
 /// <summary>
 /// Where a types operation writes its files and economy references. In the
 /// preset-driven model the generated type files live in the preset's own
-/// <see cref="TypeFilesFolder"/> (outside the mission), and
-/// <c>cfgeconomycore.xml</c> in <see cref="MissionPath"/> points at that folder
-/// through <see cref="EconomyFolder"/>.
+/// <see cref="TypeFilesFolder"/> (outside the mission). The managed block in
+/// <c>cfgeconomycore.xml</c> uses the stable mission-local
+/// <see cref="EconomyFolder"/> (<c>db/DZMMV2_Types</c>), which resolves through
+/// an app-managed junction to that preset folder.
 /// </summary>
 public sealed record TypesTarget(string MissionPath, string TypeFilesFolder, string EconomyFolder);
 
@@ -135,11 +136,26 @@ public interface ITypesService
     IReadOnlyList<string> GetManagedTypeFileNames(string missionPath);
 
     /// <summary>
+    /// Returns the managed block's file entries (name and economy type) in
+    /// document order. Empty when none exist.
+    /// </summary>
+    IReadOnlyList<ManagedTypeFileEntry> GetManagedTypeFiles(string missionPath);
+
+    /// <summary>
     /// Returns the active generated type-file leaf names for a map (in the same
     /// order cfgeconomycore.xml references them), considering only the mods in
     /// <paramref name="loadedModNames"/>. Empty when the map has no configuration.
     /// </summary>
     IReadOnlyList<string> GetActiveTypeFileNames(
+        TypesConfig config,
+        IReadOnlySet<string> loadedModNames);
+
+    /// <summary>
+    /// Returns the active generated type-file entries (leaf name and economy type)
+    /// in the order cfgeconomycore.xml references them, considering only the mods
+    /// in <paramref name="loadedModNames"/>.
+    /// </summary>
+    IReadOnlyList<ManagedTypeFileEntry> GetActiveTypeFiles(
         TypesConfig config,
         IReadOnlySet<string> loadedModNames);
 
@@ -565,12 +581,15 @@ public sealed class TypesService : ITypesService
     public IReadOnlyList<string> GetManagedTypeFileNames(string missionPath) =>
         _economyCore.GetTypeFileNames(missionPath);
 
-    /// <summary>Convenience overload targeting the <c>./db/type_files</c> folder.</summary>
+    public IReadOnlyList<ManagedTypeFileEntry> GetManagedTypeFiles(string missionPath) =>
+        _economyCore.GetTypeFileEntries(missionPath);
+
+    /// <summary>Convenience overload targeting the stable mission-local managed folder.</summary>
     public TypesOperationResult SyncEconomyCore(
         TypesConfig config,
         string missionPath,
         IReadOnlySet<string> loadedModNames) =>
-        SyncEconomyCore(config, missionPath, EconomyCoreService.ConfiguredFolder, loadedModNames);
+        SyncEconomyCore(config, missionPath, EconomyCoreService.ManagedFolder, loadedModNames);
 
     public TypesOperationResult RemoveUntrackedFiles(
         TypesConfig config,
@@ -620,6 +639,15 @@ public sealed class TypesService : ITypesService
         IReadOnlySet<string> loadedModNames)
     {
         return GetAllGeneratedFileNames(config, loadedModNames);
+    }
+
+    public IReadOnlyList<ManagedTypeFileEntry> GetActiveTypeFiles(
+        TypesConfig config,
+        IReadOnlySet<string> loadedModNames)
+    {
+        return GetOrderedEconomyFiles(config, loadedModNames)
+            .Select(file => new ManagedTypeFileEntry(file.Leaf, file.Type))
+            .ToList();
     }
 
     public TypesLaunchIssues FindLaunchIssues(

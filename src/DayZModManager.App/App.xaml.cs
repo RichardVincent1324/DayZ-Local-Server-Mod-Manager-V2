@@ -64,6 +64,7 @@ public partial class App : Application
         services.AddSingleton<ILaunchEnvironmentService, LaunchEnvironmentService>();
         services.AddSingleton<IModDiscoveryService, ModDiscoveryService>();
         services.AddSingleton<IJunctionService, JunctionService>();
+        services.AddSingleton<ITypeFileJunctionService, TypeFileJunctionService>();
         services.AddSingleton<IServerConfigService, ServerConfigService>();
         services.AddSingleton<IPresetService, PresetService>();
         services.AddSingleton<IEconomyCoreService, EconomyCoreService>();
@@ -96,6 +97,7 @@ public partial class App : Application
             dataDirectoryProvider,
             sp.GetRequiredService<IPresetService>(),
             sp.GetRequiredService<IJunctionService>(),
+            sp.GetRequiredService<ITypeFileJunctionService>(),
             sp.GetRequiredService<IValidationService>()));
 
         return services.BuildServiceProvider();

@@ -7,13 +7,13 @@ namespace DayZModManager.Core.Services;
 /// every loaded mod. Each preset gets its own subfolder, keyed by the preset's
 /// dedicated <c>instanceId</c>, so switching presets never recreates or deletes
 /// another preset's junctions. The same server-relative path is used in the batch
-/// file's mod list (e.g. <c>ModList/1/@CF</c>), so this type is the single source
+/// file's mod list (e.g. <c>DZMMV2_ModList/1/@CF</c>), so this type is the single source
 /// of truth for both the filesystem layout and the launch script.
 /// </summary>
-public static class ModListFolder
+public static class Dzmmv2ModListFolder
 {
     /// <summary>Root folder, relative to the server root, containing per-preset junction folders.</summary>
-    public const string Name = "ModList";
+    public const string Name = "DZMMV2_ModList";
 
     /// <summary>Returns the preset key used as the junction subfolder name.</summary>
     public static string PresetKey(int instanceId) =>

@@ -330,7 +330,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        // Read the instance ID before deleting: it is the preset's ModList subfolder.
+        // Read the instance ID before deleting: it is the preset's DZMMV2_ModList subfolder.
         int instanceId = _presetService.ReadInstanceId(_dataDirectoryProvider.Current, mapName, preset.Name);
 
         PresetResult result = _presetService.DeletePreset(_dataDirectoryProvider.Current, mapName, preset.Name);
@@ -343,7 +343,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         // Remove the preset's junction folder so no orphaned links are left behind.
         if (!string.IsNullOrWhiteSpace(_serverPath))
         {
-            _junctions.DeleteJunctionFolder(_serverPath, ModListFolder.PresetKey(instanceId));
+            _junctions.DeleteJunctionFolder(_serverPath, Dzmmv2ModListFolder.PresetKey(instanceId));
         }
 
         _log.Success(result.Message);

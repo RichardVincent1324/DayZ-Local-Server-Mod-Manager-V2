@@ -12,7 +12,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 {
     /// <summary>Where the current types operation writes files and economy references.</summary>
     private TypesTarget ActiveTypesTarget(string missionPath) =>
-        new(missionPath, PresetTypeFilesFolder(_typesConfig.CurrentMap), ActiveCeFolderValue(missionPath));
+        new(missionPath, PresetTypeFilesFolder(_typesConfig.CurrentMap), EconomyCoreService.ManagedFolder);
 
     /// <summary>
     /// Warning shown before a types edit when the preset already holds world data:
@@ -98,12 +98,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         ConfigureModCommand.Execute(modName);
     }
 
-    /// <summary>
+	/// <summary>
 	/// Regenerates the manager-owned (marked) type_files block in cfgeconomycore.xml
-	/// for the applied map. The block points at whichever types are active: the
-	/// configured <c>type_files</c>, or the loaded save's own type_files folder. The
-	/// block is fully overwritten, so a preset switch cannot accumulate entries from
-	/// a previously active preset; unmanaged blocks are left untouched.
+	/// for the applied map. The block always points at the stable mission-local
+	/// <c>db/DZMMV2_Types</c> junction, which Apply re-targets to the active
+	/// preset's <c>type_files</c>. The block is fully overwritten, so a preset
+	/// switch cannot accumulate entries from a previously active preset; unmanaged
+	/// blocks are left untouched.
 	/// </summary>
 	public bool SyncEconomyCore()
 	{
@@ -120,7 +121,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 		}
 	
 		TypesOperationResult result = _typesService.SyncEconomyCore(
-			ActiveMapConfig(), missionPath, ActiveCeFolderValue(missionPath), LoadedSet());
+			ActiveMapConfig(), missionPath, EconomyCoreService.ManagedFolder, LoadedSet());
 	
 		foreach (string message in result.Messages)
 		{
@@ -187,21 +188,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         return PresetTypeFilesFolder(_typesConfig.CurrentMap);
-    }
-
-    /// <summary>
-    /// The <c>folder</c> value for the manager-owned cfgeconomycore.xml block: the
-    /// active preset's type_files folder relative to the mission (forward slashes).
-    /// </summary>
-    private string ActiveCeFolderValue(string missionPath)
-    {
-        string? activeFolder = ActiveTypesFolderAbsolute();
-        if (activeFolder is null)
-        {
-            return EconomyCoreService.ConfiguredFolder;
-        }
-
-        return Path.GetRelativePath(missionPath, activeFolder).Replace('\\', '/');
     }
 
     private async void ConfigureMod(string? modName)
@@ -667,9 +653,10 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     /// <summary>
     /// Returns the launch-blocking problems with the active map's types
-    /// configuration: entries whose mod is missing from the Workshop, and generated
+    /// configuration: entries whose mod is missing from the Workshop, generated
     /// files of loaded mods that are absent from the preset's <c>type_files</c>
-    /// folder. Empty when the types configuration is ready to launch.
+    /// folder, and a mission-local type-files junction that is missing or points
+    /// at another preset. Empty when the types configuration is ready to launch.
     /// </summary>
     public IReadOnlyList<string> PreflightTypesIssues()
     {
@@ -701,15 +688,15 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             string? missionPath = ResolveAppliedMapPath();
             if (missionPath is not null)
             {
-                IReadOnlyList<string> expected = _typesService.GetActiveTypeFileNames(
+                IReadOnlyList<ManagedTypeFileEntry> expected = _typesService.GetActiveTypeFiles(
                     _typesConfig, loaded);
-                IReadOnlyList<string> actual = _typesService.GetManagedTypeFileNames(missionPath);
-                string expectedFolder = ActiveCeFolderValue(missionPath);
+                IReadOnlyList<ManagedTypeFileEntry> actual = _typesService.GetManagedTypeFiles(missionPath);
+                string expectedFolder = EconomyCoreService.ManagedFolder;
                 string? actualFolder = _typesService.GetActiveTypesFolder(missionPath);
 
                 if ((expected.Count > 0 || actual.Count > 0)
                     && (!string.Equals(actualFolder, expectedFolder, StringComparison.OrdinalIgnoreCase)
-                        || !expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase)))
+                        || !TypeFileEntriesMatch(expected, actual)))
                 {
                     messages.Add(
                         "cfgeconomycore.xml is not synchronized with the active preset's types. " +
@@ -718,7 +705,49 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
         }
 
+        // The managed CE block always references the stable mission-local folder.
+        // Verify the junction behind it still exposes the active preset's
+        // type_files, so a failed re-target can never launch against another
+        // preset's files.
+        if (!string.IsNullOrWhiteSpace(_serverPath))
+        {
+            string missionPath = MissionTypeFiles.MissionPath(
+                _serverPath, _typesConfig.CurrentMap);
+            string targetFolder = PresetTypeFilesFolder(_typesConfig.CurrentMap);
+            if (!_typeFileJunctions.Verify(missionPath, targetFolder))
+            {
+                messages.Add(
+                    $"The managed type files junction ({MissionTypeFiles.CeFolder}) is missing or does not point at the active preset. " +
+                    "Re-apply the configuration before starting the server.");
+            }
+        }
+
         return messages;
+    }
+
+    /// <summary>
+    /// True when both managed-entry lists reference the same files, in the same
+    /// order, with the same economy type. The stable CE folder no longer signals a
+    /// preset change, so roles must be compared explicitly.
+    /// </summary>
+    private static bool TypeFileEntriesMatch(
+        IReadOnlyList<ManagedTypeFileEntry> expected, IReadOnlyList<ManagedTypeFileEntry> actual)
+    {
+        if (expected.Count != actual.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expected.Count; i++)
+        {
+            if (!string.Equals(expected[i].Name, actual[i].Name, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(expected[i].Type, actual[i].Type, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 

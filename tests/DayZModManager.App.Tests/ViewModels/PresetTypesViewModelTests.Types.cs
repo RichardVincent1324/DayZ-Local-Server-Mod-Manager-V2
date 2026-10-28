@@ -536,6 +536,9 @@ public partial class PresetTypesViewModelTests
 
         Assert.True(vm.SyncEconomyCore());
         Assert.Equal(1, types.SyncEconomyCoreCalls);
+        Assert.Equal(EconomyCoreService.ManagedFolder, types.LastEconomyFolder);
+        Assert.Equal("db/DZMMV2_Types", types.LastEconomyFolder);
+        Assert.DoesNotContain("..", types.LastEconomyFolder);
     }
 
     [Fact]
@@ -565,7 +568,7 @@ public partial class PresetTypesViewModelTests
     public void PreflightTypesIssues_ReportsUnsynchronizedEconomyBlock()
     {
         string missionPath = $@"{ServerPath}\mpmissions\{MapName}";
-        string expectedFolder = Path.GetRelativePath(missionPath, TypeFilesFolderPath()).Replace('\\', '/');
+        string expectedFolder = EconomyCoreService.ManagedFolder;
         var types = new FakeTypesService
         {
             ActiveTypesFolder = expectedFolder,
@@ -584,7 +587,7 @@ public partial class PresetTypesViewModelTests
     public void PreflightTypesIssues_DoesNotReport_WhenEconomyBlockMatches()
     {
         string missionPath = $@"{ServerPath}\mpmissions\{MapName}";
-        string expectedFolder = Path.GetRelativePath(missionPath, TypeFilesFolderPath()).Replace('\\', '/');
+        string expectedFolder = EconomyCoreService.ManagedFolder;
         var types = new FakeTypesService
         {
             ActiveTypesFolder = expectedFolder,
@@ -596,6 +599,49 @@ public partial class PresetTypesViewModelTests
 
         Assert.DoesNotContain(
             vm.PreflightTypesIssues(), i => i.Contains("cfgeconomycore.xml is not synchronized"));
+    }
+
+    [Fact]
+    public void PreflightTypesIssues_ReportsMismatchedFileRole_EvenWhenNamesMatch()
+    {
+        var types = new FakeTypesService
+        {
+            ActiveTypesFolder = EconomyCoreService.ManagedFolder,
+            ActiveTypeFileEntries = new[]
+            {
+                new ManagedTypeFileEntry("CF_types.xml", "spawnabletypes"),
+            },
+            ManagedTypeFileEntries = new[]
+            {
+                new ManagedTypeFileEntry("CF_types.xml", "types"),
+            },
+        };
+        PresetTypesViewModel vm = Create(AppliedConfig(), typesService: types);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        IReadOnlyList<string> issues = vm.PreflightTypesIssues();
+
+        Assert.Contains(issues, i => i.Contains("cfgeconomycore.xml is not synchronized"));
+    }
+
+    [Fact]
+    public void PreflightTypesIssues_ReportsUnsynchronizedTypeFilesJunction()
+    {
+        var types = new FakeTypesService
+        {
+            ActiveTypesFolder = EconomyCoreService.ManagedFolder,
+        };
+        var junctions = new FakeTypeFileJunctionService { VerifyResult = false };
+        PresetTypesViewModel vm = Create(
+            AppliedConfig(), typesService: types, typeFileJunctionService: junctions);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        IReadOnlyList<string> issues = vm.PreflightTypesIssues();
+
+        Assert.Contains(issues, i => i.Contains("managed type files junction"));
+        Assert.Equal(1, junctions.VerifyCalls);
+        Assert.Equal(Path.Combine(ServerPath, "mpmissions", MapName), junctions.LastMissionPath);
+        Assert.Equal(TypeFilesFolderPath(), junctions.LastTargetFolder);
     }
 }
 

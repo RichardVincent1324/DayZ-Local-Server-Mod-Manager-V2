@@ -27,6 +27,7 @@ public partial class PresetTypesViewModelTests
         FakeProcessLauncher? processLauncher = null,
         FakePresetService? presetService = null,
         IJunctionService? junctionService = null,
+        FakeTypeFileJunctionService? typeFileJunctionService = null,
         LogViewModel? log = null)
     {
         mapService ??= new FakeMapService(new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"));
@@ -40,6 +41,7 @@ public partial class PresetTypesViewModelTests
         processLauncher ??= new FakeProcessLauncher();
         presetService ??= new FakePresetService();
         junctionService ??= new FakeJunctionService();
+        typeFileJunctionService ??= new FakeTypeFileJunctionService();
 
         return new PresetTypesViewModel(
             mapService,
@@ -56,6 +58,7 @@ public partial class PresetTypesViewModelTests
             processLauncher,
             presetService,
             junctionService,
+            typeFileJunctionService,
             new LaunchEnvironmentService(batchFileService));
     }
 
@@ -263,12 +266,27 @@ public partial class PresetTypesViewModelTests
 
         public IReadOnlyList<string> ActiveTypeFiles { get; set; } = Array.Empty<string>();
 
+        public IReadOnlyList<ManagedTypeFileEntry> ActiveTypeFileEntries { get; set; } = Array.Empty<ManagedTypeFileEntry>();
+
         public IReadOnlyList<string> GetActiveTypeFileNames(
             TypesConfig config, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
 
+        public IReadOnlyList<ManagedTypeFileEntry> GetActiveTypeFiles(
+            TypesConfig config, IReadOnlySet<string> loadedModNames) =>
+            ActiveTypeFileEntries.Count > 0
+                ? ActiveTypeFileEntries
+                : ActiveTypeFiles.Select(name => new ManagedTypeFileEntry(name, TypesFileRoles.Types)).ToList();
+
         public IReadOnlyList<string> ManagedTypeFileNames { get; set; } = Array.Empty<string>();
 
+        public IReadOnlyList<ManagedTypeFileEntry> ManagedTypeFileEntries { get; set; } = Array.Empty<ManagedTypeFileEntry>();
+
         public IReadOnlyList<string> GetManagedTypeFileNames(string missionPath) => ManagedTypeFileNames;
+
+        public IReadOnlyList<ManagedTypeFileEntry> GetManagedTypeFiles(string missionPath) =>
+            ManagedTypeFileEntries.Count > 0
+                ? ManagedTypeFileEntries
+                : ManagedTypeFileNames.Select(name => new ManagedTypeFileEntry(name, TypesFileRoles.Types)).ToList();
 
         public TypesLaunchIssues LaunchIssues { get; set; } = new(Array.Empty<string>(), Array.Empty<string>());
 
@@ -508,7 +526,7 @@ public partial class PresetTypesViewModelTests
                     settings.ServerPath, PresetPaths.ProfilesFolder(dataDirectory, mapName, active)),
                 ServerConfig = PresetPaths.RelativeToServer(
                     settings.ServerPath, PresetPaths.ServerConfigPath(dataDirectory, mapName, active)),
-                ModListKey = ModListFolder.PresetKey(ReadInstanceId(lookup, mapName, active)),
+                JunctionKey = Dzmmv2ModListFolder.PresetKey(ReadInstanceId(lookup, mapName, active)),
             });
         }
 
@@ -603,6 +621,31 @@ public partial class PresetTypesViewModelTests
 
         public void DeleteJunctionFolder(string serverPath, string presetKey) =>
             DeletedFolders.Add((serverPath, presetKey));
+    }
+
+    private sealed class FakeTypeFileJunctionService : ITypeFileJunctionService
+    {
+        public bool VerifyResult { get; set; } = true;
+
+        public int VerifyCalls { get; private set; }
+
+        public string? LastMissionPath { get; private set; }
+
+        public string? LastTargetFolder { get; private set; }
+
+        public JunctionSyncResult Prepare(string missionPath, string targetFolder) => new();
+
+        public JunctionSyncResult Finalize(string missionPath, string targetFolder) => new();
+
+        public JunctionSyncResult Sync(string missionPath, string targetFolder) => new();
+
+        public bool Verify(string missionPath, string targetFolder)
+        {
+            VerifyCalls++;
+            LastMissionPath = missionPath;
+            LastTargetFolder = targetFolder;
+            return VerifyResult;
+        }
     }
 
     private sealed class FakeFileSystem : IFileSystem

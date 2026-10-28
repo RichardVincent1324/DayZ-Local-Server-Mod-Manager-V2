@@ -46,7 +46,7 @@ public sealed class LaunchEnvironmentService : ILaunchEnvironmentService
         // pointing at mods that are no longer configured.
         IReadOnlyList<string> modPaths = environment is null
             ? Array.Empty<string>()
-            : loadedMods.Select(mod => ModListFolder.Entry(environment.ModListKey, mod)).ToList();
+            : loadedMods.Select(mod => Dzmmv2ModListFolder.Entry(environment.JunctionKey, mod)).ToList();
 
         if (!_batchFile.WriteModList(settings.BatFilePath, modPaths))
         {

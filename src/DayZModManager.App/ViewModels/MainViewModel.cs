@@ -52,6 +52,7 @@ public sealed class MainViewModel : ViewModelBase
         IDataDirectoryProvider dataDirectoryProvider,
         IPresetService presetService,
         IJunctionService junctions,
+        ITypeFileJunctionService typeFileJunctions,
         IValidationService validation)
     {
         _settingsService = settingsService;
@@ -167,7 +168,7 @@ public sealed class MainViewModel : ViewModelBase
         PresetTypes = new PresetTypesViewModel(
             mapService, typesService, saveGameService, typesConfigStore, serverConfigService,
             fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher,
-            presetService, _junctions, launchEnvironment)
+            presetService, _junctions, typeFileJunctions, launchEnvironment)
         {
             ActivePresetName = activePreset,
         };
@@ -241,7 +242,7 @@ public sealed class MainViewModel : ViewModelBase
                 _dialogs.ShowWarning(
                     "Preset instance IDs are not unique or do not match their serverDZ.cfg.",
                     "Preset instance ID problem",
-                    "Worlds or ModList junctions may be shared. Fix the affected presets before starting the server.",
+                    "Worlds or DZMMV2_ModList junctions may be shared. Fix the affected presets before starting the server.",
                     string.Join(Environment.NewLine, instanceIdIssues));
             }
 

@@ -8,11 +8,11 @@ public class BatchFileServiceTests
     private const string BatPath = @"D:\DayZServer\LocalServer.example.bat";
 
     private static IReadOnlyList<string> ModPaths(int count) =>
-        Enumerable.Range(1, count).Select(i => $"ModList/@E{i}").ToList();
+        Enumerable.Range(1, count).Select(i => $"DZMMV2_ModList/@E{i}").ToList();
 
     private static string JoinEntries(int from, int count)
     {
-        IEnumerable<string> entries = Enumerable.Range(from, count).Select(i => $"ModList/@E{i}");
+        IEnumerable<string> entries = Enumerable.Range(from, count).Select(i => $"DZMMV2_ModList/@E{i}");
         return string.Join(';', entries);
     }
 

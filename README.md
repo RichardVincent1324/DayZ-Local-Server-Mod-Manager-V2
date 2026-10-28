@@ -230,12 +230,12 @@ A small circular indicator in the bottom-right corner of the main window stays v
 - The indicator checks only the active preset's own storage folder. Orphaned `storage_<id>` folders shown in **Progress Saves** never affect it.
 - It updates automatically when switching presets or maps, applying configuration, or performing save / wipe world actions.
 
-### 7. Important limitation: Partial mod-configuration isolation
+### 7. Important limitation: Incomplete mod-configuration isolation
 
 Although presets isolate most server state, including `profiles`, `type_files`, mod junctions, preset-specific `serverDZ.cfg`, and per-preset world storage, **V2 cannot provide complete environment isolation for every possible mod**.
 
 Some mods write runtime‑generated configuration or data folders **outside the preset‑owned `profiles` directory**.
-A common example is `DayZ‑Expansion‑AI`, which maintains a separate set of configuration files here:
+A common example is `DayZ-Expansion-AI`, which maintains a separate set of configuration files here:
 ```
 mpmissions\<mapName>\expansion
 ```
@@ -248,14 +248,31 @@ This is intentional: automatically handling arbitrary mod-specific external dire
 Mods that keep all their configuration within the `profiles` folder are isolated as expected.
 If you use mods that write data outside `profiles`, you must manually back up, manage, or swap those external folders when using multiple presets on the same map.
 
-### 8. Optional: Remove BattlEye for local‑only gameplay
-Since V2 is built exclusively for private local single‑player servers, **the BattlEye anti‑cheat provides no benefit for this use‑case**. It only introduces unwanted background CPU and I/O performance overhead.
+### 8. Optional: Remove BattlEye for local-only gameplay
+Since V2 is built exclusively for private local single‑player servers, **the BattlEye anti‑cheat provides no benefit for this use case**. It only introduces unwanted background CPU and I/O performance overhead.
 
-You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch your `DayZServer_x64.exe` and bypass BattlEye:
+You can use the community tool **DayZ-Server-Battleye-Remover** to patch your `DayZServer_x64.exe` and bypass BattlEye:
 > https://github.com/JonathanEke/DayZ-Server-Battleye-Remover
 
 > [!CAUTION]
 > This executable patch is **for offline local private use only**. Never run this modified binary on any publicly reachable server. This is an external third‑party tool and is not maintained by this project; please report any bugs or problems to its original GitHub repository.
+
+### 9. Server‑side mod loading (-serverMod=) is not managed
+This tool focuses on managing the `-mod=` parameter and full preset environments, which has covered most of mod use cases for local single‑player / PvE gameplay.
+
+`-serverMod=` (server‑side‑only mod loading) has very few practical use‑cases in local solo play, and the maintenance overhead far outweighs the benefit. Consistent with the limitation described in point 7 above, this tool does **not** aim to support every possible mod‑loading scenario.
+
+**For advanced users who require `-serverMod=`:**
+> Important note: DZMMV2 will **not create directory junctions** for mods added to `-serverMod=`. Mods here cannot reference files inside Steam’s `!Workshop` folder. Physical copies of mod folders must reside directly inside your DayZServer root directory. This batch‑file variable will never be overwritten or modified by the Mod Manager during Apply or preset switching.
+
+Manual setup steps:
+1. Find your target server‑only mod folder (folder starting with `@`) inside Steam’s `!Workshop` directory. Copy the **complete physical mod folder** into your `DayZServer` root folder. Junctions / symbolic links will **not function correctly** here.
+2. Open your launch `.bat` file and populate the `serverMod` variable with your mod names. Separate multiple mods using semicolons `;`.
+
+Example batch configuration:
+```bat
+set "serverMod=-serverMod=@MyServerMod;@AnotherServerOnlyMod"
+```
 
 ---
 
@@ -274,8 +291,22 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 
 ### Junctions and batch-file management
 
-- Loaded mods are exposed to the server as Windows directory junctions inside a per-preset subfolder of the `ModList` folder (for example `ModList\1\@CF`, keyed by the preset's `instanceId`), so switching presets never recreates or deletes another preset's junctions.
-- Uses server-root-relative mod paths, such as `ModList/1/@CF`.
+- Loaded mods are exposed to the server as Windows directory junctions inside a per-preset subfolder of the `DZMMV2_ModList` folder (for example `DZMMV2_ModList\1\@CF`, keyed by the preset's `instanceId`), so switching presets never recreates or deletes another preset's junctions.
+- Uses server-root-relative mod paths, such as `DZMMV2_ModList/1/@CF`.
+
+```
+📂 DZMMV2_ModList/
+├── 📂 1/                    → Junction folder for preset with instanceId 1
+│   ├── 🔗 @CF               → Junction → Steam Workshop\...
+│   └── 🔗 @AnotherMod       → Junction → Steam Workshop\...
+│
+├── 📂 2/                    → Junction folder for preset with instanceId 2
+│   ├── 🔗 @CF
+│   └── ...
+│
+└── 📂 3/ ...
+```
+
 - Rewrites the batch file's manager-owned `modList` block when applying changes.
 - Splits large mod lists across multiple valid `cmd` lines (ten entries per line) instead of using one unwieldy command line.
 - Reconciles existing managed junctions during Apply.
@@ -288,7 +319,9 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 - Discover maps from the server's `mpmissions` directory (mission folders that contain `cfgeconomycore.xml`).
 - Switch the active map via the dropdown list.
 - Update the active mission `template` (DayZ uses the keyword `template` to store the map name) in the active preset's `serverDZ.cfg`.
+
 <img width="70%" alt="Steam installations" src="./assets/switch_map_template_line.png" />
+
 - Update the batch file's `serverProfile` and `serverConfig` lines to point at the active preset's `profiles` folder and `serverDZ.cfg`.
 
 #### Type-file discovery and role assignment
@@ -300,13 +333,23 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 - Store each file's role in `types_config.json`; the role drives the `type` attribute and, within each mod, the types-before-spawnabletypes ordering in `cfgeconomycore.xml`.
 - The types grid shows **Mod Name**, **Configured File**, and **File Type** (`type` or `spawnable`), so the assigned role is visible at a glance.
 
-#### Loot-economy integration
 
+#### Loot‑economy integration
 - Insert a managed CE block into `cfgeconomycore.xml` between `<economycore>` and `<classes>`.
-- Update the CE block's folder path to point to the correct `type_files` folder when switching presets or maps.
-- V2 owns its `<ce>` block outright: it marks the block it manages with `dzmmv2-managed-by="DayZ-Mod-Manager-V2"` and fully rewrites that block's `<file>` entries (and its `folder` attribute) whenever it syncs the economy (Apply, map switch, preset switch and types edits). The `<ce>` element and its marker are always kept, even when the block becomes empty.
+- The CE block uses a **stable folder path**: `db/DZMMV2_Types`.
+  Each mission has a Windows directory junction at `mpmissions/<mapName>/db/DZMMV2_Types` pointing to the active preset's `type_files` folder.
+  When switching presets, V2 retargets that mission's junction; when switching maps, it synchronizes the junction in the newly active mission. **The `folder` attribute inside `<ce>` remains `db/DZMMV2_Types` on every sync.** No type-file copies are written under `mpmissions`.
+- `db/DZMMV2_Types` is a junction, not a physical copy of the folder.
+- Any edits you make to XML files through this path (for example, with VPP Admin Tool) modify the source files in the active preset's `type_files` directory.
+- Do not manually rename, delete, or modify `DZMMV2_Types`; V2 manages its lifecycle during Apply. Save/load and wipe-world operations do not retarget the junction. If it becomes broken or out of sync, run Apply again to repair it.
+- If you manually remove V2's data directory, a broken junction may remain under `db/`. The junction itself contains no type-file data; if cleanup is needed, remove only the junction, not anything at its target.
+
+- V2 manages its own `<ce>` block: it marks the block with `dzmmv2-managed-by="DayZ-Local-Server-Mod-Manager-V2"` and rewrites only that block's `<file>` entries during Apply, map or preset switches, and type-file edits. The `<ce>` element and its marker remain even when the block is empty.
+
 <img width="80%" alt="Steam installations" src="./assets/cfgcore_ce_block.png" />
+
 - V2 leaves every other `<ce>` block untouched, including legacy V2's `./db/ModTypes` block and blocks written by other tools. Entries V2 does not own are never modified.
+
 
 #### Type-file maintenance
 
@@ -316,7 +359,7 @@ You can use the community tool **DayZ‑Server‑Battleye‑Remover** to patch y
 - Warn before types edits when the preset already has a saved world (or a live world), because DayZ only reads these files when a new world is created; edits only affect future spawns and newly created saves.
 - Open the active preset's `type_files` folder, or its `profiles` folder, directly in File Explorer from the buttons beside **Types Config** and **Current Map**.
 
-> **Upgrading from an older V2 release:** the `<ce>` block written by older versions has no marker, so V2 cannot tell it apart from a block it is expected to leave alone. It is treated as unmanaged: V2 leaves it in place and creates a new marked block alongside it. DayZ loads the `<file>` entries of every `<ce>` block, so the old block's entries may be duplicated until you remove it manually. Remove any unmarked `<ce>` block that references the V2 `type_files` folder; V2 logs a warning when it detects one. There is no automatic migration.
+> **Upgrading from an older V2 release:** the `<ce>` block written by older versions has no marker, so V2 cannot distinguish it from a block it should leave untouched. It is treated as unmanaged: V2 leaves it in place and creates a new marked block alongside it. DayZ loads the `<file>` entries of every `<ce>` block, so the old block's entries may be duplicated until you remove it manually. Remove any unmarked `<ce>` block that references the V2 `type_files` folder; V2 logs a warning when it detects one. There is no automatic migration.
 
 ### Presets and progress saves
 
@@ -331,7 +374,7 @@ V2 is **preset-driven**: a *preset* is one complete, independent DayZ server env
 - A preset's `serverDZ.cfg` is seeded by copying an existing config and rewriting only its `template` (the map) and `instanceId`:
   - a duplicated preset copies its source preset's `serverDZ.cfg`; if that file is missing, duplicating fails;
   - a named preset copies its map's `__default_preset__\serverDZ.cfg`; if that file is missing, adding the preset fails;
-  - `__default_preset__` copies `<serverPath>\serverDZ.cfg`. If the root config has a valid `instanceId` that **no preset uses yet**, the default preset adopts that ID, which attaches the map's existing `storage_<id>` world when it exists. If the ID is already used by another preset, V2 allocates a fresh ID, logs a warning, and does not attach that world. Because instance IDs key the shared `ModList` folder, only one preset can use the root ID.
+  - `__default_preset__` copies `<serverPath>\serverDZ.cfg`. If the root config has a valid `instanceId` that **no preset uses yet**, the default preset adopts that ID, which attaches the map's existing `storage_<id>` world when it exists. If the ID is already used by another preset, V2 allocates a fresh ID, logs a warning, and does not attach that world. Because instance IDs key the shared `DZMMV2_ModList` folder, only one preset can use the root ID.
 - Seeding only happens when a preset is first created. If an existing preset's `serverDZ.cfg` is later deleted, V2 does **not** re-seed it; it reports the missing file and leaves the preset unusable until you restore it. A missing `preset-meta.json` is rebuilt automatically **only for `__default_preset__`**, preserving its `instanceId`; a named preset missing its metadata is reported as incomplete. To recreate the default preset, delete its `__default_preset__` folder; V2 regenerates it on the next map apply.
 
 #### World and save management
@@ -341,7 +384,7 @@ V2 is **preset-driven**: a *preset* is one complete, independent DayZ server env
 - Loading a save restores only the world state; the preset's mods, types and profiles are unchanged.
 - Wipe the world to delete the preset's live storage folder so the map starts fresh on the next launch. It also turns the live-world indicator gray.
 - The save list also shows live `storage_<id>` folders that no preset owns as `(orphaned)`; these may come from a deleted preset or from before V2 managed the server, and can be deleted from the list.
-- Deleting a preset removes its folder (configuration, profiles and stored saves) and its `ModList` junction folder, but **does not delete its LIVE world** `storage_<instanceId>`; that world then appears as `(orphaned)` storage and can be deleted separately.
+- Deleting a preset removes its folder (configuration, profiles and stored saves) and its `DZMMV2_ModList` junction folder, but **does not delete its LIVE world** `storage_<instanceId>`; that world then appears as `(orphaned)` storage and can be deleted separately.
 - Save / Load / Wipe / Rename Save, and preset switch / rename / delete, are blocked while the DayZ Server process is running.
 - Loading a save replaces the live storage folder with the save's copy.
 
@@ -408,7 +451,7 @@ To remove an old V2 installation:
 4. Delete the `DayZServer\DayZ-Mod-Manager-V2`, `ModList` and `%LOCALAPPDATA%\DayZ-Mod-Manager-V2` directories.
 
 
-Deleting the `ModList` folder removes junctions, not the Workshop mods they point to. Make sure you delete the junction folder itself rather than deleting through a junction.
+Deleting the `DZMMV2_ModList` folder removes junctions, not the Workshop mods they point to. Make sure you delete the junction folder itself rather than deleting through a junction.
 
 Older or custom batch templates must contain all three `set` lines (`modList`, `serverProfile`, `serverConfig`). A template missing any line is rejected.
 
@@ -467,20 +510,22 @@ A configured server may have a layout similar to this:
 │           ├─ profiles\
 │           └─ saves\
 ├─ LocalServer.bat
-├─ ModList\
+├─ DZMMV2_ModList\
 │  ├─ 1\                    -> junction folder for preset with instanceId 1
-│  │  ├─ @CF                -> junction to Workshop mod
-│  │  └─ @AnotherMod        -> junction to Workshop mod
+│  │  ├─ @CF                -> junction pointing to Workshop mod
+│  │  └─ @AnotherMod        -> junction pointing to Workshop mod
 │  └─ 2\                    -> junction folder for another preset
 │     └─ ...
 ├─ mpmissions\
 │  └─ <mapName>\
 │     ├─ cfgeconomycore.xml
+│     ├─ db\
+│     │  └─ DZMMV2_Types    -> junction pointing to the active preset's type_files
 │     └─ storage_<instanceId>\
 └─ DayZServer_x64.exe
 ```
 
-The launch batch file's `modList`, `serverProfile`, and `serverConfig` lines point to the active preset (its `profiles` folder and `serverDZ.cfg`), while the marked `<ce>` block in `cfgeconomycore.xml` references that preset's `type_files` folder.
+The launch batch file's `modList`, `serverProfile`, and `serverConfig` lines point to the active preset (its `profiles` folder and `serverDZ.cfg`). The marked `<ce>` block in `cfgeconomycore.xml` uses the stable mission-local folder `db/DZMMV2_Types`; the junction at that path is re-pointed to the active preset's `type_files` folder when the preset changes, so no type files are copied into the mission.
 
 ---
 
@@ -491,6 +536,7 @@ V2 is designed to reduce accidental damage to your local server setup:
 - Apply validates the environment before committing the configuration.
 - Junction preparation happens before destructive cleanup.
 - A failed batch-file write does not remove junctions still referenced by the existing launcher configuration.
+- Before launch, V2 verifies that the mission-local type-files junction points to the active preset; a missing or mismatched junction blocks launch until Apply is run again.
 - A failed save/load copy reports an error. Note that loading a save deletes the live world before copying the stored one, so a failure partway through can leave the live world partially restored — keep backups of important worlds.
 - Save / Load / Wipe World operations (and preset switch / rename / delete) are blocked while the DayZ Server process is running.
 - Types configuration asks before overwriting or deleting managed files.
@@ -588,7 +634,7 @@ V2 is a complete rewrite, not just a visual refresh.
 | PowerShell | C# / .NET 8 |
 | PowerShell GUI | WPF / MVVM |
 | Script-oriented architecture | Structured application architecture |
-| Root-level mod junction workflow | Dedicated `ModList` junction folder |
+| Root-level mod junction workflow | Dedicated `DZMMV2_ModList` junction folder |
 | Basic mod/types workflow | Integrated map, types, untracked-file and safety handling |
 | Lack of save management | Named progress saves with metadata and world snapshots |
 | Limited testability | Dedicated Core/App test projects |
@@ -624,7 +670,7 @@ Check that:
 - The Workshop path points to the folder containing your `@...` mods.
 - The desired mods are in the Loaded list.
 - Apply completed successfully.
-- The generated `ModList\<instanceId>` junctions exist.
+- The generated `DZMMV2_ModList\<instanceId>` junctions exist.
 - The selected batch file contains the V2-managed mod list.
 - `verifySignatures = 0;` is configured for the intended local/solo workflow.
 

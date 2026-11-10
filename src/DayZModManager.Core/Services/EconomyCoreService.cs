@@ -12,7 +12,7 @@ public sealed record ManagedTypeFileEntry(string Name, string Type);
 public sealed record EconomyCoreUpdateResult(
     bool Success,
     IReadOnlyList<string> Warnings,
-    bool UnmanagedLegacyBlockDetected = false)
+    bool UnmanagedV2CeBlockDetected = false)
 {
     public static EconomyCoreUpdateResult Ok(params string[] warnings) => new(true, warnings);
 
@@ -41,8 +41,9 @@ public interface IEconomyCoreService
     /// the app-managed junction to the active preset's <c>type_files</c>. The
     /// block's children are fully replaced; the element, its marker and its
     /// <c>folder</c> are preserved. When no marked block exists, a new one is
-    /// created; an existing unmarked <c>ce</c> block is left untouched and
-    /// reported as a warning. <paramref name="fileTypes"/> assigns each desired
+    /// created. Every call also detects unmarked V2-related <c>ce</c> blocks and
+    /// reports them through <see cref="EconomyCoreUpdateResult.UnmanagedV2CeBlockDetected"/>;
+    /// those blocks are never modified. <paramref name="fileTypes"/> assigns each desired
     /// leaf its economy type (keyed case-insensitively); a missing entry is treated
     /// as a types file.
     /// </summary>
@@ -51,6 +52,15 @@ public interface IEconomyCoreService
         string folder,
         IReadOnlyList<string> desiredFileNames,
         IReadOnlyDictionary<string, string> fileTypes);
+
+    /// <summary>
+    /// Returns true when <c>cfgeconomycore.xml</c> contains an unmarked
+    /// <c>&lt;ce&gt;</c> block that points at either the released legacy V2 folder
+    /// (<c>./db/ModTypes</c>) or the current managed folder
+    /// (<see cref="EconomyCoreService.ManagedFolder"/>). Marked blocks and unrelated
+    /// folders are ignored.
+    /// </summary>
+    bool HasUnmanagedV2CeBlock(string missionPath);
 
     /// <summary>
     /// Returns the <c>folder</c> value of the manager-owned (marked) type_files
@@ -89,6 +99,25 @@ public sealed class EconomyCoreService : IEconomyCoreService
     /// </summary>
     public const string ManagedFolder = MissionTypeFiles.CeFolder;
 
+    /// <summary>The folder value written by every released legacy V2 (2.0.x).</summary>
+    public const string LegacyModTypesFolder = "./db/ModTypes";
+
+    /// <summary>
+    /// Normalized folder values that identify an unmarked V2-related CE block.
+    /// This is the legacy 2.0.x path and the current managed folder.
+    /// </summary>
+    private static readonly string[] UnmanagedV2CeFolders =
+    {
+        NormalizeFolder(LegacyModTypesFolder),
+        NormalizeFolder(ManagedFolder),
+    };
+
+    /// <summary>Single warning emitted for every unmarked V2-related CE block.</summary>
+    public const string UnmanagedV2CeBlockWarning =
+        "WARNING: Found an unmarked V2-related <ce> block in cfgeconomycore.xml. " +
+        "DayZ loads all <ce> blocks, so duplicate type files may be referenced. " +
+        "Please manually remove the unmarked block; it will not be modified automatically.";
+
     /// <summary>Attribute marking a <c>&lt;ce&gt;</c> block as fully owned by this manager.</summary>
     public const string ManagerMarkerAttribute = "dzmmv2-managed-by";
 
@@ -123,31 +152,30 @@ public sealed class EconomyCoreService : IEconomyCoreService
         XElement? classes = doc.Root.Descendants("classes").FirstOrDefault();
         (string newline, string indent) = DetectFormatting(classes);
 
+        bool unmanagedV2CeBlock = ContainsUnmanagedV2CeBlock(doc.Root);
+
         XElement? managed = doc.Root.Descendants("ce").FirstOrDefault(IsManagedCe);
         bool changed;
-        bool unmanagedLegacyBlock = false;
         if (managed is not null)
         {
             changed = RewriteManagedBlock(managed, folder, desired, newline, indent, fileTypes);
         }
         else
         {
-            // Legacy or third-party block: never touch it. Warn only when it looks
-            // like an older V2 block (a base-game "./db/type_files" block is not).
-            unmanagedLegacyBlock = doc.Root.Descendants("ce").Any(LooksLikeLegacyManagerBlock);
-            if (unmanagedLegacyBlock)
-            {
-                warnings.Add(
-                    "WARNING: Found existing unmanaged <ce> block. Will create a brand-new V2-managed <ce> block. " +
-                    "Please manually remove or migrate the old <ce> entry inside cfgeconomycore.xml.");
-            }
-
+            // Unmarked blocks are never modified; the new marked block is created
+            // alongside them. Detection above reports the duplicate risk.
             InsertCe(doc, BuildCe(desired, folder, newline, indent, fileTypes), classes, newline, indent);
             changed = true;
         }
 
         bool success = !changed || SaveEconomyCore(missionPath, doc);
-        return new EconomyCoreUpdateResult(success, warnings, unmanagedLegacyBlock);
+        return new EconomyCoreUpdateResult(success, warnings, unmanagedV2CeBlock);
+    }
+
+    public bool HasUnmanagedV2CeBlock(string missionPath)
+    {
+        XDocument? doc = LoadEconomyCore(missionPath);
+        return doc?.Root is not null && ContainsUnmanagedV2CeBlock(doc.Root);
     }
 
     public string? GetTypeFilesFolder(string missionPath)
@@ -274,21 +302,43 @@ public sealed class EconomyCoreService : IEconomyCoreService
         string.Equals((string?)ce.Attribute(ManagerMarkerAttribute), ManagerMarkerValue, StringComparison.Ordinal);
 
     /// <summary>
-    /// True when an unmarked block looks like an older V2 block (its folder points
-    /// into the manager's data directory). The base-game <c>./db/type_files</c>
-    /// block does not match, so a fresh install never warns.
+    /// True when the document contains an unmarked <c>ce</c> block whose folder is
+    /// either the released legacy V2 path or the current managed folder. Base-game
+    /// and unrelated third-party folders do not match.
     /// </summary>
-    private static bool LooksLikeLegacyManagerBlock(XElement ce)
+    private static bool ContainsUnmanagedV2CeBlock(XElement root) =>
+        root.Descendants("ce").Any(IsUnmanagedV2CeBlock);
+
+    private static bool IsUnmanagedV2CeBlock(XElement ce)
     {
+        if (IsManagedCe(ce))
+        {
+            return false;
+        }
+
         string? folder = (string?)ce.Attribute("folder");
         if (string.IsNullOrWhiteSpace(folder))
         {
             return false;
         }
 
+        string normalized = NormalizeFolder(folder);
+        return UnmanagedV2CeFolders.Contains(normalized, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Normalizes a CE <c>folder</c> value for comparison: forward slashes, no
+    /// leading <c>./</c> segments, no trailing separator.
+    /// </summary>
+    private static string NormalizeFolder(string folder)
+    {
         string normalized = folder.Trim().Replace('\\', '/');
-        return normalized.EndsWith("/type_files", StringComparison.OrdinalIgnoreCase)
-            && normalized.Contains("DayZ-Mod-Manager-V2", StringComparison.OrdinalIgnoreCase);
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalized = normalized[2..];
+        }
+
+        return normalized.TrimEnd('/');
     }
 
     /// <summary>Reads and parses cfgeconomycore.xml, or null when missing/malformed.</summary>

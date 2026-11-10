@@ -3,7 +3,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DayZModManager.App.ViewModels"
         xmlns:beh="clr-namespace:DayZModManager.App.Behaviors"
-        Title="DayZ Mod Manager v2.1.0"
         Icon="Resources/app.ico"
         Height="700" Width="1020"
         MinHeight="520" MinWidth="760"
@@ -152,6 +151,11 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBox}, Path=(beh:ListBoxDragDropReorder.IsDragActive)}" Value="True">
+                    <Setter Property="IsHitTestVisible" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
 
         <!-- Loaded-list rows stretch so the load-order number can right-align. -->
@@ -365,7 +369,6 @@
                             <TextBlock Text="Current Map:" VerticalAlignment="Center" Margin="0,0,5,0" Width="80" />
                             <ComboBox ItemsSource="{Binding MapNames}" SelectedItem="{Binding SelectedMap}" Width="280"
                                       VerticalAlignment="Center"
-									  ScrollViewer.CanContentScroll="False"
                                       MaxDropDownHeight="300" />
                             <Button Style="{StaticResource FolderIconButtonStyle}"
                                     Content="&#xE8B7;"
@@ -380,7 +383,6 @@
                             <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}"
                                       DisplayMemberPath="DisplayName" Width="240"
                                       VerticalAlignment="Center"
-									  ScrollViewer.CanContentScroll="False"
                                       MaxDropDownHeight="300" />
                         </StackPanel>
                     </DockPanel>
@@ -392,7 +394,6 @@
                             <Grid Width="280" VerticalAlignment="Center">
                                 <ComboBox ItemsSource="{Binding ModNames}" SelectedItem="{Binding SelectedMod}"
                                           VerticalAlignment="Center"
-										  ScrollViewer.CanContentScroll="False"
                                           MaxDropDownHeight="300" />
                                 <TextBlock Text="Select the mod to be configured"
                                            IsHitTestVisible="False" Foreground="Gray"
@@ -436,6 +437,7 @@
                         <DataGrid Grid.Column="0" Margin="0,0,8,0" ItemsSource="{Binding TypesRows}"
                                   AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
                                   CanUserSortColumns="False"
+								  CanUserResizeColumns="False"
                                   SelectionMode="Extended" HeadersVisibility="Column"
                                   HorizontalGridLinesBrush="#FFECECEC" VerticalGridLinesBrush="#FFECECEC"
                                   beh:DataGridSelection.SelectedItems="{Binding SelectedTypesRows}">
@@ -469,6 +471,7 @@
                                   SelectedItem="{Binding SelectedSave}"
                                   AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
                                   CanUserSortColumns="False"
+								  CanUserResizeColumns="False"
                                   SelectionMode="Single" SelectionUnit="FullRow" HeadersVisibility="Column"
                                   HorizontalGridLinesBrush="#FFECECEC" VerticalGridLinesBrush="#FFECECEC">
                             <DataGrid.ColumnHeaderStyle>
@@ -636,16 +639,20 @@
                     <Border Height="1" Background="#FFDDDDDD" Margin="0,14,0,14" />
 
                     <TextBlock Text="Features" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" />
-                    <CheckBox x:Name="AutoCleanServerLogsCheckBox"
-								IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-								Click="AutoCleanServerLogs_Click"
-								Loaded="AutoCleanServerLogsCheckBox_Loaded"
-								VerticalContentAlignment="Center"
-								HorizontalAlignment="Left"  
-								MaxWidth="400">
+					<CheckBox x:Name="AutoCleanServerLogsCheckBox"
+							IsChecked="{Binding AutoCleanServerLogs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+							Click="AutoCleanServerLogs_Click"
+							Loaded="AutoCleanServerLogsCheckBox_Loaded"
+							VerticalContentAlignment="Center"
+							HorizontalAlignment="Left"
+							MaxWidth="400">
 						<CheckBox.ToolTip>
-							<ToolTip Style="{StaticResource WrappingToolTipStyle}"
-							Content="On App Startup: when more than 20 .rpt and .log files have accumulated in the active preset's profiles folder, all of them are deleted. At or below 20 no files are touched. Default: OFF." />
+							<ToolTip Style="{StaticResource WrappingToolTipStyle}">
+								On App Startup: when more than 20 .rpt and .log files have accumulated
+								in the active preset's profiles folder, all of them are deleted.
+								At or below 20, no files are touched. Cleanup is skipped while the
+								DayZ server is running. Default: OFF.
+							</ToolTip>
 						</CheckBox.ToolTip>
 						<TextBlock Text="Auto-clean server log files on startup" />
 					</CheckBox>

@@ -151,6 +151,10 @@ verifySignatures = 0;
 - **服务器路径** — 包含 `DayZServer_x64.exe` 和 `serverDZ.cfg` 的目录。
 - **批处理文件** — 上一步准备好的 `LocalServer.example.bat` 文件。
 
+> [!IMPORTANT]
+> **刚从创意工坊下载的模组不会立刻出现在 `!Workshop` 中，需要 DayZ 处理一次后才会写入。**
+> 在 Steam 中订阅或下载模组后，请**先启动一次 DayZ 客户端**。DayZ 会在此时把下载好的模组写入 `!Workshop`。如果你在下载完模组后立刻打开 V2，这些模组将**不会**出现在 **可用（Available）** 列表中。请关闭 V2，启动一次 DayZ，然后重新打开 V2 再查看。
+
 
 ### 6. ✅ 设置完成 :tada: :confetti_ball:
 
@@ -430,7 +434,7 @@ DayZ-Mod-Manager-V2\
 
 V2 会将每个预设的 `instanceId` 保存在 `preset-meta.json` 中（也可以回退到从 `serverDZ.cfg` 读取）。该 ID 会告知 DayZ 应使用哪个实时世界文件夹：`mpmissions\<mapName>\storage_<instanceId>`。
 
-设置选项卡还提供 **启动时自动清理服务器日志文件（Auto-clean server log files on startup）**。启用后，只有当前预设的 `profiles` 文件夹中 `.rpt` 和 `.log` 文件的总数超过 20 个时，V2 才会删除这些文件。如果总数为 20 个或更少，则不会进行清理。此选项**默认关闭**。
+设置选项卡还提供 **启动时自动清理服务器日志文件（Auto-clean server log files on startup）**。启用后，只有当前预设的 `profiles` 文件夹中 `.rpt` 和 `.log` 文件的总数超过 20 个时，V2 才会删除这些文件。如果总数为 20 个或更少，则不会进行清理。此选项**默认关闭**。DayZ 服务器运行时不会清理日志。
 
 切换地图或预设、编辑类型配置、加载存档或清除世界之前，请先停止 DayZ 服务器。
 
@@ -654,16 +658,10 @@ V2 是从底层重新构建的版本，而不只是换了一个新界面。
 **模板：**
 https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/LocalServer.example.bat
 
-### 服务器无法启动
+### 模组没有出现在可用列表中
 
-尝试手动运行批处理文件，然后检查以下项目：
-
-- `serverDirectory` 是否指向你的 DayZ Server 文件夹。
-- 该文件夹中是否存在 `DayZServer_x64.exe`。
-- 服务器根目录和当前预设文件夹中是否都存在 `serverDZ.cfg`。
-- 服务器端口和其他启动设置是否正确。
-- 当前预设的 `serverDZ.cfg` 中是否设置了 `verifySignatures = 0;`。对于较早创建的预设，请检查预设自身的配置文件；之后修改服务器根目录下的配置文件不会更新已有预设。
-- 点击 Start Server 时，V2 是否报告存在缺失的模组或类型文件。
+- 模组下载完成后，至少启动过一次 DayZ 客户端。Steam 只负责下载模组，DayZ 客户端运行后才会把它们写入 `!Workshop`。
+- 在 DayZ 客户端运行之后重新打开过 V2，并刷新了**可用**列表。
 
 ### 模组无法正常加载
 
@@ -675,6 +673,17 @@ https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/Lo
 - 是否存在生成的 `DZMMV2_ModList\<instanceId>` 目录联接文件夹。
 - 所选批处理文件中是否包含由 V2 写入的模组列表。
 - 对于此本地/单人配置，是否已设置 `verifySignatures = 0;`。
+
+### 服务器无法启动
+
+尝试手动运行批处理文件，然后检查以下项目：
+
+- `serverDirectory` 是否指向你的 DayZ Server 文件夹。
+- 该文件夹中是否存在 `DayZServer_x64.exe`。
+- 服务器根目录和当前预设文件夹中是否都存在 `serverDZ.cfg`。
+- 服务器端口和其他启动设置是否正确。
+- 当前预设的 `serverDZ.cfg` 中是否设置了 `verifySignatures = 0;`。对于较早创建的预设，请检查预设自身的配置文件；之后修改服务器根目录下的配置文件不会更新已有预设。
+- 点击 Start Server 时，V2 是否报告存在缺失的模组或类型文件。
 
 ### 自定义物品不会生成
 

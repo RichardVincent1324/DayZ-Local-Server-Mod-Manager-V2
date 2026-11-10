@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -6,6 +7,7 @@ using System.Windows.Threading;
 using DayZModManager.App.ViewModels;
 
 namespace DayZModManager.App;
+
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
@@ -17,6 +19,13 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // Keep the window title in sync with the assembly version so a release
+        // bump only needs to touch DayZModManager.App.csproj.
+        string version = typeof(MainWindow).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? "unknown";
+        Title = $"DayZ Mod Manager v{version}";
 
         LoadedListBox.GotKeyboardFocus += (_, _) => _activeModList = LoadedListBox;
         AvailableListBox.GotKeyboardFocus += (_, _) => _activeModList = AvailableListBox;

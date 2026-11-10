@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Threading;
+using DayZModManager.App.Behaviors;
 using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
 using DayZModManager.Core.Abstractions;
@@ -48,6 +49,11 @@ public partial class App : Application
     {
         _services?.Dispose();
         base.OnExit(e);
+    }
+
+    private void ComboBoxItem_RequestBringIntoView(object sender, RequestBringIntoViewEventArgs e)
+    {
+        ComboBoxItemBringIntoViewGuard.OnRequestBringIntoView(sender, e);
     }
 
     private static ServiceProvider BuildServiceProvider(IFileSystem fileSystem, IDataDirectoryProvider dataDirectoryProvider)

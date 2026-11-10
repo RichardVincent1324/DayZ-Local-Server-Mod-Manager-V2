@@ -422,8 +422,8 @@ public sealed class PresetService : IPresetService
         if (TryDescribePresetUsingId(dataDirectory, rootId.Value, out string owner))
         {
             return (AllocateFreshInstanceId(dataDirectory, serverPath, mapName),
-                $"The server-root instanceId {rootId} is already used by {owner}. " +
-                $"The default preset for {mapName} will use a fresh instanceId and will not attach to that world.");
+                $"Server-root instanceId {rootId} is already used by {owner}. " +
+                $"Allocating a fresh instanceId for {mapName}.");
         }
 
         return (rootId.Value, null);

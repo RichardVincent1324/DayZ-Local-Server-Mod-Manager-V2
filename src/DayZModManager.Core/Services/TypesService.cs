@@ -11,10 +11,10 @@ public sealed record TypesOperationResult
     public IReadOnlyList<string> Messages { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// True when the operation found an unmanaged legacy <c>&lt;ce&gt;</c> block and
-    /// created the V2-managed one alongside it. Used to raise a one-time alert.
+    /// True when the operation found an unmarked V2-related <c>&lt;ce&gt;</c> block.
+    /// Used to log the warning on every detection and to raise a session-scoped alert.
     /// </summary>
-    public bool UnmanagedLegacyBlockDetected { get; init; }
+    public bool UnmanagedV2CeBlockDetected { get; init; }
 }
 
 /// <summary>A configured type file: its mod-relative source, generated leaf and role.</summary>
@@ -114,8 +114,9 @@ public interface ITypesService
     /// from <paramref name="config"/>. <paramref name="folder"/> is written to the
     /// block's <c>folder</c> attribute (the active preset's type_files) and is
     /// rewritten on every call. Any unmanaged <c>ce</c> block is left untouched.
-    /// Returns a result whose <see cref="TypesOperationResult.Messages"/> carry any
-    /// warnings (for example, an unmanaged legacy block was found).
+    /// Returns a result whose <see cref="TypesOperationResult.UnmanagedV2CeBlockDetected"/>
+    /// flag reports an unmarked V2-related block. Other warnings are carried by
+    /// <see cref="TypesOperationResult.Messages"/>.
     /// </summary>
     TypesOperationResult SyncEconomyCore(
         TypesConfig? config,
@@ -372,7 +373,8 @@ public sealed class TypesService : ITypesService
 
         config.Mods.Add(newEntry);
 
-        if (!TryRegenerateEconomy(target, config, messages, loadedModNames).Success)
+        TypesOperationResult regenerate = TryRegenerateEconomy(target, config, messages, loadedModNames);
+        if (!regenerate.Success)
         {
             config.Mods.Remove(newEntry);
             if (previous is not null)
@@ -385,7 +387,12 @@ public sealed class TypesService : ITypesService
                 TryDeleteQuiet(fullPath);
             }
 
-            return new TypesOperationResult { Success = false, Messages = messages };
+            return new TypesOperationResult
+            {
+                Success = false,
+                Messages = messages,
+                UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+            };
         }
 
         // Economy now references the new files; superseded files are removed only
@@ -402,7 +409,12 @@ public sealed class TypesService : ITypesService
             }
         }
 
-        return new TypesOperationResult { Success = true, Messages = messages };
+        return new TypesOperationResult
+        {
+            Success = true,
+            Messages = messages,
+            UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+        };
     }
 
     public TypesOperationResult RemoveFiles(
@@ -465,7 +477,8 @@ public sealed class TypesService : ITypesService
             entryRemoved = true;
         }
 
-        if (!TryRegenerateEconomy(target, config, messages, loadedModNames).Success)
+        TypesOperationResult regenerate = TryRegenerateEconomy(target, config, messages, loadedModNames);
+        if (!regenerate.Success)
         {
             if (entryRemoved)
             {
@@ -475,7 +488,12 @@ public sealed class TypesService : ITypesService
             entry.GeneratedFiles = originalGenerated;
             entry.SourceFiles = originalSources;
             entry.FileRoles = originalRoles;
-            return new TypesOperationResult { Success = false, Messages = messages };
+            return new TypesOperationResult
+            {
+                Success = false,
+                Messages = messages,
+                UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+            };
         }
 
         if (entryRemoved)
@@ -488,7 +506,12 @@ public sealed class TypesService : ITypesService
             DeleteGenerated(target.TypeFilesFolder, generated, messages);
         }
 
-        return new TypesOperationResult { Success = true, Messages = messages };
+        return new TypesOperationResult
+        {
+            Success = true,
+            Messages = messages,
+            UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+        };
     }
 
     public TypesOperationResult CleanInvalid(
@@ -518,14 +541,20 @@ public sealed class TypesService : ITypesService
             config.Mods.Remove(entry);
         }
 
-        if (!TryRegenerateEconomy(target, config, messages, loadedModNames).Success)
+        TypesOperationResult regenerate = TryRegenerateEconomy(target, config, messages, loadedModNames);
+        if (!regenerate.Success)
         {
             foreach (ModTypesEntry entry in invalid)
             {
                 config.Mods.Insert(Math.Min(removedIndexes[entry], config.Mods.Count), entry);
             }
 
-            return new TypesOperationResult { Success = false, Messages = messages };
+            return new TypesOperationResult
+            {
+                Success = false,
+                Messages = messages,
+                UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+            };
         }
 
         foreach (ModTypesEntry entry in invalid)
@@ -538,7 +567,12 @@ public sealed class TypesService : ITypesService
             messages.Add($"Cleaned up types config for {entry.ModName} (mod is no longer active)");
         }
 
-        return new TypesOperationResult { Success = true, Messages = messages };
+        return new TypesOperationResult
+        {
+            Success = true,
+            Messages = messages,
+            UnmanagedV2CeBlockDetected = regenerate.UnmanagedV2CeBlockDetected,
+        };
     }
 
     public TypesOperationResult SyncEconomyCore(
@@ -563,7 +597,7 @@ public sealed class TypesService : ITypesService
             {
                 Success = result.Success,
                 Messages = result.Warnings,
-                UnmanagedLegacyBlockDetected = result.UnmanagedLegacyBlockDetected,
+                UnmanagedV2CeBlockDetected = result.UnmanagedV2CeBlockDetected,
             };
         }
         catch (Exception ex)
@@ -722,7 +756,7 @@ public sealed class TypesService : ITypesService
             ? Array.Empty<(string Leaf, string Type)>()
             : GetOrderedEconomyFiles(config, loadedModNames);
 
-        bool unmanagedLegacy = false;
+        bool unmanagedV2CeBlock = false;
         try
         {
             EconomyCoreUpdateResult result = _economyCore.UpdateTypeFiles(
@@ -731,7 +765,7 @@ public sealed class TypesService : ITypesService
                 files.Select(file => file.Leaf).ToList(),
                 GetEconomyFileTypes(files));
 
-            unmanagedLegacy = result.UnmanagedLegacyBlockDetected;
+            unmanagedV2CeBlock = result.UnmanagedV2CeBlockDetected;
             messages.AddRange(result.Warnings);
             if (result.Success)
             {
@@ -739,7 +773,7 @@ public sealed class TypesService : ITypesService
                 {
                     Success = true,
                     Messages = messages,
-                    UnmanagedLegacyBlockDetected = unmanagedLegacy,
+                    UnmanagedV2CeBlockDetected = unmanagedV2CeBlock,
                 };
             }
         }
@@ -754,7 +788,7 @@ public sealed class TypesService : ITypesService
         {
             Success = false,
             Messages = messages,
-            UnmanagedLegacyBlockDetected = unmanagedLegacy,
+            UnmanagedV2CeBlockDetected = unmanagedV2CeBlock,
         };
     }
 

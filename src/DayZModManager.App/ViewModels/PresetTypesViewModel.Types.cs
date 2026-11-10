@@ -128,7 +128,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 			_log.Warning(message);
 		}
 	
-		SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+		ReportUnmanagedV2CeDetection(result.UnmanagedV2CeBlockDetected, missionPath);
 	
 		if (!result.Success)
 		{
@@ -137,36 +137,58 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 	
 		return result.Success;
 	}
-	
-	/// <summary>Title of the one-time unmanaged CE block alert.</summary>
-	private const string UnmanagedCeAlertTitle = "Unmanaged CE block detected";
-	
-	/// <summary>Red-banner body of the one-time unmanaged CE block alert.</summary>
-	private const string UnmanagedCeAlertWarning =
-		"DayZ loads all <ce> blocks simultaneously. Please manually remove the old unmarked <ce> " +
-		"from cfgeconomycore.xml to avoid duplicate type loading / server boot issues.";
-	
+
 	/// <summary>
-	/// Raises the alert when a sync created the V2 marker while an unmanaged legacy
-	/// <c>&lt;ce&gt;</c> block was present. Core only reports this when it creates the
-	/// marker, so a given <c>cfgeconomycore.xml</c> alerts once (on its first sync);
-	/// each affected map's config alerts independently.
+	/// cfgeconomycore.xml files whose unmarked V2 CE block was already logged in
+	/// this session.
 	/// </summary>
-	private void SurfaceUnmanagedCeAlert(bool detected, string missionPath)
+	private readonly HashSet<string> _reportedUnmanagedV2CePaths = new(StringComparer.OrdinalIgnoreCase);
+
+	/// <summary>Whether the session-scoped unmanaged V2 CE block alert was shown.</summary>
+	private bool _unmanagedV2CeAlertShown;
+
+	/// <summary>Title of the session-scoped unmanaged V2 CE block alert.</summary>
+	private const string UnmanagedV2CeAlertTitle = "Unmanaged V2 CE block detected";
+
+	/// <summary>Red-banner body of the session-scoped unmanaged V2 CE block alert.</summary>
+	private const string UnmanagedV2CeAlertWarning =
+		"DayZ loads all <ce> blocks simultaneously. Please manually remove the unmarked V2-related <ce> " +
+		"from cfgeconomycore.xml to avoid duplicate type loading / server boot issues.";
+
+	/// <summary>
+	/// Logs the unified warning once per affected cfgeconomycore.xml per session,
+	/// and raises the modal alert once per application session. A later detection
+	/// after the block disappears warns again for that file.
+	/// </summary>
+	private void ReportUnmanagedV2CeDetection(bool detected, string missionPath)
 	{
+		string cfgXmlPath = Path.Combine(missionPath, "cfgeconomycore.xml");
+
 		if (!detected)
+		{
+			_reportedUnmanagedV2CePaths.Remove(cfgXmlPath);
+			return;
+		}
+
+		if (_reportedUnmanagedV2CePaths.Add(cfgXmlPath))
+		{
+			_log.Warning(EconomyCoreService.UnmanagedV2CeBlockWarning);
+		}
+
+		if (_unmanagedV2CeAlertShown)
 		{
 			return;
 		}
-	
-		string cfgXmlPath = Path.Combine(missionPath, "cfgeconomycore.xml");
-		string alertMessage = "Detected an unmanaged <ce> block in cfgeconomycore.xml. A new managed <ce> block has been created.";
+
+		_unmanagedV2CeAlertShown = true;
+
+		string alertMessage = "Detected an unmarked V2-related <ce> block in cfgeconomycore.xml. The manager will not modify it.";
 		string alertNote = $"To edit and remove the old entry, open:\n{cfgXmlPath}";
-	
+
 		_dialogs.ShowAlert(
 			alertMessage,
-			UnmanagedCeAlertTitle,
-			UnmanagedCeAlertWarning,
+			UnmanagedV2CeAlertTitle,
+			UnmanagedV2CeAlertWarning,
 			alertNote);
 	}
 
@@ -304,7 +326,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             TypesOperationResult result = _typesService.ConfigureMod(
                 _typesConfig, ActiveTypesTarget(missionPath), _workshopPath, modName, selected, LoadedSet());
 
-            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+            ReportUnmanagedV2CeDetection(result.UnmanagedV2CeBlockDetected, missionPath);
             LogOperation(result, "Types configuration completed.");
         }
         catch (Exception ex)
@@ -376,7 +398,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             }
 
             bool success = true;
-            bool unmanagedLegacy = false;
+            bool unmanagedV2CeBlock = false;
             var messages = new List<string>();
             foreach (IGrouping<string, TypesRowViewModel> group in trackedRows.GroupBy(r => r.ModName, StringComparer.Ordinal))
             {
@@ -384,7 +406,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 TypesOperationResult result = _typesService.RemoveFiles(
                     _typesConfig, ActiveTypesTarget(missionPath), group.Key, leaves, LoadedSet());
                 messages.AddRange(result.Messages);
-                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
+                unmanagedV2CeBlock |= result.UnmanagedV2CeBlockDetected;
                 if (!result.Success)
                 {
                     success = false;
@@ -396,19 +418,16 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
                 TypesOperationResult result = _typesService.RemoveUntrackedFiles(
                     _typesConfig, ActiveTypesTarget(missionPath), untrackedLeaves);
                 messages.AddRange(result.Messages);
-                unmanagedLegacy |= result.UnmanagedLegacyBlockDetected;
+                unmanagedV2CeBlock |= result.UnmanagedV2CeBlockDetected;
                 if (!result.Success)
                 {
                     success = false;
                 }
             }
 
-            foreach (string message in messages)
-            {
-                _log.Info(message);
-            }
+            LogMessages(messages);
 
-            SurfaceUnmanagedCeAlert(unmanagedLegacy, missionPath);
+            ReportUnmanagedV2CeDetection(unmanagedV2CeBlock, missionPath);
 
             if (success)
             {
@@ -495,12 +514,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             TypesOperationResult result = _typesService.CleanInvalid(
                 _typesConfig, ActiveTypesTarget(missionPath), active, LoadedSet());
 
-            foreach (string message in result.Messages)
-            {
-                _log.Info(message);
-            }
+            LogMessages(result.Messages);
 
-            SurfaceUnmanagedCeAlert(result.UnmanagedLegacyBlockDetected, missionPath);
+            ReportUnmanagedV2CeDetection(result.UnmanagedV2CeBlockDetected, missionPath);
 
             if (result.Success)
             {
@@ -525,10 +541,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     private void LogOperation(TypesOperationResult result, string successMessage)
     {
-        foreach (string message in result.Messages)
-        {
-            _log.Info(message);
-        }
+        LogMessages(result.Messages);
 
         if (result.Success)
         {
@@ -540,6 +553,14 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         else
         {
             _log.Error("Operation failed.");
+        }
+    }
+
+    private void LogMessages(IEnumerable<string> messages)
+    {
+        foreach (string message in messages)
+        {
+            _log.Info(message);
         }
     }
 

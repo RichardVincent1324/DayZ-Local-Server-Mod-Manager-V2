@@ -24,10 +24,7 @@
 	<AssemblyName>DayZModManager</AssemblyName>
 	<FileDescription>A Windows desktop app that makes heavily modded DayZ local servers and single-player PvE easier to set up and manage.</FileDescription>
 	
-	<Version>2.1.0</Version>
-	<AssemblyVersion>2.1.0.0</AssemblyVersion>
-	<FileVersion>2.1.0.0</FileVersion>
-	<InformationalVersion>2.1.0</InformationalVersion>
+	<Version>2.1.1</Version>
 		
 	<Product>DayZ Local Server Mod Manager V2</Product>
 	<Company>RichardVincent1324</Company>

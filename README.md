@@ -152,6 +152,10 @@ Open V2 and configure:
 - **Server path** — the directory containing `DayZServer_x64.exe` and `serverDZ.cfg`.
 - **Batch file** — the `LocalServer.example.bat` file you prepared in the previous step.
 
+> [!IMPORTANT]
+> **Newly downloaded Workshop mods do not appear in `!Workshop` until DayZ has processed them.**
+> After you subscribe to or download mods in Steam, launch the **DayZ client once**. DayZ then writes the downloaded mods into `!Workshop`. If you open V2 immediately after downloading mods, those mods will **not** appear in the **Available** list. Close V2, start DayZ once, then reopen V2 and check again.
+
 
 ### 6. ✅ Setup complete :tada: :confetti_ball:
 
@@ -431,7 +435,7 @@ DayZ-Mod-Manager-V2\
 
 V2 stores each preset's `instanceId` in `preset-meta.json` (and can fall back to `serverDZ.cfg`). This ID tells DayZ which live-world folder to use: `mpmissions\<mapName>\storage_<instanceId>`.
 
-The Settings tab also has **Auto-clean server log files on startup**. When enabled, V2 deletes `.rpt` and `.log` files from the active preset's `profiles` folder only if there are more than 20 of them in total. If there are 20 or fewer, it leaves them alone. This option is **off by default**.
+The Settings tab also has **Auto-clean server log files on startup**. When enabled, V2 deletes `.rpt` and `.log` files from the active preset's `profiles` folder only if there are more than 20 of them in total. If there are 20 or fewer, it leaves them alone. This option is **off by default**. No cleanup happens while the DayZ server is running.
 
 Stop the DayZ server before switching maps or presets, editing types configuration, loading a save, or wiping the world.
 
@@ -655,16 +659,10 @@ Make sure you downloaded the batch template from the original repository, placed
 **Template:**
 https://github.com/RichardVincent1324/DayZ-Local-Server-Mod-Manager/blob/main/LocalServer.example.bat
 
-### The server does not start
+### Mods do not appear in the Available list
 
-Try running your batch file manually, then check the following:
-
-- `serverDirectory` points to your DayZ Server folder.
-- `DayZServer_x64.exe` is present in that folder.
-- `serverDZ.cfg` exists both in the server root **and** in the active preset folder.
-- The server port and other launch settings are correct.
-- `verifySignatures = 0;` is set in the **active preset's** `serverDZ.cfg`. For presets created earlier, check the preset config itself; changing the server-root config later does not update existing presets.
-- V2 does not report any missing mods or type files when you click Start Server.
+- The DayZ client has been launched at least once since the mods were downloaded. Steam downloads the mods, but DayZ writes them into `!Workshop` only after the client runs.
+- V2 has been reopened after the DayZ client ran, and the **Available** list has been refreshed.
 
 ### Mods do not load correctly
 
@@ -676,6 +674,17 @@ Check the following:
 - The generated `DZMMV2_ModList\<instanceId>` folder links exist.
 - The selected batch file contains the mod list written by V2.
 - `verifySignatures = 0;` is set for this local/solo setup.
+
+### The server does not start
+
+Try running your batch file manually, then check the following:
+
+- `serverDirectory` points to your DayZ Server folder.
+- `DayZServer_x64.exe` is present in that folder.
+- `serverDZ.cfg` exists both in the server root **and** in the active preset folder.
+- The server port and other launch settings are correct.
+- `verifySignatures = 0;` is set in the **active preset's** `serverDZ.cfg`. For presets created earlier, check the preset config itself; changing the server-root config later does not update existing presets.
+- V2 does not report any missing mods or type files when you click Start Server.
 
 ### Custom items do not spawn
 

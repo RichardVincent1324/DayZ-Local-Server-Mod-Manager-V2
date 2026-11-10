@@ -193,13 +193,13 @@ public class EconomyCoreServiceTests
     }
 
     [Fact]
-    public void UpdateTypeFiles_UnmanagedLegacyBlock_LeftUntouched_AndWarns()
+    public void UpdateTypeFiles_UnmanagedV2CeBlock_LeftUntouched_AndWarns()
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files">
+            	<ce folder="./db/ModTypes">
             		<file name="Legacy_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
@@ -208,11 +208,10 @@ public class EconomyCoreServiceTests
         var service = CreateService(fs);
 
         EconomyCoreUpdateResult result = service.UpdateTypeFiles(
-            MissionPath, "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", new[] { "CF_types.xml" }, Types("CF_types.xml"));
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
 
         Assert.True(result.Success);
-        Assert.NotEmpty(result.Warnings);
-        Assert.True(result.UnmanagedLegacyBlockDetected);
+        Assert.True(result.UnmanagedV2CeBlockDetected);
 
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
         Assert.Equal(2, doc.Descendants("ce").Count());
@@ -226,30 +225,164 @@ public class EconomyCoreServiceTests
     }
 
     [Fact]
-    public void UpdateTypeFiles_CreatesMarkerThenDoesNotFlagAgain()
+    public void UpdateTypeFiles_DetectsUnmarkedV2BlockOnEveryCall()
     {
         var fs = new FakeFileSystem();
         fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
             <economycore>
-            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files">
+            	<ce folder="./db/ModTypes">
             		<file name="Legacy_types.xml" type="types" />
             	</ce>
             	<classes><rootclass name="DefaultWeapon" /></classes>
             </economycore>
             """);
         var service = CreateService(fs);
-        const string folder = "../../DayZ-Mod-Manager-V2/Presets/m/p/type_files";
 
-        // First sync creates the managed block and reports the legacy block.
         EconomyCoreUpdateResult first = service.UpdateTypeFiles(
-            MissionPath, folder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
-        Assert.True(first.UnmanagedLegacyBlockDetected);
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+        Assert.True(first.UnmanagedV2CeBlockDetected);
 
-        // The marker now exists, so a later sync does not report it again.
+        // The unmarked block remains, so a later sync must report it again.
         EconomyCoreUpdateResult second = service.UpdateTypeFiles(
-            MissionPath, folder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
-        Assert.False(second.UnmanagedLegacyBlockDetected);
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+        Assert.True(second.UnmanagedV2CeBlockDetected);
+    }
+
+    [Theory]
+    [InlineData("./db/ModTypes")]
+    [InlineData("db/ModTypes")]
+    [InlineData(@"db\ModTypes")]
+    [InlineData("./db/DZMMV2_Types")]
+    [InlineData("db/DZMMV2_Types")]
+    [InlineData(@"db\DZMMV2_Types")]
+    public void UpdateTypeFiles_DetectsNormalizedV2Folders(string folder)
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="{folder}">
+            		<file name="Unmarked_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        Assert.True(result.Success);
+        Assert.True(result.UnmanagedV2CeBlockDetected);
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        Assert.Equal(2, doc.Descendants("ce").Count());
+
+        XElement unmarked = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "Unmarked_types.xml" }, FileNames(unmarked));
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(FindManaged(doc)!));
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_DetectsUnmarkedBlock_WhenMarkedBlockAlreadyExists()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/ModTypes">
+            		<file name="Legacy_types.xml" type="types" />
+            	</ce>
+            	<ce folder="{EconomyCoreService.ManagedFolder}" {Marker}>
+            		<file name="Old_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        Assert.True(result.Success);
+        Assert.True(result.UnmanagedV2CeBlockDetected);
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        XElement unmarked = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "Legacy_types.xml" }, FileNames(unmarked));
+        Assert.Equal(new[] { "CF_types.xml" }, FileNames(FindManaged(doc)!));
+    }
+
+    [Fact]
+    public void UpdateTypeFiles_DoesNotDetectUnreleasedTypeFilesFolder()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="../../DayZ-Mod-Manager-V2/Presets/m/p/type_files">
+            		<file name="Unreleased_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        EconomyCoreUpdateResult result = service.UpdateTypeFiles(
+            MissionPath, EconomyCoreService.ManagedFolder, new[] { "CF_types.xml" }, Types("CF_types.xml"));
+
+        Assert.True(result.Success);
+        Assert.False(result.UnmanagedV2CeBlockDetected);
+        Assert.Empty(result.Warnings);
+
+        XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
+        XElement unmarked = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);
+        Assert.Equal(new[] { "Unreleased_types.xml" }, FileNames(unmarked));
+    }
+
+    [Theory]
+    [InlineData("./db/ModTypes", true)]
+    [InlineData("db/ModTypes", true)]
+    [InlineData(@"db\ModTypes", true)]
+    [InlineData("./db/DZMMV2_Types", true)]
+    [InlineData("db/DZMMV2_Types", true)]
+    [InlineData("./db/type_files", false)]
+    [InlineData("../../DayZ-Mod-Manager-V2/Presets/m/p/type_files", false)]
+    [InlineData("db/Other", false)]
+    public void HasUnmanagedV2CeBlock_DetectsOnlyV2Folders(string folder, bool expected)
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <economycore>
+            	<ce folder="{folder}" />
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        Assert.Equal(expected, service.HasUnmanagedV2CeBlock(MissionPath));
+    }
+
+    [Fact]
+    public void HasUnmanagedV2CeBlock_ReturnsFalseForMarkedBlock()
+    {
+        var fs = new FakeFileSystem();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", $"""
+            <economycore>
+            	<ce folder="{EconomyCoreService.ManagedFolder}" {Marker} />
+            </economycore>
+            """);
+        var service = CreateService(fs);
+
+        Assert.False(service.HasUnmanagedV2CeBlock(MissionPath));
+    }
+
+    [Fact]
+    public void HasUnmanagedV2CeBlock_ReturnsFalseWhenFileMissing()
+    {
+        var service = CreateService(new FakeFileSystem());
+
+        Assert.False(service.HasUnmanagedV2CeBlock(MissionPath));
     }
 
     [Fact]
@@ -272,7 +405,7 @@ public class EconomyCoreServiceTests
 
         Assert.True(result.Success);
         Assert.Empty(result.Warnings);
-        Assert.False(result.UnmanagedLegacyBlockDetected);
+        Assert.False(result.UnmanagedV2CeBlockDetected);
 
         XDocument doc = Parse(fs.TryGetFileContents($@"{MissionPath}\cfgeconomycore.xml")!);
         XElement baseCe = doc.Descendants("ce").Single(c => (string?)c.Attribute("dzmmv2-managed-by") is null);

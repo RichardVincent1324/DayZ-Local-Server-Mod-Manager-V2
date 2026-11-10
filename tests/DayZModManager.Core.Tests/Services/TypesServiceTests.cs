@@ -145,6 +145,29 @@ public class TypesServiceTests
     }
 
     [Fact]
+    public void ConfigureMod_PropagatesUnmanagedV2CeBlockDetection()
+    {
+        FakeFileSystem fs = Seed();
+        fs.AddFile($@"{MissionPath}\cfgeconomycore.xml", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+            <economycore>
+            	<ce folder="./db/ModTypes">
+            		<file name="Legacy_types.xml" type="types" />
+            	</ce>
+            	<classes><rootclass name="DefaultWeapon" /></classes>
+            </economycore>
+            """);
+        var config = new TypesConfig();
+
+        TypesOperationResult result = CreateService(fs).ConfigureMod(
+            config, Target(), WorkshopPath, "@CF",
+            Select($@"{WorkshopPath}\@CF\types.xml"), Loaded("@CF"));
+
+        Assert.True(result.Success);
+        Assert.True(result.UnmanagedV2CeBlockDetected);
+    }
+
+    [Fact]
     public void ConfigureMod_ReplacesPreviousEntryAndDeletesOldFiles()
     {
         FakeFileSystem fs = Seed();

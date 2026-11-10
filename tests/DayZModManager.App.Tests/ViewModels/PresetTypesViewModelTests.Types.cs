@@ -542,7 +542,7 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public void SyncEconomyCore_UnmanagedLegacyBlock_ShowsAlert()
+    public void SyncEconomyCore_UnmanagedV2CeBlock_ShowsAlert()
     {
         var active = new TypesConfig
         {
@@ -551,7 +551,7 @@ public partial class PresetTypesViewModelTests
         };
         var types = new FakeTypesService
         {
-            SyncEconomyCoreResult = new TypesOperationResult { Success = true, UnmanagedLegacyBlockDetected = true },
+            SyncEconomyCoreResult = new TypesOperationResult { Success = true, UnmanagedV2CeBlockDetected = true },
         };
         var dialogs = new FakeDialogs();
         PresetTypesViewModel vm = Create(active, typesService: types, dialogs: dialogs);
@@ -560,8 +560,79 @@ public partial class PresetTypesViewModelTests
         Assert.True(vm.SyncEconomyCore());
 
         Assert.Equal(1, dialogs.ShowAlertCalls);
-        Assert.Contains("unmanaged", dialogs.LastAlertMessage!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unmarked", dialogs.LastAlertMessage!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("cfgeconomycore.xml", dialogs.LastAlertNote!);
+    }
+
+    [Fact]
+    public void SyncEconomyCore_UnmanagedV2CeBlock_WarnsOncePerFileButAlertsOncePerSession()
+    {
+        var active = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Mods = { Entry("@CF", "CF_types.xml") },
+        };
+        var types = new FakeTypesService
+        {
+            SyncEconomyCoreResult = new TypesOperationResult
+            {
+                Success = true,
+                UnmanagedV2CeBlockDetected = true,
+            },
+        };
+        var dialogs = new FakeDialogs();
+        var log = new LogViewModel();
+        PresetTypesViewModel vm = Create(active, typesService: types, dialogs: dialogs, log: log);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.True(vm.SyncEconomyCore());
+        Assert.True(vm.SyncEconomyCore());
+
+        Assert.Equal(1, dialogs.ShowAlertCalls);
+        Assert.Equal(
+            1,
+            log.Entries.Count(entry =>
+                entry.Level == LogLevel.Warning && entry.Message.Contains("V2-related", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void SyncEconomyCore_UnmanagedV2CeBlock_WarnsAgainAfterItDisappears()
+    {
+        var active = new TypesConfig
+        {
+            CurrentMap = MapName,
+            Mods = { Entry("@CF", "CF_types.xml") },
+        };
+        var types = new FakeTypesService
+        {
+            SyncEconomyCoreResult = new TypesOperationResult
+            {
+                Success = true,
+                UnmanagedV2CeBlockDetected = true,
+            },
+        };
+        var dialogs = new FakeDialogs();
+        var log = new LogViewModel();
+        PresetTypesViewModel vm = Create(active, typesService: types, dialogs: dialogs, log: log);
+        vm.Refresh(Settings(), new[] { "@CF" }, new[] { "@CF" });
+
+        Assert.True(vm.SyncEconomyCore());
+
+        types.SyncEconomyCoreResult = new TypesOperationResult { Success = true };
+        Assert.True(vm.SyncEconomyCore());
+
+        types.SyncEconomyCoreResult = new TypesOperationResult
+        {
+            Success = true,
+            UnmanagedV2CeBlockDetected = true,
+        };
+        Assert.True(vm.SyncEconomyCore());
+
+        Assert.Equal(1, dialogs.ShowAlertCalls);
+        Assert.Equal(
+            2,
+            log.Entries.Count(entry =>
+                entry.Level == LogLevel.Warning && entry.Message.Contains("V2-related", StringComparison.Ordinal)));
     }
 
     [Fact]

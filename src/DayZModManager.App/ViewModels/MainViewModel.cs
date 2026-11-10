@@ -925,6 +925,7 @@ public sealed class MainViewModel : ViewModelBase
     /// enabled. Runs once at app startup: when more than
     /// <see cref="ServerLogCleanupService.CleanupThreshold"/> <c>.rpt</c>/<c>.log</c>
     /// files have accumulated in its profiles folder, all of them are deleted.
+    /// Skipped entirely while the DayZ server is running.
     /// </summary>
     private async Task CleanupOldLogsIfEnabledAsync(Settings settings)
     {
@@ -952,6 +953,12 @@ public sealed class MainViewModel : ViewModelBase
         string folder = PresetPaths.ProfilesFolder(_dataDirectoryProvider.Current, mapName, activePreset);
 
         ServerLogCleanupResult result = await Task.Run(() => _logCleanup.Cleanup(folder));
+        if (result.SkippedWhileServerRunning)
+        {
+            Log.Info("Log cleanup skipped: the DayZ server is running.");
+            return;
+        }
+
         if (!result.FolderExists)
         {
             Log.Info($"Log cleanup skipped: profile folder not found: {folder}");

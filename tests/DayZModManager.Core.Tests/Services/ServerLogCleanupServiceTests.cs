@@ -1,3 +1,4 @@
+using DayZModManager.Core.Abstractions;
 using DayZModManager.Core.Services;
 using DayZModManager.Core.Tests.TestDoubles;
 
@@ -12,7 +13,7 @@ public class ServerLogCleanupServiceTests
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
-        var service = new ServerLogCleanupService(fs);
+        var service = new ServerLogCleanupService(fs, new FakeServerProcessState());
 
         // Exactly the threshold: no cleanup happens at or below it.
         for (int i = 0; i < ServerLogCleanupService.CleanupThreshold; i++)
@@ -32,7 +33,7 @@ public class ServerLogCleanupServiceTests
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
-        var service = new ServerLogCleanupService(fs);
+        var service = new ServerLogCleanupService(fs, new FakeServerProcessState());
 
         // 31 total: 16 rpt + 15 log.
         for (int i = 0; i < 16; i++)
@@ -59,7 +60,7 @@ public class ServerLogCleanupServiceTests
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
-        var service = new ServerLogCleanupService(fs);
+        var service = new ServerLogCleanupService(fs, new FakeServerProcessState());
 
         // 20 rpt + 11 log = 31, even though neither type alone is over the limit.
         for (int i = 0; i < 20; i++)
@@ -82,7 +83,7 @@ public class ServerLogCleanupServiceTests
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
-        var service = new ServerLogCleanupService(fs);
+        var service = new ServerLogCleanupService(fs, new FakeServerProcessState());
 
         for (int i = 0; i < 31; i++)
         {
@@ -103,7 +104,7 @@ public class ServerLogCleanupServiceTests
     {
         var fs = new FakeFileSystem();
         fs.CreateDirectory(Folder);
-        var service = new ServerLogCleanupService(fs);
+        var service = new ServerLogCleanupService(fs, new FakeServerProcessState());
 
         for (int i = 0; i < 31; i++)
         {
@@ -118,11 +119,40 @@ public class ServerLogCleanupServiceTests
     [Fact]
     public void Cleanup_ReturnsNotExists_WhenFolderMissing()
     {
-        var service = new ServerLogCleanupService(new FakeFileSystem());
+        var service = new ServerLogCleanupService(new FakeFileSystem(), new FakeServerProcessState());
 
         ServerLogCleanupResult result = service.Cleanup(Folder);
 
         Assert.False(result.FolderExists);
         Assert.Equal(0, result.Removed);
+    }
+
+    [Fact]
+    public void Cleanup_SkipsEverything_WhenServerIsRunning()
+    {
+        var fs = new FakeFileSystem();
+        fs.CreateDirectory(Folder);
+        var state = new FakeServerProcessState { Running = true };
+        var service = new ServerLogCleanupService(fs, state);
+
+        for (int i = 0; i < 31; i++)
+        {
+            fs.AddFile($@"{Folder}\DayZServer_x64_2026-09-06_00-00-{i:00}.RPT", "rpt");
+        }
+
+        ServerLogCleanupResult result = service.Cleanup(Folder);
+
+        Assert.True(result.FolderExists);
+        Assert.True(result.SkippedWhileServerRunning);
+        Assert.Equal(0, result.Removed);
+        Assert.True(fs.FileExists($@"{Folder}\DayZServer_x64_2026-09-06_00-00-00.RPT"));
+        Assert.True(fs.FileExists($@"{Folder}\DayZServer_x64_2026-09-06_00-00-30.RPT"));
+    }
+
+    private sealed class FakeServerProcessState : IDayZServerProcessState
+    {
+        public bool Running { get; set; }
+
+        public bool IsDayZServerRunning() => Running;
     }
 }

@@ -3,22 +3,27 @@ using DayZModManager.Core.Abstractions;
 namespace DayZModManager.Core.Services;
 
 /// <summary>Outcome of a log-cleanup pass.</summary>
-public sealed record ServerLogCleanupResult(bool FolderExists, int Removed);
+public sealed record ServerLogCleanupResult(
+    bool FolderExists,
+    int Removed,
+    bool SkippedWhileServerRunning = false);
 
 /// <summary>
 /// Clears DayZ server log files inside a preset's profile folder
 /// (<c>Presets\&lt;map&gt;\&lt;preset&gt;\profiles</c>). All <c>.rpt</c> and <c>.log</c>
 /// files are counted together and, when that combined total exceeds
 /// <see cref="ServerLogCleanupService.CleanupThreshold"/>, every one of them is
-/// deleted. Other files are never touched.
+/// deleted. Other files are never touched. The pass is skipped entirely while
+/// the DayZ server is running because it may still be writing those files.
 /// </summary>
 public interface IServerLogCleanupService
 {
     /// <summary>
     /// Deletes all <c>.rpt</c>/<c>.log</c> files in <paramref name="profileFolderPath"/>
     /// when there are more than <see cref="ServerLogCleanupService.CleanupThreshold"/>
-    /// of them. Files that cannot be deleted (for example because the server is
-    /// still writing them) are skipped; the method never throws.
+    /// of them. When the DayZ server is running, nothing is deleted and
+    /// <see cref="ServerLogCleanupResult.SkippedWhileServerRunning"/> is set. Any
+    /// remaining file that cannot be deleted is skipped; the method never throws.
     /// </summary>
     ServerLogCleanupResult Cleanup(string profileFolderPath);
 }
@@ -32,10 +37,12 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
     public const int CleanupThreshold = 20;
 
     private readonly IFileSystem _fileSystem;
+    private readonly IDayZServerProcessState _processState;
 
-    public ServerLogCleanupService(IFileSystem fileSystem)
+    public ServerLogCleanupService(IFileSystem fileSystem, IDayZServerProcessState processState)
     {
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+        _processState = processState ?? throw new ArgumentNullException(nameof(processState));
     }
 
     public ServerLogCleanupResult Cleanup(string profileFolderPath)
@@ -43,6 +50,14 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
         if (string.IsNullOrWhiteSpace(profileFolderPath) || !_fileSystem.DirectoryExists(profileFolderPath))
         {
             return new ServerLogCleanupResult(FolderExists: false, Removed: 0);
+        }
+
+        if (_processState.IsDayZServerRunning())
+        {
+            return new ServerLogCleanupResult(
+                FolderExists: true,
+                Removed: 0,
+                SkippedWhileServerRunning: true);
         }
 
         List<string> logs = _fileSystem
@@ -65,7 +80,7 @@ public sealed class ServerLogCleanupService : IServerLogCleanupService
             }
             catch (Exception)
             {
-                // The file may be locked by a running server; skip it.
+                // The file may be locked by another process; skip it.
             }
         }
 

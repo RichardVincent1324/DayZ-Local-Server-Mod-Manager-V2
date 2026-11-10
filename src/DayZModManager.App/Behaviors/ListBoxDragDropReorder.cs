@@ -88,6 +88,7 @@ public static class ListBoxDragDropReorder
 
         DragState state = GetState(listBox);
         state.Reset();
+        state.Owner = listBox;
 
         ListBoxItem? item = FindContainer(listBox, e.OriginalSource as DependencyObject);
         if (item?.DataContext is ModItemViewModel mod)
@@ -116,8 +117,45 @@ public static class ListBoxDragDropReorder
             return;
         }
 
-        DragState state = GetState(listBox);
+        HandleDragMove(listBox, GetState(listBox), e);
+    }
 
+    private static void OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ListBox listBox)
+        {
+            return;
+        }
+
+        HandleDragUp(listBox, GetState(listBox), e);
+    }
+
+    private static void OnLostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListBox listBox)
+        {
+            return;
+        }
+
+        DragState state = GetState(listBox);
+        if (state.IsDragging && !state.SuppressEndDrag)
+        {
+            EndDrag(listBox, state);
+        }
+    }
+
+    private static void OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not ListBox listBox)
+        {
+            return;
+        }
+
+        HandleDragWheel(listBox, GetState(listBox), e);
+    }
+
+    private static void HandleDragMove(ListBox listBox, DragState state, MouseEventArgs e)
+    {
         try
         {
             if (state.DraggedItem is null)
@@ -152,9 +190,6 @@ public static class ListBoxDragDropReorder
         }
         finally
         {
-            // While a drag is in progress, block the bubbling MouseMove event.
-            // This prevents the ListBox's internal edge auto-scroll logic from 
-            // triggering when the mouse is dragged beyond the top/bottom edges.
             if (state.IsDragging)
             {
                 e.Handled = true;
@@ -162,15 +197,8 @@ public static class ListBoxDragDropReorder
         }
     }
 
-    private static void OnPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private static void HandleDragUp(ListBox listBox, DragState state, MouseButtonEventArgs e)
     {
-        if (sender is not ListBox listBox)
-        {
-            return;
-        }
-
-        DragState state = GetState(listBox);
-
         try
         {
             if (!state.IsDragging || state.DraggedItem is not ModItemViewModel dragged)
@@ -218,34 +246,9 @@ public static class ListBoxDragDropReorder
         }
     }
 
-    private static void OnLostMouseCapture(object sender, MouseEventArgs e)
+    private static void HandleDragWheel(ListBox listBox, DragState state, MouseWheelEventArgs e)
     {
-        if (sender is not ListBox listBox)
-        {
-            return;
-        }
-
-        DragState state = GetState(listBox);
-        if (state.IsDragging && !state.SuppressEndDrag)
-        {
-            EndDrag(listBox, state);
-        }
-    }
-
-    /// <summary>
-    /// Element mouse capture (taken during a drag so rows can't be highlighted)
-    /// routes the wheel to the ListBox instead of the template's ScrollViewer,
-    /// which lives inside the ListBox and is never on the event route. Scroll the
-    /// ScrollViewer manually while dragging, mirroring native wheel semantics.
-    /// </summary>
-    private static void OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        if (sender is not ListBox listBox)
-        {
-            return;
-        }
-
-        if (!GetState(listBox).IsDragging)
+        if (!state.IsDragging)
         {
             return;
         }
@@ -295,15 +298,6 @@ public static class ListBoxDragDropReorder
 
         listBox.SetValue(IsDragActiveProperty, true);
 
-        // Suppress WPF's focus transfer. Without this, ListBoxItems will try to
-        // grab focus as the cursor moves, firing RequestBringIntoView and causing
-        // the gray focus visual to jump around or auto-scroll.
-        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
-        listBox.PreviewGotKeyboardFocus += OnPreviewGotKeyboardFocus;
-        
-        // Steal focus away from the clicked item to stop it from requesting visibility.
-        listBox.Focus();
-
         // Block the ScrollViewer's auto-scroll (BringIntoView) for the duration of
         // the drag; see OnRequestBringIntoView. The handler must sit on the
         // ItemsPresenter because it is below the ScrollViewer on the bubbling
@@ -320,68 +314,61 @@ public static class ListBoxDragDropReorder
         // happened in the brief pre-drag window).
         RestoreSelection(listBox, state.DragStartSelection);
 
-        // WPF cannot change the capture mode on an element that already holds
-        // capture (MouseDevice only updates the mode when the element changes),
-        // and ListBox captured with SubTree mode on mouse-down. SubTree capture
-        // keeps items under the cursor receiving MouseEnter, whose OnMouseEnter
-        // handler moves selection to every row the cursor passes. Release and
-        // re-capture with Element mode so items no longer receive mouse events.
-        // IsDragging is already set, so the transient LostMouseCapture cannot
-        // recurse into BeginDrag; SuppressEndDrag stops it from cancelling us.
+        // Showing a window can drop mouse capture, so build the ghost and the
+        // indicator before moving capture to the Window. Suppress the ListBox's
+        // capture-loss handling during the transfer so it cannot abort the drag.
         state.SuppressEndDrag = true;
         try
         {
-            listBox.ReleaseMouseCapture();
-            listBox.CaptureMouse();
+            state.Ghost = new DragGhost(state.DraggedItem?.Name ?? "Mod");
+            state.Ghost.Position(ScreenPoint(listBox));
+            state.Ghost.Show();
+
+            if (AdornerLayer.GetAdornerLayer(listBox) is { } layer)
+            {
+                state.IndicatorLayer = layer;
+                state.Indicator = new InsertionIndicatorAdorner(listBox);
+                layer.Add(state.Indicator);
+            }
+
+            Window? window = Window.GetWindow(listBox);
+            if (window is null)
+            {
+                EndDrag(listBox, state);
+                return;
+            }
+
+            if (!Mouse.Capture(window, CaptureMode.Element))
+            {
+                EndDrag(listBox, state);
+                return;
+            }
+
+            // Attach only after capture succeeds: the ListBox's LostMouseCapture
+            // notification bubbles through the Window during this transfer.
+            state.AttachWindowHandlers(window);
+        }
+        catch
+        {
+            EndDrag(listBox, state);
+            throw;
         }
         finally
         {
-            state.SuppressEndDrag = false;
-        }
-
-        state.Ghost = new DragGhost(state.DraggedItem?.Name ?? "Mod");
-        state.Ghost.Position(ScreenPoint(listBox));
-        state.Ghost.Show();
-
-        // Showing a window can drop mouse capture; re-assert Element capture so
-        // items cannot receive mouse events (and change selection) during the drag.
-        if (!listBox.IsMouseCaptured)
-        {
-            listBox.CaptureMouse();
-        }
-
-        if (AdornerLayer.GetAdornerLayer(listBox) is { } layer)
-        {
-            state.IndicatorLayer = layer;
-            state.Indicator = new InsertionIndicatorAdorner(listBox);
-            layer.Add(state.Indicator);
+            if (state.IsDragging)
+            {
+                state.SuppressEndDrag = false;
+            }
         }
     }
 
     private static void UpdateDrag(ListBox listBox, DragState state)
     {
         state.Ghost?.Position(ScreenPoint(listBox));
-        ReassertDragSelection(listBox, state);
         UpdateInsertionIndicator(listBox, state);
         
         // Handle hover detection for controlled edge scrolling.
         UpdateEdgeScroll(listBox, state);
-    }
-
-    private static void ReassertDragSelection(ListBox listBox, DragState state)
-    {
-        if (state.DragStartSelection is not { Count: > 0 } pinned)
-        {
-            return;
-        }
-
-        if (listBox.SelectedItems.Count == pinned.Count &&
-            listBox.SelectedItems.Cast<ModItemViewModel>().All(vm => pinned.Contains(vm)))
-        {
-            return;
-        }
-
-        RestoreSelection(listBox, pinned);
     }
 
     /// <summary>
@@ -436,13 +423,12 @@ public static class ListBoxDragDropReorder
                 SuppressBringIntoViewHandler);
         }
 
-        // Restore normal focus management.
-        listBox.PreviewGotKeyboardFocus -= OnPreviewGotKeyboardFocus;
-
         listBox.SetValue(IsDragActiveProperty, false);
 
+        // Detach before releasing so the release cannot re-enter EndDrag.
+        state.DetachWindowHandlers();
+        ReleaseCapture(state);
         state.Reset();
-        ReleaseCapture(listBox);
     }
 
     /// <summary>
@@ -460,22 +446,10 @@ public static class ListBoxDragDropReorder
     }
 
     /// <summary>
-    /// Blocks keyboard focus from transferring to ListBoxItems during a drag,
-    /// which prevents the native gray focus visual from jumping to other rows.
-    /// </summary>
-    private static void OnPreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (sender is ListBox listBox && GetState(listBox).IsDragging)
-        {
-            e.Handled = true;
-        }
-    }
-
-    /// <summary>
     /// Monitors mouse position to trigger edge auto-scrolling.
-    /// Only triggers when the cursor is INSIDE the ListBox bounds (preventing 
-    /// uncontrolled scrolling when dragging outside), and requires a short 
-    /// hover delay to avoid accidental triggers.
+    /// The cursor may leave the ListBox vertically, but must stay within its
+    /// horizontal bounds, and requires a short hover delay to avoid accidental
+    /// triggers.
     /// </summary>
     private static void UpdateEdgeScroll(ListBox listBox, DragState state)
     {
@@ -490,16 +464,20 @@ public static class ListBoxDragDropReorder
         Point position = Mouse.GetPosition(listBox);
 
         int newDirection = 0;
-        
-        // Top edge: must be strictly inside the control (Y >= 0) and within threshold.
-        if (canScrollUp && position.Y >= 0 && position.Y < edgeThreshold)
+
+        // Allow the cursor to leave the ListBox vertically, but keep it within
+        // the horizontal bounds so dragging over the other list does not scroll
+        // this one.
+        if (position.X >= 0 && position.X <= listBox.ActualWidth)
         {
-            newDirection = -1;
-        }
-        // Bottom edge: must be strictly inside the control (Y <= ActualHeight) and within threshold.
-        else if (canScrollDown && position.Y <= listBox.ActualHeight && position.Y > listBox.ActualHeight - edgeThreshold)
-        {
-            newDirection = 1;
+            if (canScrollUp && position.Y < edgeThreshold)
+            {
+                newDirection = -1;
+            }
+            else if (canScrollDown && position.Y > listBox.ActualHeight - edgeThreshold)
+            {
+                newDirection = 1;
+            }
         }
 
         // If the direction changes (entered edge, left edge, or jumped from top to bottom)
@@ -722,25 +700,16 @@ public static class ListBoxDragDropReorder
             return -1;
         }
 
-        ListBoxItem? target = FindContainer(listBox, listBox.InputHitTest(position) as DependencyObject);
-        if (target?.DataContext is ModItemViewModel targetMod)
-        {
-            int targetIndex = listBox.Items.IndexOf(targetMod);
-            Point itemTop = target.TranslatePoint(new Point(0, 0), listBox);
-            bool insertBefore = position.Y - itemTop.Y < target.ActualHeight / 2.0;
-            return insertBefore ? targetIndex : targetIndex + 1;
-        }
-
         if (position.Y < 0 || position.Y > listBox.ActualHeight ||
             position.X < 0 || position.X > listBox.ActualWidth)
         {
             return -1;
         }
 
-        // The cursor is not over a row. Anchor the decision to the realized content
-        // bounds rather than the control's midpoint: with only a few items the
-        // content ends well above ActualHeight / 2, so a position just below the
-        // last item would otherwise fall in the "upper half" and wrongly report 0.
+        // Anchor the decision to the realized content bounds rather than the
+        // control's midpoint: with only a few items the content ends well above
+        // ActualHeight / 2, so a position just below the last item would
+        // otherwise fall in the "upper half" and wrongly report 0.
         if (realized.Count == 0)
         {
             return listBox.Items.Count;
@@ -757,13 +726,19 @@ public static class ListBoxDragDropReorder
             return last.Index + 1;
         }
 
-        // A gap between two realized rows: insert at the nearer edge.
-        for (int i = 0; i < realized.Count - 1; i++)
+        // Items are not hit-testable while a drag is active, so locate the row
+        // under the cursor from the realized bounds instead of InputHitTest.
+        foreach (RealizedContainer row in realized)
         {
-            if (position.Y < realized[i + 1].Top)
+            if (position.Y < row.Top)
             {
-                double middle = (realized[i].Bottom + realized[i + 1].Top) / 2.0;
-                return position.Y < middle ? realized[i].Index + 1 : realized[i + 1].Index;
+                return row.Index;
+            }
+
+            if (position.Y < row.Bottom)
+            {
+                double middle = row.Top + (row.Bottom - row.Top) / 2.0;
+                return position.Y < middle ? row.Index : row.Index + 1;
             }
         }
 
@@ -778,12 +753,14 @@ public static class ListBoxDragDropReorder
             : device;
     }
 
-    private static void ReleaseCapture(ListBox listBox)
+    private static void ReleaseCapture(DragState state)
     {
-        if (listBox.IsMouseCaptured)
+        if (state.CaptureWindow is { } window && ReferenceEquals(Mouse.Captured, window))
         {
-            listBox.ReleaseMouseCapture();
+            window.ReleaseMouseCapture();
         }
+
+        state.CaptureWindow = null;
     }
 
     private static ListBoxItem? FindContainer(ListBox listBox, DependencyObject? source)
@@ -842,6 +819,8 @@ public static class ListBoxDragDropReorder
 
     private sealed class DragState
     {
+        public ListBox? Owner;
+        public Window? CaptureWindow;
         public ModItemViewModel? DraggedItem;
         public Point StartPoint;
         public bool IsDragging;
@@ -856,8 +835,76 @@ public static class ListBoxDragDropReorder
         public DispatcherTimer? ScrollTimer;
         public int EdgeDirection; // -1 = top, 1 = bottom, 0 = none
 
+        public void AttachWindowHandlers(Window window)
+        {
+            DetachWindowHandlers();
+            CaptureWindow = window;
+
+            window.PreviewMouseMove += OnWindowPreviewMouseMove;
+            window.PreviewMouseLeftButtonUp += OnWindowPreviewMouseLeftButtonUp;
+            window.PreviewMouseWheel += OnWindowPreviewMouseWheel;
+            window.LostMouseCapture += OnWindowLostMouseCapture;
+        }
+
+        public void DetachWindowHandlers()
+        {
+            if (CaptureWindow is not { } window)
+            {
+                return;
+            }
+
+            window.PreviewMouseMove -= OnWindowPreviewMouseMove;
+            window.PreviewMouseLeftButtonUp -= OnWindowPreviewMouseLeftButtonUp;
+            window.PreviewMouseWheel -= OnWindowPreviewMouseWheel;
+            window.LostMouseCapture -= OnWindowLostMouseCapture;
+        }
+
+        private void OnWindowPreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (Owner is { } listBox)
+            {
+                HandleDragMove(listBox, this, e);
+            }
+        }
+
+        private void OnWindowPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (Owner is { } listBox)
+            {
+                HandleDragUp(listBox, this, e);
+            }
+        }
+
+        private void OnWindowPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (Owner is { } listBox)
+            {
+                HandleDragWheel(listBox, this, e);
+            }
+        }
+
+        private void OnWindowLostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (Owner is not { } listBox || !IsDragging)
+            {
+                return;
+            }
+
+            // A descendant's capture loss (the ListBox during the transfer)
+            // bubbles through the Window; ignore it while the Window still owns
+            // the capture.
+            if (ReferenceEquals(Mouse.Captured, CaptureWindow))
+            {
+                return;
+            }
+
+            EndDrag(listBox, this);
+        }
+
         public void Reset()
         {
+            Owner = null;
+            CaptureWindow = null;
             DraggedItem = null;
             IsDragging = false;
             SuppressEndDrag = false;

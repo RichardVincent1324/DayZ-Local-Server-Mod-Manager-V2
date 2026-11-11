@@ -5,7 +5,7 @@ public static class ConfigFileNames
 {
     public const string Settings = "settings.json";
     public const string ModOrder = "mod_order.json";
-    public const string TypesConfig = "types_config.json";
+    public const string TypeFilesConfig = "type_files.json";
 
     /// <summary>Preset-level metadata file (holds the preset's dedicated instanceId).</summary>
     public const string PresetMeta = "preset-meta.json";

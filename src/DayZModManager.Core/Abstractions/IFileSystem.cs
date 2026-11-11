@@ -31,6 +31,9 @@ public interface IFileSystem
     /// <summary>Deletes a file. Does nothing if the file does not exist.</summary>
     void DeleteFile(string path);
 
+    /// <summary>Moves (renames) a file. The destination must not exist.</summary>
+    void MoveFile(string sourcePath, string destinationPath);
+
     /// <summary>Reads the entire file as text. Throws if the file does not exist.</summary>
     string ReadAllText(string path);
 

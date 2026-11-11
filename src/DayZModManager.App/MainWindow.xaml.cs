@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using DayZModManager.App.ViewModels;
 
@@ -100,6 +101,69 @@ public partial class MainWindow : Window
             AvailableListBox.SelectAll();
         }
     }
+
+    private void PresetTypesRoot_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        // Keep the grids' selection/focus when the click is inside either grid.
+        if (IsDescendantOf(source, TypesDataGrid) || IsDescendantOf(source, SavesDataGrid))
+        {
+            return;
+        }
+
+        // Let buttons, combo boxes, and other focusable controls handle their own
+        // focus. Only an empty-area click releases the grids.
+        if (IsWithinFocusableControl(source, PresetTypesRoot))
+        {
+            return;
+        }
+
+        // Move focus first so an in-progress cell edit commits before selection
+        // is cleared.
+        PresetTypesRoot.Focus();
+        TypesDataGrid.UnselectAll();
+        SavesDataGrid.UnselectAll();
+    }
+
+    private static bool IsDescendantOf(DependencyObject source, DependencyObject ancestor)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWithinFocusableControl(DependencyObject source, DependencyObject boundary)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (current is Control { Focusable: true })
+            {
+                return true;
+            }
+
+            if (ReferenceEquals(current, boundary))
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject child) =>
+        child is FrameworkContentElement contentElement
+            ? contentElement.Parent
+            : VisualTreeHelper.GetParent(child);
 
     private async void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {

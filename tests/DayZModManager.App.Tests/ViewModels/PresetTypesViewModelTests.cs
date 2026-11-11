@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using DayZModManager.Core;
 using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
@@ -17,7 +17,7 @@ public partial class PresetTypesViewModelTests
     private static PresetTypesViewModel Create(
         TypesConfig config,
         IMapService? mapService = null,
-        ITypesConfigStore? typesConfigStore = null,
+        ITypeFilesConfigStore? typesConfigStore = null,
         FakeTypesService? typesService = null,
         FakeDialogs? dialogs = null,
         FakeSaveGameService? saveGameService = null,
@@ -43,7 +43,7 @@ public partial class PresetTypesViewModelTests
         junctionService ??= new FakeJunctionService();
         typeFileJunctionService ??= new FakeTypeFileJunctionService();
 
-        return new PresetTypesViewModel(
+        var vm = new PresetTypesViewModel(
             mapService,
             typesService,
             saveGameService,
@@ -52,7 +52,6 @@ public partial class PresetTypesViewModelTests
             fileSystem,
             dialogs,
             log ?? new LogViewModel(),
-            config,
             new FakeDataDirectoryProvider(),
             serverProcess,
             processLauncher,
@@ -60,6 +59,22 @@ public partial class PresetTypesViewModelTests
             junctionService,
             typeFileJunctionService,
             new LaunchEnvironmentService(batchFileService));
+
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(PresetTypesViewModel.ActiveMap))
+            {
+                config.CurrentMap = vm.ActiveMap ?? string.Empty;
+            }
+            else if (e.PropertyName == nameof(PresetTypesViewModel.TypeFilesConfigCorrupt))
+            {
+                config.IsCorrupt = vm.TypeFilesConfigCorrupt;
+            }
+        };
+
+        vm.ActiveMap = config.CurrentMap;
+        vm.ReloadTypeFilesConfig();
+        return vm;
     }
 
     private static string PresetFolder(string mapName) =>
@@ -92,7 +107,7 @@ public partial class PresetTypesViewModelTests
         IReadOnlyList<string>? loadedMods = null,
         FakeSaveGameService? saveGameService = null,
         FakeFileSystem? fileSystem = null,
-        FakeTypesConfigStore? typesConfigStore = null,
+        ITypeFilesConfigStore? typesConfigStore = null,
         FakeProcessLauncher? processLauncher = null,
         LogViewModel? log = null)
     {
@@ -116,14 +131,22 @@ public partial class PresetTypesViewModelTests
     private static void SelectSave(PresetTypesViewModel vm, string name) =>
         vm.SelectedSave = vm.SaveNames.First(entry => entry.Name == name && !entry.IsOrphaned);
 
-    private static ModTypesEntry Entry(string modName, params string[] generatedFiles) =>
-        new() { ModName = modName, GeneratedFiles = generatedFiles.ToList() };
+    private static string Entry(string modName, params string[] generatedFiles) =>
+        generatedFiles.FirstOrDefault() ?? modName;
 
-    private static TypesConfig ConfigWithEntry(ModTypesEntry entry) =>
-        new() { CurrentMap = MapName, Mods = { entry } };
+    private static TypesConfig ConfigWithEntry(string entry) =>
+        new() { CurrentMap = MapName };
 
     private static TypesConfig AppliedConfig() =>
         new() { CurrentMap = MapName };
+
+    /// <summary>Minimal test-only holder for the active map/corrupt state.</summary>
+    private sealed class TypesConfig
+    {
+        public string CurrentMap { get; set; } = string.Empty;
+
+        public bool IsCorrupt { get; set; }
+    }
 
     private static string TypeFilesFolderPath() =>
         PresetTypeFilesFolder(MapName);
@@ -153,159 +176,104 @@ public partial class PresetTypesViewModelTests
     {
         public IReadOnlyList<string> DiscoveryFiles { get; set; } = Array.Empty<string>();
 
-        public IReadOnlyList<string>? ConfigureModSourceFiles { get; private set; }
+        public int ImportFilesCalls { get; private set; }
 
-        public IReadOnlyList<TypeFileSelection>? ConfigureModSelections { get; private set; }
+        public IReadOnlyList<string>? LastImportSourceFiles { get; private set; }
 
-        public int ConfigureModCalls { get; private set; }
+        public string? LastImportTypeFilesFolder { get; private set; }
 
-        public IReadOnlySet<string>? LastRemoveLeaves { get; private set; }
+        public bool LastImportOverwrite { get; private set; }
 
-        public int RemoveFilesCalls { get; private set; }
-
-        public IReadOnlySet<string>? LastCleanValidMods { get; private set; }
-
-        public int CleanInvalidCalls { get; private set; }
-
-        public int RemoveUntrackedCalls { get; private set; }
-
-        public IReadOnlySet<string>? LastUntrackedLeaves { get; private set; }
-
-        public IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName) => DiscoveryFiles;
-
-        public IReadOnlyList<ConfiguredTypeFile> GetConfiguredFiles(TypesConfig config, string modName)
-        {
-            var files = new List<ConfiguredTypeFile>();
-            ModTypesEntry? entry = config.Mods.FirstOrDefault(m =>
-                string.Equals(m.ModName, modName, StringComparison.OrdinalIgnoreCase));
-            if (entry is null)
-            {
-                return files;
-            }
-
-            for (int i = 0; i < entry.GeneratedFiles.Count; i++)
-            {
-                string generated = entry.GeneratedFiles[i];
-                string leaf = Path.GetFileName(generated);
-                if (string.IsNullOrEmpty(leaf))
-                {
-                    continue;
-                }
-
-                string source = i < entry.SourceFiles.Count ? entry.SourceFiles[i] : string.Empty;
-                TypesFileRole role = entry.FileRoles.TryGetValue(leaf, out string? stored)
-                    ? TypesFileRoles.ToRole(stored)
-                    : TypesFileRole.Types;
-                files.Add(new ConfiguredTypeFile(source, leaf, role));
-            }
-
-            return files;
-        }
-
-        public TypesOperationResult ConfigureMod(
-            TypesConfig config, TypesTarget target, string workshopPath, string modName,
-            IReadOnlyList<TypeFileSelection> selections, IReadOnlySet<string> loadedModNames)
-        {
-            ConfigureModCalls++;
-            ConfigureModSelections = selections.ToList();
-            ConfigureModSourceFiles = selections.Select(s => s.SourceFile).ToList();
-            LastTarget = target;
-            return new TypesOperationResult { Success = true };
-        }
-
-        public TypesOperationResult RemoveFiles(
-            TypesConfig config, TypesTarget target, string modName,
-            IReadOnlySet<string> fileLeaves, IReadOnlySet<string> loadedModNames)
-        {
-            RemoveFilesCalls++;
-            LastRemoveLeaves = fileLeaves;
-            LastTarget = target;
-            return new TypesOperationResult { Success = true };
-        }
-
-        public TypesOperationResult CleanInvalid(
-            TypesConfig config, TypesTarget target,
-            IReadOnlySet<string> validModNames, IReadOnlySet<string> loadedModNames)
-        {
-            CleanInvalidCalls++;
-            LastCleanValidMods = validModNames;
-            LastTarget = target;
-            return new TypesOperationResult { Success = true };
-        }
-
-        public TypesOperationResult RemoveUntrackedFiles(
-            TypesConfig config, TypesTarget target, IReadOnlySet<string> fileLeaves)
-        {
-            RemoveUntrackedCalls++;
-            LastUntrackedLeaves = fileLeaves;
-            LastTarget = target;
-            return new TypesOperationResult { Success = true };
-        }
-
-        public TypesTarget? LastTarget { get; private set; }
+        public TypesOperationResult ImportResult { get; set; } = new() { Success = true };
 
         public int SyncEconomyCoreCalls { get; private set; }
 
         public string? LastEconomyFolder { get; private set; }
 
-        public TypesConfig? LastEconomyMap { get; private set; }
+        public string? LastTypeFilesFolder { get; private set; }
+
+        public IReadOnlyDictionary<string, string>? LastAssignments { get; private set; }
 
         public TypesOperationResult SyncEconomyCoreResult { get; set; } = new() { Success = true };
 
-        public TypesOperationResult SyncEconomyCore(TypesConfig? map, string missionPath, string folder, IReadOnlySet<string> loadedModNames)
-        {
-            SyncEconomyCoreCalls++;
-            LastEconomyMap = map;
-            LastEconomyFolder = folder;
-            return SyncEconomyCoreResult;
-        }
-
         public string? ActiveTypesFolder { get; set; }
-
-        public string? GetActiveTypesFolder(string missionPath) => ActiveTypesFolder;
 
         public IReadOnlyList<string> ActiveTypeFiles { get; set; } = Array.Empty<string>();
 
         public IReadOnlyList<ManagedTypeFileEntry> ActiveTypeFileEntries { get; set; } = Array.Empty<ManagedTypeFileEntry>();
 
-        public IReadOnlyList<string> GetActiveTypeFileNames(
-            TypesConfig config, IReadOnlySet<string> loadedModNames) => ActiveTypeFiles;
-
-        public IReadOnlyList<ManagedTypeFileEntry> GetActiveTypeFiles(
-            TypesConfig config, IReadOnlySet<string> loadedModNames) =>
-            ActiveTypeFileEntries.Count > 0
-                ? ActiveTypeFileEntries
-                : ActiveTypeFiles.Select(name => new ManagedTypeFileEntry(name, TypesFileRoles.Types)).ToList();
-
         public IReadOnlyList<string> ManagedTypeFileNames { get; set; } = Array.Empty<string>();
 
         public IReadOnlyList<ManagedTypeFileEntry> ManagedTypeFileEntries { get; set; } = Array.Empty<ManagedTypeFileEntry>();
 
-        public IReadOnlyList<string> GetManagedTypeFileNames(string missionPath) => ManagedTypeFileNames;
+        public IReadOnlyList<string> DiscoverXmlFiles(string workshopPath, string modName) => DiscoveryFiles;
+
+        public TypesOperationResult ImportFiles(
+            IReadOnlyList<string> sourceFiles, string typeFilesFolder, bool overwrite)
+        {
+            ImportFilesCalls++;
+            LastImportSourceFiles = sourceFiles.ToList();
+            LastImportTypeFilesFolder = typeFilesFolder;
+            LastImportOverwrite = overwrite;
+            return ImportResult;
+        }
+
+        public IReadOnlyList<ManagedTypeFileEntry> GetActiveTypeFiles(
+            string typeFilesFolder, IReadOnlyDictionary<string, string> assignments) =>
+            ActiveTypeFileEntries.Count > 0
+                ? ActiveTypeFileEntries
+                : ActiveTypeFiles.Select(name => new ManagedTypeFileEntry(name, TypesFileRoles.Types)).ToList();
+
+        public TypesOperationResult SyncEconomyCore(
+            string missionPath, string folder, string typeFilesFolder,
+            IReadOnlyDictionary<string, string> assignments)
+        {
+            SyncEconomyCoreCalls++;
+            LastEconomyFolder = folder;
+            LastTypeFilesFolder = typeFilesFolder;
+            LastAssignments = new Dictionary<string, string>(assignments, StringComparer.OrdinalIgnoreCase);
+            return SyncEconomyCoreResult;
+        }
+
+        public string? GetActiveTypesFolder(string missionPath) => ActiveTypesFolder;
 
         public IReadOnlyList<ManagedTypeFileEntry> GetManagedTypeFiles(string missionPath) =>
             ManagedTypeFileEntries.Count > 0
                 ? ManagedTypeFileEntries
                 : ManagedTypeFileNames.Select(name => new ManagedTypeFileEntry(name, TypesFileRoles.Types)).ToList();
-
-        public TypesLaunchIssues LaunchIssues { get; set; } = new(Array.Empty<string>(), Array.Empty<string>());
-
-        public TypesLaunchIssues FindLaunchIssues(
-            TypesConfig config, string typeFilesFolder,
-            IReadOnlySet<string> workshopModNames, IReadOnlySet<string> loadedModNames) => LaunchIssues;
     }
 
-    private sealed class FakeTypesConfigStore : ITypesConfigStore
+    private sealed class FakeTypesConfigStore : ITypeFilesConfigStore
     {
         public bool SaveCalled { get; private set; }
 
+        public int LoadCalls { get; private set; }
+
         public bool BackupCalled { get; private set; }
 
-        public ConfigLoadResult<TypesConfig> LoadResult { get; set; } = ConfigLoadResult<TypesConfig>.Missing();
+        public ConfigLoadResult<Dictionary<string, string>> LoadResult { get; set; } =
+            ConfigLoadResult<Dictionary<string, string>>.Missing();
 
-        public ConfigLoadResult<TypesConfig> Load(string dataDirectory) => LoadResult;
+        public Dictionary<string, string> LastSaved { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
 
-        public void Save(string dataDirectory, TypesConfig config) => SaveCalled = true;
+        public Exception? SaveException { get; set; }
+
+        public ConfigLoadResult<Dictionary<string, string>> Load(string presetFolder)
+        {
+            LoadCalls++;
+            return LoadResult;
+        }
+
+        public void Save(string presetFolder, IReadOnlyDictionary<string, string> assignments)
+        {
+            if (SaveException is not null)
+            {
+                throw SaveException;
+            }
+
+            SaveCalled = true;
+            LastSaved = new Dictionary<string, string>(assignments, StringComparer.OrdinalIgnoreCase);
+        }
 
         public bool BackupCorrupt(string presetFolder)
         {
@@ -654,7 +622,7 @@ public partial class PresetTypesViewModelTests
 
         private readonly HashSet<string> _files = new(StringComparer.OrdinalIgnoreCase);
 
-        public void AddFile(string path) => _files.Add(path);
+        public void AddFile(string path, string contents = "") => _files.Add(path);
 
         public void AddDirectory(string path) => _directories.Add(path);
 
@@ -683,6 +651,22 @@ public partial class PresetTypesViewModelTests
         public void CopyFile(string sourcePath, string destinationPath) { }
 
         public void DeleteFile(string path) => _files.Remove(path);
+
+        public void MoveFile(string sourcePath, string destinationPath)
+        {
+            if (!_files.Remove(sourcePath))
+            {
+                throw new IOException($"Source file not found: {sourcePath}");
+            }
+
+            if (_files.Contains(destinationPath))
+            {
+                _files.Add(sourcePath);
+                throw new IOException($"Destination already exists: {destinationPath}");
+            }
+
+            _files.Add(destinationPath);
+        }
 
         public string ReadAllText(string path) => string.Empty;
 
@@ -736,13 +720,19 @@ public partial class PresetTypesViewModelTests
 
         public string? LastWarningNote { get; private set; }
 
-        public IReadOnlyList<TypeFileSelection>? SelectedFiles { get; set; }
-
-        public IReadOnlySet<string>? LastActiveFiles { get; private set; }
-
-        public IReadOnlyDictionary<string, TypesFileRole>? LastActiveRoles { get; private set; }
+        public IReadOnlyList<string>? SelectedFiles { get; set; }
 
         public string? LastModFolderPath { get; private set; }
+
+        public int PickTypeFilesCalls { get; private set; }
+
+        public string? LastTargetDescription { get; private set; }
+
+        public int ShowMessageCalls { get; private set; }
+
+        public string? LastMessage { get; private set; }
+
+        public string? LastMessageTitle { get; private set; }
 
         public string? AskTextResult { get; set; } = null;
 
@@ -754,6 +744,10 @@ public partial class PresetTypesViewModelTests
 
         public void ShowMessage(string message, string title, bool isError = false)
         {
+            ShowMessageCalls++;
+            LastMessage = message;
+            LastMessageTitle = title;
+
             if (isError)
             {
                 LastErrorMessage = message;
@@ -809,13 +803,13 @@ public partial class PresetTypesViewModelTests
 
         public string? PickFile(string title, string filter, string initialDirectory) => null;
 
-        public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
-            string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
-            IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null)
+        public IReadOnlyList<string>? PickTypeFiles(
+            string modName, IReadOnlyList<string> files, string? modFolderPath = null,
+            string targetDescription = "")
         {
-            LastActiveFiles = activeFiles;
-            LastActiveRoles = activeRoles;
+            PickTypeFilesCalls++;
             LastModFolderPath = modFolderPath;
+            LastTargetDescription = targetDescription;
             return SelectedFiles;
         }
 

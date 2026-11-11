@@ -3,53 +3,85 @@ namespace DayZModManager.App.ViewModels;
 /// <summary>A row in the types configuration grid.</summary>
 public sealed class TypesRowViewModel : ViewModelBase
 {
-    private string _modName;
+    private readonly Func<TypesRowViewModel, string, string, bool> _renameRequested;
+    private readonly Func<TypesRowViewModel, string?, string?, bool> _fileTypeChanged;
+
     private string _fileName;
-    private string _fileType;
-    private bool _isInactive;
-    private bool _isUntracked;
+    private string? _fileType;
 
-    public TypesRowViewModel(string modName, string fileName, bool isInactive, bool isUntracked = false, string fileType = "")
+    public TypesRowViewModel(
+        string fileName,
+        string? fileType,
+        Func<TypesRowViewModel, string, string, bool> renameRequested,
+        Func<TypesRowViewModel, string?, string?, bool> fileTypeChanged)
     {
-        _modName = modName;
         _fileName = fileName;
-        _isInactive = isInactive;
-        _isUntracked = isUntracked;
         _fileType = fileType;
-    }
-
-    public string ModName
-    {
-        get => _modName;
-        set => SetField(ref _modName, value);
-    }
-
-    public string FileName
-    {
-        get => _fileName;
-        set => SetField(ref _fileName, value);
-    }
-
-    /// <summary>The configured economy role: "type" or "spawnable"; empty for untracked files.</summary>
-    public string FileType
-    {
-        get => _fileType;
-        set => SetField(ref _fileType, value);
-    }
-
-    public bool IsInactive
-    {
-        get => _isInactive;
-        set => SetField(ref _isInactive, value);
+        _renameRequested = renameRequested;
+        _fileTypeChanged = fileTypeChanged;
     }
 
     /// <summary>
-    /// True when the file physically exists in type_files but is not tracked by
-    /// this manager's types configuration.
+    /// The physical file name. The setter runs only when the DataGrid commits an
+    /// edit (LostFocus or Enter); Escape cancels the edit before this is called.
     /// </summary>
-    public bool IsUntracked
+    public string FileName
     {
-        get => _isUntracked;
-        set => SetField(ref _isUntracked, value);
+        get => _fileName;
+        set
+        {
+            string newName = value ?? string.Empty;
+            if (string.Equals(_fileName, newName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (!_renameRequested(this, _fileName, newName))
+            {
+                // Restore the displayed value; no file was renamed.
+                OnPropertyChanged();
+                return;
+            }
+
+            SetField(ref _fileName, newName);
+        }
+    }
+
+    /// <summary>The assigned economy role ("types" / "spawnabletypes"), or null when unassigned.</summary>
+    public string? FileType
+    {
+        get => _fileType;
+        private set => SetField(ref _fileType, value);
+    }
+
+    /// <summary>
+    /// UI-facing value for the File Type ComboBox. The placeholder replaces null so
+    /// WPF never has to render a raw null item.
+    /// </summary>
+    public string FileTypeSelection
+    {
+        get => _fileType ?? PresetTypesViewModel.UnassignedFileTypeLabel;
+        set
+        {
+            string? selected = string.Equals(value, PresetTypesViewModel.UnassignedFileTypeLabel, StringComparison.Ordinal)
+                ? null
+                : value;
+
+            if (string.Equals(_fileType, selected, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            string? previous = _fileType;
+            if (!_fileTypeChanged(this, previous, selected))
+            {
+                OnPropertyChanged(nameof(FileTypeSelection));
+                OnPropertyChanged(nameof(FileType));
+                return;
+            }
+
+            FileType = selected;
+            OnPropertyChanged(nameof(FileTypeSelection));
+        }
     }
 }

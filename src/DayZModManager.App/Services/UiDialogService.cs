@@ -92,12 +92,11 @@ public sealed class UiDialogService : IDialogService
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+    public IReadOnlyList<string>? PickTypeFiles(
         string modName,
         IReadOnlyList<string> files,
-        IReadOnlySet<string>? activeFiles = null,
-        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null,
-        string? modFolderPath = null)
+        string? modFolderPath = null,
+        string targetDescription = "")
     {
         if (files.Count == 0)
         {
@@ -116,7 +115,7 @@ public sealed class UiDialogService : IDialogService
             };
 
         string basePath = GetCommonBasePath(files);
-        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, activeFiles, activeRoles);
+        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, targetDescription);
         var window = new TypeFilePickerWindow(viewModel, openModFolder);
         return window.ShowDialog() == true ? window.Selections : null;
     }

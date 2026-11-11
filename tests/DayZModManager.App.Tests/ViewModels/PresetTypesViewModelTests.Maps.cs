@@ -21,7 +21,7 @@ public partial class PresetTypesViewModelTests
         vm.ReconcileAppliedMap();
 
         Assert.Equal(MapName, config.CurrentMap);
-        Assert.True(store.SaveCalled);
+        Assert.Equal(1, store.LoadCalls);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public partial class PresetTypesViewModelTests
     public void ReconcileAppliedMap_CorruptTypesConfig_IsNotSavedOrSynced()
     {
         var config = new TypesConfig();
-        var store = new FakeTypesConfigStore { LoadResult = ConfigLoadResult<TypesConfig>.Corrupt() };
+        var store = new FakeTypesConfigStore { LoadResult = ConfigLoadResult<Dictionary<string, string>>.Corrupt() };
         var types = new FakeTypesService();
 
         PresetTypesViewModel vm = Create(config, typesConfigStore: store, typesService: types);
@@ -94,7 +94,6 @@ public partial class PresetTypesViewModelTests
 
         Assert.Equal(secondMap, config.CurrentMap);
         Assert.Equal(secondMap, vm.SelectedMap);
-        Assert.True(store.SaveCalled);
     }
 
     [Fact]
@@ -127,20 +126,14 @@ public partial class PresetTypesViewModelTests
     }
 
     [Fact]
-    public async Task SelectingAMap_ReplacesTypesConfigWithTargetPresetConfig()
+    public async Task SelectingAMap_DoesNotReloadTypeFileAssignments()
     {
         const string secondMap = "dayzOffline.deerisle";
-        var config = new TypesConfig
-        {
-            CurrentMap = MapName,
-            Mods = { new ModTypesEntry { ModName = "@A" } },
-        };
+        var config = new TypesConfig { CurrentMap = MapName };
         var store = new FakeTypesConfigStore
         {
-            LoadResult = ConfigLoadResult<TypesConfig>.Success(new TypesConfig
-            {
-                Mods = { new ModTypesEntry { ModName = "@B" } },
-            }),
+            LoadResult = ConfigLoadResult<Dictionary<string, string>>.Success(
+                new Dictionary<string, string> { ["a.xml"] = "types" }),
         };
         var mapService = new FakeMapService(
             new MapInfo(MapName, $@"{ServerPath}\mpmissions\{MapName}"),
@@ -148,13 +141,13 @@ public partial class PresetTypesViewModelTests
 
         PresetTypesViewModel vm = Create(config, mapService: mapService, typesConfigStore: store);
         vm.Refresh(Settings(), Array.Empty<string>(), Array.Empty<string>());
+        int loadsAfterCreate = store.LoadCalls;
 
         vm.SelectedMap = secondMap;
         await WaitUntilAsync(() => string.Equals(config.CurrentMap, secondMap, StringComparison.Ordinal));
 
         Assert.Equal(secondMap, config.CurrentMap);
-        Assert.Equal("@B", config.Mods.Single().ModName);
-        Assert.DoesNotContain(config.Mods, m => string.Equals(m.ModName, "@A", StringComparison.Ordinal));
+        Assert.Equal(loadsAfterCreate, store.LoadCalls);
     }
 
     [Fact]
@@ -227,7 +220,7 @@ public partial class PresetTypesViewModelTests
         vm.ReconcileAppliedMap();
 
         Assert.Equal(MapName, config.CurrentMap);
-        Assert.True(store.SaveCalled);
+        Assert.Equal(1, store.LoadCalls);
     }
 
     [Fact]

@@ -216,6 +216,9 @@ public class DataDirectoryProviderTests
 
         public void DeleteFile(string path) => _inner.DeleteFile(path);
 
+        public void MoveFile(string sourcePath, string destinationPath) =>
+            _inner.MoveFile(sourcePath, destinationPath);
+
         public string ReadAllText(string path) => _inner.ReadAllText(path);
 
         public void WriteAllText(string path, string contents)

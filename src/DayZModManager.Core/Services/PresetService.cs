@@ -671,7 +671,7 @@ public sealed class PresetService : IPresetService
             CopyFileIfExists(
                 PresetPaths.ModOrderPath(dataDirectory, sourceMapName, sourcePresetName),
                 PresetPaths.ModOrderPath(dataDirectory, targetMapName, name));
-            CopyTypesConfig(
+            CopyTypeFilesConfig(
                 dataDirectory, sourceMapName, sourcePresetName, targetMapName, name);
 
             CopyDirectoryIfExists(
@@ -884,15 +884,14 @@ public sealed class PresetService : IPresetService
     }
 
     /// <summary>
-    /// Copies a preset's <c>types_config.json</c> to the duplicated preset. The
-    /// file is map-agnostic (the preset folder determines the map), so a straight
-    /// copy is correct even when the copy targets a different map.
+    /// Copies a preset's <c>type_files.json</c> to the duplicated preset. The role
+    /// assignments belong to the preset, so a straight copy is correct.
     /// </summary>
-    private void CopyTypesConfig(
+    private void CopyTypeFilesConfig(
         string dataDirectory, string sourceMapName, string sourcePresetName,
         string targetMapName, string targetPresetName)
     {
-        string sourcePath = PresetPaths.TypesConfigPath(dataDirectory, sourceMapName, sourcePresetName);
+        string sourcePath = PresetPaths.TypeFilesConfigPath(dataDirectory, sourceMapName, sourcePresetName);
         if (!_fileSystem.FileExists(sourcePath))
         {
             return;
@@ -900,7 +899,7 @@ public sealed class PresetService : IPresetService
 
         _fileSystem.CopyFile(
             sourcePath,
-            PresetPaths.TypesConfigPath(dataDirectory, targetMapName, targetPresetName));
+            PresetPaths.TypeFilesConfigPath(dataDirectory, targetMapName, targetPresetName));
     }
 
     private void TryDelete(string path)

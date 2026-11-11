@@ -331,7 +331,6 @@ public partial class PresetTypesViewModelTests
         Assert.Equal(1, saves.LoadSaveCalls);
         Assert.False(store.SaveCalled);
         Assert.Equal(0, types.SyncEconomyCoreCalls);
-        Assert.Contains(config.Mods.Single().GeneratedFiles, f => f.EndsWith("CF_types.xml"));
     }
 
     [Fact]

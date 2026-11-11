@@ -541,7 +541,7 @@ public class PresetServiceTests
         string sourceTypeFiles = PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName);
         fs.AddFile(Path.Combine(sourceTypeFiles, "CF_types.xml"), "<types/>");
         fs.AddFile(PresetPaths.ModOrderPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "[\"@CF\"]");
-        fs.AddFile(PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"mods\":[]}");
+        fs.AddFile(PresetPaths.TypeFilesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName), "{\"CF_types.xml\":\"types\"}");
 
         PresetResult result = service.DuplicatePreset(
             ServerPath, DataDirectory, Map, PresetPaths.DefaultPresetName, Map, "Copy");
@@ -553,7 +553,7 @@ public class PresetServiceTests
         Assert.Contains($"template=\"{Map}\"", cfg);
         Assert.True(fs.FileExists(Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, Map, "Copy"), "CF_types.xml")));
         Assert.True(fs.FileExists(PresetPaths.ModOrderPath(DataDirectory, Map, "Copy")));
-        Assert.True(fs.FileExists(PresetPaths.TypesConfigPath(DataDirectory, Map, "Copy")));
+        Assert.True(fs.FileExists(PresetPaths.TypeFilesConfigPath(DataDirectory, Map, "Copy")));
     }
 
     [Fact]
@@ -623,7 +623,7 @@ public class PresetServiceTests
     }
 
     [Fact]
-    public void DuplicatePreset_ToAnotherMap_CopiesMapAgnosticTypesConfig()
+    public void DuplicatePreset_ToAnotherMap_CopiesTypeFileAssignments()
     {
         const string otherMap = "dayzOffline.sakhal";
         (PresetService service, FakeFileSystem fs) = CreateService();
@@ -633,8 +633,8 @@ public class PresetServiceTests
         // Source preset content: the types file is map-agnostic.
         fs.AddFile(ConfigPath(PresetPaths.DefaultPresetName), $"template=\"{Map}\";\ninstanceId=1;\n");
         fs.AddFile(
-            PresetPaths.TypesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName),
-            "{\"mods\":[{\"modName\":\"@CF\"}]}");
+            PresetPaths.TypeFilesConfigPath(DataDirectory, Map, PresetPaths.DefaultPresetName),
+            "{\"CF_types.xml\":\"types\"}");
         fs.AddFile(
             Path.Combine(PresetPaths.TypeFilesFolder(DataDirectory, Map, PresetPaths.DefaultPresetName), "CF_types.xml"),
             "<types/>");
@@ -657,10 +657,10 @@ public class PresetServiceTests
         Assert.Contains($"template=\"{otherMap}\"", cfg);
         Assert.Contains($"instanceId={instanceId};", cfg);
 
-        // The map-agnostic types config is copied as-is.
-        string types = fs.TryGetFileContents(PresetPaths.TypesConfigPath(DataDirectory, otherMap, "Copy"))!;
-        Assert.Contains("\"mods\"", types);
-        Assert.Contains("\"@CF\"", types);
+        // The preset-scoped type-file assignments are copied as-is.
+        string types = fs.TryGetFileContents(PresetPaths.TypeFilesConfigPath(DataDirectory, otherMap, "Copy"))!;
+        Assert.Contains("\"CF_types.xml\"", types);
+        Assert.Contains("\"types\"", types);
         Assert.DoesNotContain("\"currentMap\"", types);
         Assert.DoesNotContain("\"maps\"", types);
 

@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
@@ -410,7 +410,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         SaveNames.Clear();
         SelectedSave = null;
 
-        string mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
         if (string.IsNullOrWhiteSpace(_serverPath) || string.IsNullOrWhiteSpace(mapName))
         {
             RefreshLiveWorldStatus();

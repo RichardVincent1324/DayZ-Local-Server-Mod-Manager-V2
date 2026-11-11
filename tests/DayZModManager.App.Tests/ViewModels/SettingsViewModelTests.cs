@@ -403,9 +403,9 @@ public class SettingsViewModelTests
 
         public string? PickFile(string title, string filter, string initialDirectory) => File;
 
-        public IReadOnlyList<TypeFileSelection>? PickTypeFiles(
-            string modName, IReadOnlyList<string> files, IReadOnlySet<string>? activeFiles = null,
-            IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null, string? modFolderPath = null) => null;
+        public IReadOnlyList<string>? PickTypeFiles(
+            string modName, IReadOnlyList<string> files, string? modFolderPath = null,
+            string targetDescription = "") => null;
 
         public AddPresetRequest? AskAddPreset(string mapName) => null;
 
@@ -437,6 +437,8 @@ public class SettingsViewModelTests
         public void CopyFile(string sourcePath, string destinationPath) { }
 
         public void DeleteFile(string path) { }
+
+        public void MoveFile(string sourcePath, string destinationPath) { }
 
         public string ReadAllText(string path) => string.Empty;
 

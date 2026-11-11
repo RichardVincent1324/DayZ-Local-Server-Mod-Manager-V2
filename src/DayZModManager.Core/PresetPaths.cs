@@ -50,9 +50,9 @@ public static class PresetPaths
     public static string ModOrderPath(string dataDirectory, string mapName, string presetName) =>
         Path.Combine(PresetFolder(dataDirectory, mapName, presetName), ConfigFileNames.ModOrder);
 
-    /// <summary>Preset types configuration file path (<c>types_config.json</c>).</summary>
-    public static string TypesConfigPath(string dataDirectory, string mapName, string presetName) =>
-        Path.Combine(PresetFolder(dataDirectory, mapName, presetName), ConfigFileNames.TypesConfig);
+    /// <summary>Preset type-file role assignments path (<c>type_files.json</c>).</summary>
+    public static string TypeFilesConfigPath(string dataDirectory, string mapName, string presetName) =>
+        Path.Combine(PresetFolder(dataDirectory, mapName, presetName), ConfigFileNames.TypeFilesConfig);
 
     /// <summary>Preset type_files folder path.</summary>
     public static string TypeFilesFolder(string dataDirectory, string mapName, string presetName) =>

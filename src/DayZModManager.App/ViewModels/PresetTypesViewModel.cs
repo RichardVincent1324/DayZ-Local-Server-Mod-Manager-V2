@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
@@ -16,15 +16,20 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 {
     /// <summary>Mod-name label shown for files in type_files that are not tracked by the config.</summary>
     private const string UntrackedLabel = "(untracked)";
+    /// <summary>Label shown in the File Type ComboBox for a file with no assigned role.</summary>
+    public const string UnassignedFileTypeLabel = "(Unassigned)";
+
     private readonly IMapService _mapService;
     private readonly ITypesService _typesService;
     private readonly ISaveGameService _saveGameService;
-    private readonly ITypesConfigStore _typesConfigStore;
+    private readonly ITypeFilesConfigStore _typeFilesConfigStore;
     private readonly IServerConfigService _serverConfig;
     private readonly IFileSystem _fileSystem;
     private readonly IDialogService _dialogs;
     private readonly LogViewModel _log;
-    private readonly TypesConfig _typesConfig;
+    private readonly Dictionary<string, string> _assignments = new(StringComparer.OrdinalIgnoreCase);
+    private string? _activeMap;
+    private bool _typeFilesConfigCorrupt;
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
     private readonly IDayZServerProcessState _serverProcess;
     private readonly IProcessLauncher _processLauncher;
@@ -57,12 +62,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         IMapService mapService,
         ITypesService typesService,
         ISaveGameService saveGameService,
-        ITypesConfigStore typesConfigStore,
+        ITypeFilesConfigStore typeFilesConfigStore,
         IServerConfigService serverConfig,
         IFileSystem fileSystem,
         IDialogService dialogs,
         LogViewModel log,
-        TypesConfig typesConfig,
         IDataDirectoryProvider dataDirectoryProvider,
         IDayZServerProcessState serverProcess,
         IProcessLauncher processLauncher,
@@ -74,12 +78,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _mapService = mapService;
         _typesService = typesService;
         _saveGameService = saveGameService;
-        _typesConfigStore = typesConfigStore;
+        _typeFilesConfigStore = typeFilesConfigStore;
         _serverConfig = serverConfig;
         _fileSystem = fileSystem;
         _dialogs = dialogs;
         _log = log;
-        _typesConfig = typesConfig;
         _dataDirectoryProvider = dataDirectoryProvider;
         _serverProcess = serverProcess;
         _processLauncher = processLauncher;
@@ -88,19 +91,18 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _typeFileJunctions = typeFileJunctions;
         _launchEnvironment = launchEnvironment;
 
-        ConfigureModCommand = new RelayCommand<string>(ConfigureMod, () => MapApplied);
+        ConfigureModCommand = new RelayCommand<string>(name => _ = ImportTypesAsync(name), () => MapApplied);
         OpenTypeFilesFolderCommand = new RelayCommand(OpenTypeFilesFolder, () => MapApplied);
         OpenMapProfilesFolderCommand = new RelayCommand(OpenMapProfilesFolder);
         RemoveSelectedCommand = new RelayCommand(RemoveSelected, () => MapApplied && CanRemoveSelected);
-        CleanInvalidCommand = new RelayCommand(CleanInvalid, () => MapApplied);
         LoadSaveCommand = new RelayCommand(LoadSave, () => SelectedSave is { IsOrphaned: false } && !IsSaveBusy);
         DeleteSaveCommand = new RelayCommand(DeleteSave, () => SelectedSave is not null && !IsSaveBusy);
         RenameSaveCommand = new RelayCommand(RenameSave, () => SelectedSave is { IsOrphaned: false } && !IsSaveBusy);
         AddSaveCommand = new RelayCommand(AddSave, () => !IsSaveBusy);
         WipeWorldCommand = new RelayCommand(WipeWorld, () => !IsSaveBusy);
-        AddPresetCommand = new RelayCommand(AddPreset, () => !IsBusy && !string.IsNullOrEmpty(_typesConfig.CurrentMap));
+        AddPresetCommand = new RelayCommand(AddPreset, () => !IsBusy && !string.IsNullOrEmpty(ActiveMap));
         DuplicatePresetCommand = new RelayCommand(
-            DuplicatePreset, () => !IsBusy && !string.IsNullOrEmpty(_typesConfig.CurrentMap) && SelectedPreset is not null);
+            DuplicatePreset, () => !IsBusy && !string.IsNullOrEmpty(ActiveMap) && SelectedPreset is not null);
         RenamePresetCommand = new RelayCommand(RenamePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
         DeletePresetCommand = new RelayCommand(DeletePreset, () => SelectedPreset is { IsDefault: false } && !IsBusy);
 
@@ -120,12 +122,49 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             string normalized = string.IsNullOrWhiteSpace(value) ? PresetPaths.DefaultPresetName : value;
             if (SetField(ref _activePresetName, normalized))
             {
-                RebuildRows();
+                ReloadTypeFilesConfig();
                 RefreshSaves();
                 NotifyCommandStates();
             }
         }
     }
+
+    /// <summary>
+    /// The map whose mission is currently applied. This is runtime state only; the
+    /// preset's <c>type_files.json</c> is tied to the preset, so changing the map
+    /// alone never reloads role assignments.
+    /// </summary>
+    public string? ActiveMap
+    {
+        get => _activeMap;
+        set
+        {
+            string? normalized = string.IsNullOrWhiteSpace(value) ? null : value;
+            if (SetField(ref _activeMap, normalized))
+            {
+                RebuildRows();
+                NotifyCommandStates();
+            }
+        }
+    }
+
+    /// <summary>True when the active preset's type_files.json could not be read.</summary>
+    public bool TypeFilesConfigCorrupt
+    {
+        get => _typeFilesConfigCorrupt;
+        private set => SetField(ref _typeFilesConfigCorrupt, value);
+    }
+
+    /// <summary>
+    /// The File Type ComboBox options. A placeholder (not raw null) represents an
+    /// unassigned file so WPF renders it reliably.
+    /// </summary>
+    public IReadOnlyList<string> FileTypeOptions { get; } = new[]
+    {
+        UnassignedFileTypeLabel,
+        TypesFileRoles.Types,
+        TypesFileRoles.Spawnabletypes,
+    };
 
     /// <summary>
     /// True when the active preset's live world storage folder
@@ -154,7 +193,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     {
         int instanceId = 0;
         bool exists = false;
-        string? mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
 
         if (!string.IsNullOrWhiteSpace(mapName))
         {
@@ -382,7 +421,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     private bool CanRemoveSelected => SelectedTypesRows.Count > 0;
 
     /// <summary>True when a map is applied (types operations require a map).</summary>
-    private bool MapApplied => !string.IsNullOrWhiteSpace(_typesConfig.CurrentMap);
+    private bool MapApplied => !string.IsNullOrWhiteSpace(ActiveMap);
+
+    /// <summary>
+    /// True when an XML import can run: the active preset must have an applied map
+    /// so its <c>type_files</c> folder can be resolved.
+    /// </summary>
+    public bool CanConfigureTypes => MapApplied;
 
     /// <summary>Tooltip for the type_files folder button.</summary>
     public string OpenTypeFilesFolderToolTip => "Open type_files folder in File Explorer";
@@ -413,8 +458,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     public RelayCommand OpenMapProfilesFolderCommand { get; }
 
     public RelayCommand RemoveSelectedCommand { get; }
-
-    public RelayCommand CleanInvalidCommand { get; }
 
     public RelayCommand LoadSaveCommand { get; }
 
@@ -459,12 +502,12 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// <summary>Returns the applied map name, warning when none is applied yet.</summary>
     private string? AppliedMapOrWarn()
     {
-        if (string.IsNullOrWhiteSpace(_typesConfig.CurrentMap))
+        if (string.IsNullOrWhiteSpace(ActiveMap))
         {            _log.Warning("Apply a map first before managing progress saves.");
             return null;
         }
 
-        return _typesConfig.CurrentMap;
+        return ActiveMap;
     }
 
     /// <summary>
@@ -490,7 +533,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         ConfigureModCommand.RaiseCanExecuteChanged();
         OpenTypeFilesFolderCommand.RaiseCanExecuteChanged();
         RemoveSelectedCommand.RaiseCanExecuteChanged();
-        CleanInvalidCommand.RaiseCanExecuteChanged();
         RenameSaveCommand.RaiseCanExecuteChanged();
         AddPresetCommand.RaiseCanExecuteChanged();
         DuplicatePresetCommand.RaiseCanExecuteChanged();

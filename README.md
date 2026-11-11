@@ -1,4 +1,4 @@
-﻿**English** | [简体中文](./README.zh-CN.md)
+**English** | [简体中文](./README.zh-CN.md)
 
 # DayZ Local Server Mod Manager V2
 
@@ -168,7 +168,7 @@ Open V2 and configure:
 V2 organizes your server environment into a hierarchy:
 
 - V2 discovers **maps** from the server's `mpmissions` directory. A folder is treated as a map only when it contains `cfgeconomycore.xml`. Common examples include `dayzOffline.chernarusplus`, `dayzOffline.enoch`, and `dayzOffline.sakhal`.
-- Each map can contain multiple **presets**. A preset has its own `serverDZ.cfg`, mod order, types configuration, `type_files`, `profiles`, and independent live-world storage. Mod data written outside `profiles` is not isolated per preset.
+- Each map can contain multiple **presets**. A preset has its own `serverDZ.cfg`, mod order, `type_files.json`, `type_files`, `profiles`, and independent live-world storage. Mod data written outside `profiles` is not isolated per preset.
 - Every preset is assigned a unique `instanceId`.
 - DayZ uses that `instanceId` to name the preset's live world folder: `mpmissions\<mapName>\storage_<instanceId>`.
 - Stored progress saves live in the preset's `saves` folder. Each save contains a copy of the world data and a `save-meta.json` file.
@@ -327,14 +327,23 @@ set "serverMod=-serverMod=@MyServerMod;@AnotherServerOnlyMod"
 
 - Update the batch file's `serverProfile` and `serverConfig` lines so the server uses the active preset's `profiles` folder and `serverDZ.cfg`.
 
-#### Type-file discovery and type assignment
+#### Importing type files
 
-- Search through every folder inside a mod to find all XML files.
-- V2 automatically recognizes files whose names contain `type` or `spawnable`. Other XML files appear separately at the bottom of the window, where you can assign each file the **Types** or **Spawnable** type.
-- Use **Open Mod Folder** to inspect the mod's XML files in File Explorer before assigning a type for an unrecognized file.
-- Copy the XML files you select from the Workshop into the active preset's `type_files` folder.
-- Save each file's assigned type in `types_config.json`. V2 uses it to set the `type` attribute and to put types entries before spawnabletypes entries for each mod in `cfgeconomycore.xml`.
-- The types list shows **Mod Name**, **Configured File**, and **File Type** (`type` or `spawnable`), so you can quickly check each file's assigned type.
+- Choose a mod from the **Types Config** dropdown. V2 searches every folder inside that mod for XML files.
+- Select the files you want with the checkboxes in the import window. **Open Mod Folder** opens the mod in File Explorer if you want to inspect its XML files first.
+- Imported files are copied into the active preset's `type_files` folder. They are ordinary files after that; V2 does not keep any link to the mod they came from.
+- If a file with the same name already exists, V2 asks once whether to overwrite it. Choose **No** to skip the collision and import the other selected files.
+- Imported files start unassigned. Assign each file a role in the **File Type** column: `types`, `spawnabletypes`, or `(Unassigned)`.
+- `type_files.json` stores only those filename-to-role assignments. The filesystem determines which files belong to the preset; V2 does not maintain a separate file registry.
+
+#### Type-file table and ordering
+
+- The table shows every `.xml` file directly inside `type_files/`, sorted in natural order (for example, `2_` before `10_`).
+- Double-click a **File Name** cell to rename the file. Enter or leaving the cell commits the rename; Escape cancels. A renamed file keeps its assigned role, and both `type_files.json` and `cfgeconomycore.xml` are updated immediately.
+- Double-click a **File Type** cell to change its role. The selection is saved to `type_files.json` and applied to `cfgeconomycore.xml` immediately.
+- If `cfgeconomycore.xml` cannot be updated, the saved change is kept and V2 reports an error. Click Apply to repair the CE block.
+- Unassigned files remain visible but are not written to `cfgeconomycore.xml`.
+- To control loading priority, rename files. Within each role, V2 writes files to `cfgeconomycore.xml` in natural sort order, and all `types` entries are written before all `spawnabletypes` entries.
 
 
 #### Loot‑economy integration
@@ -356,9 +365,11 @@ set "serverMod=-serverMod=@MyServerMod;@AnotherServerOnlyMod"
 
 #### Type-file maintenance
 
-- Show XML files that are present in `type_files` but not recorded in `types_config.json` as `(untracked)`. This keeps leftovers from manual edits, failed deletions, or older versions visible so you can remove them. V2's managed `<ce>` block references only tracked files.
-- Ask you to confirm before overwriting or deleting configured type files.
-- Provide `Remove Selected` and `Clean Invalid` tools to clean up the configured files.
+- Every `.xml` file directly inside `type_files/` is managed by V2. Files added through Windows Explorer appear in the table automatically the next time the page refreshes.
+- Files without a role assignment are shown as `(Unassigned)` and are excluded from `cfgeconomycore.xml` until you assign a role.
+- Use **Remove Selected** (or press `Delete` in the table) to remove files from `type_files` and delete their role assignments. You can also edit, rename, or delete files through Windows Explorer.
+- If `type_files.json` is malformed, V2 leaves it untouched, reports the problem, and does not update `cfgeconomycore.xml`. Back it up and fix or delete it before editing types again.
+- When saving assignments, V2 removes entries for files that no longer exist. If the `type_files` folder cannot be read, the save is aborted so valid assignments are never wiped.
 - Warn you before editing types if the preset already has a saved world or a live world. DayZ reads these files when a world is first created, so changes affect future item spawns and newly created saves—not items already spawned in the current world.
 - Use the buttons beside **Types Config** and **Current Map** to open the active preset's `type_files` or `profiles` folder in File Explorer.
 
@@ -366,13 +377,13 @@ set "serverMod=-serverMod=@MyServerMod;@AnotherServerOnlyMod"
 
 ### Presets and progress saves
 
-V2 is organized around **presets**. Each preset is a separate DayZ server setup with its own `serverDZ.cfg`, mod order, types configuration, `type_files`, profiles, and `instanceId`. A **save** is a snapshot of the world at a particular point in time. A preset can have multiple saves; those saves belong to the same preset and therefore share the same server setup.
+V2 is organized around **presets**. Each preset is a separate DayZ server setup with its own `serverDZ.cfg`, mod order, `type_files.json`, `type_files`, profiles, and `instanceId`. A **save** is a snapshot of the world at a particular point in time. A preset can have multiple saves; those saves belong to the same preset and therefore share the same server setup.
 
 #### Creating and configuring presets
 
 - Each map gets a `__default_preset__` the first time you apply that map. This preset cannot be renamed or deleted. V2 creates it either during the first run (for the first map it finds, once the server path and batch file are set) or when you select that map.
 - Use **[Add Preset]** to create your own preset. Its `profiles` folder starts empty, and presets never share profile data.
-- Duplicate the current preset to copy its `serverDZ.cfg`, mod order, types configuration, and generated type files. **Profiles and saves are not copied.** You can duplicate it for another map. In that case, V2 rewrites the `template` line in the copied `serverDZ.cfg` to the target map's name and assigns a new `instanceId`.
+- Duplicate the current preset to copy its `serverDZ.cfg`, mod order, `type_files.json`, and generated type files. **Profiles and saves are not copied.** You can duplicate it for another map. In that case, V2 rewrites the `template` line in the copied `serverDZ.cfg` to the target map's name and assigns a new `instanceId`.
 - Preset names can use letters, numbers, `.`, `_`, `-` and `+`, but **cannot contain spaces**. They also cannot end with a dot or use a reserved Windows device name. V2 passes the active preset's `serverDZ.cfg` / `profiles` paths to the server without quotes (`-config=%serverConfig%`, `-profiles=%serverProfile%`). DayZ Server does not accept a quoted `-config` value, so spaces in a preset name would stop the server from starting.
 - When V2 creates a preset, it copies an existing `serverDZ.cfg` and changes only `template` (the map) and `instanceId`:
   - A duplicated preset copies its source preset's `serverDZ.cfg`. If that file is missing, V2 cannot create the duplicate.
@@ -422,7 +433,7 @@ DayZ-Mod-Manager-V2\
       │  ├─ preset-meta.json
       │  ├─ serverDZ.cfg
       │  ├─ mod_order.json
-      │  ├─ types_config.json
+      │  ├─ type_files.json
       │  ├─ type_files\
       │  ├─ profiles\
       │  └─ saves\
@@ -437,7 +448,7 @@ V2 stores each preset's `instanceId` in `preset-meta.json` (and can fall back to
 
 The Settings tab also has **Auto-clean server log files on startup**. When enabled, V2 deletes `.rpt` and `.log` files from the active preset's `profiles` folder only if there are more than 20 of them in total. If there are 20 or fewer, it leaves them alone. This option is **off by default**. No cleanup happens while the DayZ server is running.
 
-Stop the DayZ server before switching maps or presets, editing types configuration, loading a save, or wiping the world.
+Stop the DayZ server before switching maps or presets, editing type files, loading a save, or wiping the world.
 
 ---
 
@@ -445,6 +456,8 @@ Stop the DayZ server before switching maps or presets, editing types configurati
 
 > [!IMPORTANT]
 > Version **v2.1.0** changes the app's data/file layout, so it is not compatible with the layout used by older V2 versions. Starting with a clean setup is strongly recommended. Back up anything you want to keep first.
+>
+> The filesystem-driven types refactor does **not** migrate the old `types_config.json`. Perform a fresh setup: import the XML files you need into the new preset's `type_files` folder and assign their roles again.
 
 ### Remove the older V2 installation
 
@@ -512,7 +525,7 @@ Once set up, your server folders may look like this:
 │           ├─ preset-meta.json
 │           ├─ serverDZ.cfg
 │           ├─ mod_order.json
-│           ├─ types_config.json
+│           ├─ type_files.json
 │           ├─ type_files\
 │           ├─ profiles\
 │           └─ saves\
@@ -546,7 +559,7 @@ V2 is designed to reduce accidental damage to your local server setup:
 - Before launch, V2 verifies that the mission-local type-files junction points to the active preset; a missing or mismatched junction blocks launch until Apply is run again.
 - A failed save/load copy reports an error. Note that loading a save deletes the live world before copying the stored one, so a failure partway through can leave the live world partially restored — keep backups of important worlds.
 - Save / Load / Wipe World operations (and preset switch / rename / delete) are blocked while the DayZ Server process is running.
-- Types configuration asks before overwriting or deleting managed files.
+- Type-file import asks before overwriting an existing file, and Remove Selected asks before deleting files.
 - Starting the server is blocked when loaded mods are missing or when referenced type files are absent.
 - Apply, map/preset switching and Start Server are blocked when the launch batch file is missing any manager-owned line (`modList`, `serverProfile`, `serverConfig`).
 - Manager-owned changes are limited to the lines and files V2 is responsible for. V2 only reads the server-root `serverDZ.cfg`; it never writes it.
@@ -642,7 +655,7 @@ V2 was rebuilt from the ground up, rather than just given a new interface.
 | PowerShell GUI | WPF / MVVM |
 | Script-oriented architecture | Structured application architecture |
 | Root-level mod junction workflow | Dedicated `DZMMV2_ModList` junction folder |
-| Basic mod/types workflow | Integrated map, types, untracked-file and safety handling |
+| Basic mod/types workflow | Integrated map, filesystem-driven types, and safety handling |
 | Lack of save management | Named progress saves with metadata and world snapshots |
 | Limited testability | Dedicated Core/App test projects |
 

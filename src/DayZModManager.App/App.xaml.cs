@@ -65,7 +65,7 @@ public partial class App : Application
         services.AddSingleton<IJunctionOperations, JunctionOperations>();
         services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IModOrderStore, ModOrderStore>();
-        services.AddSingleton<ITypesConfigStore, TypesConfigStore>();
+        services.AddSingleton<ITypeFilesConfigStore, TypeFilesConfigStore>();
         services.AddSingleton<IBatchFileService, BatchFileService>();
         services.AddSingleton<ILaunchEnvironmentService, LaunchEnvironmentService>();
         services.AddSingleton<IModDiscoveryService, ModDiscoveryService>();
@@ -87,7 +87,7 @@ public partial class App : Application
         services.AddSingleton(sp => new MainViewModel(
             sp.GetRequiredService<ISettingsService>(),
             sp.GetRequiredService<IModOrderStore>(),
-            sp.GetRequiredService<ITypesConfigStore>(),
+            sp.GetRequiredService<ITypeFilesConfigStore>(),
             sp.GetRequiredService<IApplyService>(),
             sp.GetRequiredService<IModDiscoveryService>(),
             sp.GetRequiredService<IMapService>(),

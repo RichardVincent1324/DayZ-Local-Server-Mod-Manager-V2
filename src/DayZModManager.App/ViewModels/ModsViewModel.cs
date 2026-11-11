@@ -72,6 +72,7 @@ public sealed class ModsViewModel : ViewModelBase
             if (SetField(ref _selectedSearchResult, value))
             {
                 ToggleSelectedCommand?.RaiseCanExecuteChanged();
+                ConfigureTypesCommand?.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(ToggleButtonText));
             }
         }
@@ -100,6 +101,19 @@ public sealed class ModsViewModel : ViewModelBase
     public RelayCommand RemoveMissingCommand { get; private set; } = null!;
     public RelayCommand<ReorderRequest> ReorderCommand { get; private set; } = null!;
     public RelayCommand ToggleSelectedCommand { get; private set; } = null!;
+    public AsyncRelayCommand ConfigureTypesCommand { get; private set; } = null!;
+
+    /// <summary>
+    /// Runs the XML import for a mod. Provided by the shell, which also owns the
+    /// decision to move to the Preset &amp; Types tab afterwards.
+    /// </summary>
+    public Func<string, Task>? ConfigureTypesRequested { get; set; }
+
+    /// <summary>
+    /// Whether a types import can run right now (the active preset must have an
+    /// applied map). Provided by the shell.
+    /// </summary>
+    public Func<bool>? CanConfigureTypes { get; set; }
 
     /// <summary>Wires up commands (called once after construction).</summary>
     public void Initialize()
@@ -110,6 +124,17 @@ public sealed class ModsViewModel : ViewModelBase
         RemoveMissingCommand = new RelayCommand(RemoveMissing);
         ReorderCommand = new RelayCommand<ReorderRequest>(Reorder);
         ToggleSelectedCommand = new RelayCommand(ToggleSelected, () => SelectedSearchResult is not null);
+        ConfigureTypesCommand = new AsyncRelayCommand(
+            async () =>
+            {
+                if (SelectedSearchResult is { } result && ConfigureTypesRequested is not null)
+                {
+                    await ConfigureTypesRequested(result.Name);
+                }
+            },
+            () => ConfigureTypesRequested is not null
+                  && SelectedSearchResult is { IsLoaded: true, IsMissing: false }
+                  && CanConfigureTypes?.Invoke() != false);
     }
 
     /// <summary>Re-discovers workshop mods on a background thread to keep the UI responsive.</summary>
@@ -239,6 +264,10 @@ public sealed class ModsViewModel : ViewModelBase
         if (_state.Move(request.SourceName, request.TargetIndex))
         {
             RefreshLoaded();
+
+            // The search dropdown shows load positions, so a reorder must refresh
+            // it too or its "#Index" column would go stale.
+            RefreshSearch();
             UpdateDirtyFlag();
         }
     }
@@ -304,6 +333,15 @@ public sealed class ModsViewModel : ViewModelBase
         var loaded = new HashSet<string>(_state.LoadedMods, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(_state.MissingMods, StringComparer.OrdinalIgnoreCase);
 
+        // The search dropdown shows each result's load position so it can be matched
+        // visually against the Loaded Mods list. Positions come from the same source
+        // as the list, so both always agree.
+        var positions = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < _state.LoadedMods.Count; i++)
+        {
+            positions[_state.LoadedMods[i]] = i + 1;
+        }
+
         var all = new HashSet<string>(_state.WorkshopMods, StringComparer.OrdinalIgnoreCase);
         foreach (string mod in _state.LoadedMods)
         {
@@ -315,11 +353,15 @@ public sealed class ModsViewModel : ViewModelBase
             .OrderBy(mod => mod, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        ReconcileSearch(names, loaded, missing);
+        ReconcileSearch(names, loaded, missing, positions);
         OnPropertyChanged(nameof(HasSearch));
     }
 
-    private void ReconcileSearch(IReadOnlyList<string> names, HashSet<string> loaded, HashSet<string> missing)
+    private void ReconcileSearch(
+        IReadOnlyList<string> names,
+        HashSet<string> loaded,
+        HashSet<string> missing,
+        IReadOnlyDictionary<string, int> positions)
     {
         var existing = new Dictionary<string, SearchResultViewModel>(StringComparer.OrdinalIgnoreCase);
         foreach (SearchResultViewModel item in SearchResults)
@@ -330,22 +372,26 @@ public sealed class ModsViewModel : ViewModelBase
         for (int i = 0; i < names.Count; i++)
         {
             string name = names[i];
+            int? position = positions.TryGetValue(name, out int loadPosition) ? loadPosition : null;
+
             if (i < SearchResults.Count && string.Equals(SearchResults[i].Name, name, StringComparison.OrdinalIgnoreCase))
             {
                 SearchResults[i].IsLoaded = loaded.Contains(name);
                 SearchResults[i].IsMissing = missing.Contains(name);
+                SearchResults[i].Position = position;
                 continue;
             }
 
             if (!existing.TryGetValue(name, out SearchResultViewModel? vm))
             {
-                vm = new SearchResultViewModel(name, loaded.Contains(name), missing.Contains(name));
+                vm = new SearchResultViewModel(name, loaded.Contains(name), missing.Contains(name), position);
                 existing[name] = vm;
             }
             else
             {
                 vm.IsLoaded = loaded.Contains(name);
                 vm.IsMissing = missing.Contains(name);
+                vm.Position = position;
             }
 
             int currentIndex = SearchResults.IndexOf(vm);
@@ -421,5 +467,9 @@ public sealed class ModsViewModel : ViewModelBase
     private void NotifyCommandStates()
     {
         OnPropertyChanged(nameof(CanSelectAll));
+
+        // The pencil's enabling depends on IsLoaded/IsMissing, which can change
+        // without the selection itself changing (e.g. after a toggle).
+        ConfigureTypesCommand?.RaiseCanExecuteChanged();
     }
 }

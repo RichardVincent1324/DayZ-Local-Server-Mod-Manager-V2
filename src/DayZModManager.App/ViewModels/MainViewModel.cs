@@ -15,7 +15,6 @@ public sealed class MainViewModel : ViewModelBase
 {
     private readonly ISettingsService _settingsService;
     private readonly IModOrderStore _modOrderStore;
-    private readonly ITypesConfigStore _typesConfigStore;
     private readonly IApplyService _applyService;
     private readonly IProcessLauncher _launcher;
     private readonly IDataDirectoryProvider _dataDirectoryProvider;
@@ -36,7 +35,7 @@ public sealed class MainViewModel : ViewModelBase
     public MainViewModel(
         ISettingsService settingsService,
         IModOrderStore modOrderStore,
-        ITypesConfigStore typesConfigStore,
+        ITypeFilesConfigStore typeFilesConfigStore,
         IApplyService applyService,
         IModDiscoveryService discoveryService,
         IMapService mapService,
@@ -57,7 +56,6 @@ public sealed class MainViewModel : ViewModelBase
     {
         _settingsService = settingsService;
         _modOrderStore = modOrderStore;
-        _typesConfigStore = typesConfigStore;
         _applyService = applyService;
         _launcher = launcher;
         _logCleanup = logCleanup;
@@ -71,7 +69,6 @@ public sealed class MainViewModel : ViewModelBase
 
         Log = new LogViewModel();
         ModState = new ModState();
-        TypesConfig = new TypesConfig();
 
         // --- Load persistent state ---
         _settings = LoadOrCreateSettings();
@@ -143,39 +140,29 @@ public sealed class MainViewModel : ViewModelBase
                     (backedUp ? " A backup was saved as mod_order.json.corrupt." : string.Empty));
             }
 
-            ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(presetFolder);
-            if (types.Status == ConfigLoadStatus.Success)
-            {
-                ApplyLoadedTypes(types.Value!);
-            }
-            else if (types.Status == ConfigLoadStatus.Corrupt)
-            {
-                bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
-                TypesConfig.IsCorrupt = true;
-                Log.Error(
-                    "types_config.json is corrupt and was ignored. The file was preserved." +
-                    (backedUp ? " A backup was saved as types_config.json.corrupt." : string.Empty) +
-                    " Fix or delete it before editing types.");
-            }
         }
-
-        // CurrentMap is runtime-only now (the file is map-agnostic); restore it
-        // from the persisted active map before the types page is built.
-        TypesConfig.CurrentMap = _settings.ActiveMap;
 
         // --- Build child view models ---
         Mods = new ModsViewModel(ModState, discoveryService, Log);
         PresetTypes = new PresetTypesViewModel(
-            mapService, typesService, saveGameService, typesConfigStore, serverConfigService,
-            fileSystem, dialogs, Log, TypesConfig, _dataDirectoryProvider, serverProcessState, _launcher,
+            mapService, typesService, saveGameService, typeFilesConfigStore, serverConfigService,
+            fileSystem, dialogs, Log, _dataDirectoryProvider, serverProcessState, _launcher,
             presetService, _junctions, typeFileJunctions, launchEnvironment)
         {
+            ActiveMap = _settings.ActiveMap,
             ActivePresetName = activePreset,
         };
+        PresetTypes.ReloadTypeFilesConfig();
         PresetTypes.EnsureApplied = EnsureApplied;
         PresetTypes.ActivatePreset = ActivatePresetAsync;
         PresetTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
         PresetTypes.PersistActiveSelection = PersistActiveSelection;
+
+        // The Mod Manage pencil delegates the import to this shell: it owns the
+        // dialogs, the active preset and the tab selection.
+        Mods.ConfigureTypesRequested = ImportTypesFromModsTabAsync;
+        Mods.CanConfigureTypes = () => PresetTypes.CanConfigureTypes;
+
         Settings = new SettingsViewModel(dialogs, fileSystem);
         Settings.ApplyRequested += async () => await ApplyAsync();
 
@@ -281,8 +268,6 @@ public sealed class MainViewModel : ViewModelBase
 
     public ModState ModState { get; }
 
-    public TypesConfig TypesConfig { get; }
-
     public ModsViewModel Mods { get; }
 
     public PresetTypesViewModel PresetTypes { get; }
@@ -293,6 +278,24 @@ public sealed class MainViewModel : ViewModelBase
     {
         get => _isDirty;
         private set => SetField(ref _isDirty, value);
+    }
+
+    /// <summary>Index of the "Mod Manage" tab.</summary>
+    public const int ModsTabIndex = 0;
+
+    /// <summary>Index of the "Preset &amp; Types" tab.</summary>
+    public const int PresetTypesTabIndex = 1;
+
+    private int _selectedTabIndex;
+
+    /// <summary>
+    /// The selected tab, bound two-way to the TabControl. Set by the shell to move
+    /// the user after an operation completes (e.g. a successful XML import).
+    /// </summary>
+    public int SelectedTabIndex
+    {
+        get => _selectedTabIndex;
+        set => SetField(ref _selectedTabIndex, value);
     }
 
     public string StatusText
@@ -308,6 +311,28 @@ public sealed class MainViewModel : ViewModelBase
     public void OnPresetTypesTabActivated()
     {
         PresetTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
+    }
+
+    /// <summary>
+    /// Runs an XML import requested from Mod Manage and, only when it completed,
+    /// moves the user to the Preset &amp; Types tab.
+    /// </summary>
+    /// <remarks>
+    /// The import runs first and the tab switch is the last statement, so the
+    /// switch can only refresh state that is already written: the Apply triggered
+    /// by leaving Mod Manage (when mods were dirty) and the Sync triggered by
+    /// entering Preset &amp; Types are both harmless. Switching first would instead
+    /// let Sync clear the selection the import depends on.
+    /// </remarks>
+    private async Task ImportTypesFromModsTabAsync(string modName)
+    {
+        if (!await PresetTypes.ImportTypesAsync(modName))
+        {
+            return;
+        }
+
+        SelectedTabIndex = PresetTypesTabIndex;
+        PresetTypes.ShowTarget(modName);
     }
 
     /// <summary>Resolves the preset active for a map, defaulting to the reserved default preset.</summary>
@@ -391,11 +416,9 @@ public sealed class MainViewModel : ViewModelBase
         // the apply (the apply reads it to know what to write), so without a rollback
         // a failure would leave the tool pointing at a preset it never applied.
         string previousPreset = PresetTypes.ActivePresetName;
+        string? previousMap = PresetTypes.ActiveMap;
         Settings previousSettings = _settings;
         IReadOnlyList<string> previousMods = ModState.LoadedMods.ToList();
-        List<ModTypesEntry> previousTypes = TypesConfig.Mods.ToList();
-        string previousCurrentMap = TypesConfig.CurrentMap;
-        bool previousCorrupt = TypesConfig.IsCorrupt;
 
         ConfigLoadResult<IReadOnlyList<string>> order = _modOrderStore.Load(presetFolder);
         if (order.Status == ConfigLoadStatus.Corrupt)
@@ -411,31 +434,12 @@ public sealed class MainViewModel : ViewModelBase
             : Array.Empty<string>();
         Mods.ReplaceLoadedMods(mods);
 
-        ConfigLoadResult<TypesConfig> types = _typesConfigStore.Load(presetFolder);
-        if (types.Status == ConfigLoadStatus.Success)
-        {
-            ApplyLoadedTypes(types.Value!);
-        }
-        else
-        {
-            TypesConfig.Mods.Clear();
-            TypesConfig.IsCorrupt = types.Status == ConfigLoadStatus.Corrupt;
-            if (TypesConfig.IsCorrupt)
-            {
-                bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
-                Log.Error(
-                    "types_config.json is corrupt for the selected preset; it was ignored and will not be overwritten." +
-                    (backedUp ? " A backup was saved as types_config.json.corrupt." : string.Empty));
-            }
-        }
-
         // The environment being applied targets this map. Set it before the apply so
         // the launch batch and mod order are written for the right map even on a
-        // cross-map switch; the snapshot above captured the previous map, so a failed
-        // apply restores it.
-        TypesConfig.CurrentMap = mapName;
-
+        // cross-map switch; the snapshot above captured the previous context, so a
+        // failed apply restores it.
         _settings = WithActiveSelection(_settings, mapName, presetName);
+        PresetTypes.ActiveMap = mapName;
         PresetTypes.ActivePresetName = presetName;
 
         bool applied = await ApplyAsync();
@@ -443,9 +447,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             _settings = previousSettings;
             Mods.ReplaceLoadedMods(previousMods);
-            TypesConfig.Mods = previousTypes;
-            TypesConfig.CurrentMap = previousCurrentMap;
-            TypesConfig.IsCorrupt = previousCorrupt;
+            PresetTypes.ActiveMap = previousMap;
             PresetTypes.ActivePresetName = previousPreset;
             Log.Error($"Failed to apply preset \"{presetName}\"; restored the previous preset.");
         }
@@ -530,12 +532,6 @@ public sealed class MainViewModel : ViewModelBase
     private static bool HasNoConfiguredPaths(Settings settings) =>
         string.IsNullOrWhiteSpace(settings.WorkshopPath) && string.IsNullOrWhiteSpace(settings.ServerPath);
 
-    private void ApplyLoadedTypes(TypesConfig loaded)
-    {
-        TypesConfig.Mods = loaded.Mods.ToList();
-        TypesConfig.IsCorrupt = false;
-    }
-
     /// <summary>Applies pending changes if any. Used when leaving the Mods tab or closing the window.</summary>
     public async Task ApplyIfDirtyAsync()
     {
@@ -608,7 +604,7 @@ public sealed class MainViewModel : ViewModelBase
             // preset lives in the current data directory (which may differ from the
             // relocation target), while the profile/config paths written to the batch
             // file are anchored at the resolved target.
-            string mapName = TypesConfig.CurrentMap;
+            string mapName = PresetTypes.ActiveMap ?? string.Empty;
             string activePreset = PresetTypes.ActivePresetName;
             EnvironmentResolution resolution = _presetService.ResolveEnvironment(
                 newSettings, dataDirectory, mapName, activePreset,
@@ -844,9 +840,9 @@ public sealed class MainViewModel : ViewModelBase
         errors.AddRange(PresetTypes.PreflightTypesIssues());
         errors.AddRange(_presetService.FindInstanceIdConflicts(_dataDirectoryProvider.Current));
 
-        if (TypesConfig.IsCorrupt)
+        if (PresetTypes.TypeFilesConfigCorrupt)
         {
-            errors.Add("types_config.json is corrupt for the active preset. Fix or delete it before starting the server.");
+            errors.Add("type_files.json is corrupt for the active preset. Fix or delete it before starting the server.");
         }
 
         if (errors.Count == 0)
@@ -864,7 +860,7 @@ public sealed class MainViewModel : ViewModelBase
     /// </summary>
     private string? ActivePresetServerConfigPath()
     {
-        string mapName = TypesConfig.CurrentMap;
+        string? mapName = PresetTypes.ActiveMap;
         if (string.IsNullOrWhiteSpace(mapName))
         {
             return null;
@@ -940,7 +936,7 @@ public sealed class MainViewModel : ViewModelBase
             return;
         }
 
-        string? mapName = TypesConfig.CurrentMap;
+        string? mapName = PresetTypes.ActiveMap;
         if (string.IsNullOrWhiteSpace(mapName))
         {
             Log.Info("Log cleanup skipped: no active map is configured yet.");

@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
@@ -13,7 +13,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// <summary>Rebuilds the preset list for the current map.</summary>
     private void RefreshPresets()
     {
-        string mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
         Presets.Clear();
 
         if (string.IsNullOrWhiteSpace(mapName))
@@ -65,7 +65,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return;
         }
 
-        string mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
         if (string.IsNullOrWhiteSpace(mapName) || _isSwitchingPreset || _isSwitching || _typesBusy)
         {
             // A map switch or a types operation is in flight; keep the dropdown on
@@ -194,7 +194,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         DuplicatePresetRequest? request = _dialogs.AskDuplicatePreset(
-            source.Name, MapNames.ToList(), _typesConfig.CurrentMap);
+            source.Name, MapNames.ToList(), ActiveMap ?? string.Empty);
         if (request is null || string.IsNullOrWhiteSpace(request.Name))
         {
             return;
@@ -229,7 +229,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         if (!string.Equals(targetMap, sourceMap, StringComparison.Ordinal))
         {
             await SwitchMapAsync(targetMap);
-            if (!string.Equals(_typesConfig.CurrentMap, targetMap, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(ActiveMap, targetMap, StringComparison.OrdinalIgnoreCase))
             {
                 _log.Warning($"The copy was created for {targetMap}, but the active map could not be switched to it.");
                 return;
@@ -249,7 +249,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     private async void RenamePreset()
     {
-        string mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
         PresetItemViewModel? preset = SelectedPreset;
         if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
         {
@@ -304,7 +304,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     private async void DeletePreset()
     {
-        string mapName = _typesConfig.CurrentMap;
+        string? mapName = ActiveMap;
         PresetItemViewModel? preset = SelectedPreset;
         if (string.IsNullOrWhiteSpace(mapName) || preset is null || preset.IsDefault)
         {
@@ -373,9 +373,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         string dataDirectory = _dataDirectoryProvider.Current;
-        string folder = string.IsNullOrWhiteSpace(_typesConfig.CurrentMap)
+        string folder = string.IsNullOrWhiteSpace(ActiveMap)
             ? PresetPaths.PresetsRoot(dataDirectory)
-            : PresetPaths.ProfilesFolder(dataDirectory, _typesConfig.CurrentMap, _activePresetName);
+            : PresetPaths.ProfilesFolder(dataDirectory, ActiveMap, _activePresetName);
 
         try
         {

@@ -17,11 +17,11 @@ public partial class TypeFilePickerWindow : Window
         DataContext = viewModel;
     }
 
-    public IReadOnlyList<TypeFileSelection>? Selections { get; private set; }
+    public IReadOnlyList<string>? Selections { get; private set; }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        Selections = _viewModel.GetSelections();
+        Selections = _viewModel.GetSelectedFiles();
         DialogResult = true;
     }
 

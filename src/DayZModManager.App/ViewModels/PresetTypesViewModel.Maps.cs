@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using DayZModManager.Core;
 using DayZModManager.Core.Abstractions;
@@ -30,11 +30,11 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             return null;
         }
 
-        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        if (!string.IsNullOrEmpty(ActiveMap))
         {
-            if (!_discoveredMaps.Any(m => string.Equals(m.Name, _typesConfig.CurrentMap, StringComparison.OrdinalIgnoreCase)))
+            if (!_discoveredMaps.Any(m => string.Equals(m.Name, ActiveMap, StringComparison.OrdinalIgnoreCase)))
             {
-                _log.Warning($"Previously applied map \"{_typesConfig.CurrentMap}\" was not found on this server. Select a valid map.");
+                _log.Warning($"Previously applied map \"{ActiveMap}\" was not found on this server. Select a valid map.");
             }
 
             return null;
@@ -95,17 +95,17 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         // Keep the applied map selectable even when its mission folder disappeared,
         // so the dropdown never silently jumps to a different map.
-        if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) && !ContainsIgnoreCase(MapNames, _typesConfig.CurrentMap))
+        if (!string.IsNullOrEmpty(ActiveMap) && !ContainsIgnoreCase(MapNames, ActiveMap))
         {
-            MapNames.Add(_typesConfig.CurrentMap);
+            MapNames.Add(ActiveMap);
         }
 
         _isRestoring = true;
         try
         {
-            if (!string.IsNullOrEmpty(_typesConfig.CurrentMap) && ContainsIgnoreCase(MapNames, _typesConfig.CurrentMap))
+            if (!string.IsNullOrEmpty(ActiveMap) && ContainsIgnoreCase(MapNames, ActiveMap))
             {
-                SelectedMap = _typesConfig.CurrentMap;
+                SelectedMap = ActiveMap;
             }
             else if (previousMap is not null && ContainsIgnoreCase(MapNames, previousMap))
             {
@@ -124,13 +124,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
     private string? ResolveAppliedMapPath()
     {
-        if (string.IsNullOrEmpty(_typesConfig.CurrentMap))
+        if (string.IsNullOrEmpty(ActiveMap))
         {
             _log.Warning("Apply a map first.");
             return null;
         }
 
-        return ResolveMapPathForName(_typesConfig.CurrentMap);
+        return ResolveMapPathForName(ActiveMap);
     }
 
     private string? ResolveMapPathForName(string? mapName)
@@ -194,13 +194,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 // The selected map cannot be applied; keep the dropdown on the
                 // actually-applied map so selection never diverges from it.
-                SetRestoringSelection(_typesConfig.CurrentMap);
+                SetRestoringSelection(ActiveMap);
                 return;
             }
 
             if (!await EnsureAppliedBeforeAsync("map switch"))
             {
-                SetRestoringSelection(_typesConfig.CurrentMap);
+                SetRestoringSelection(ActiveMap);
                 return;
             }
 
@@ -213,7 +213,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             {
                 // Refused (server running) or the server files could not be
                 // updated; keep the dropdown on the actually-applied map.
-                SetRestoringSelection(_typesConfig.CurrentMap);
+                SetRestoringSelection(ActiveMap);
                 return;
             }
 
@@ -224,13 +224,13 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             if (ActivatePreset is not null && !await ActivatePreset(mapName, environment.PresetName))
             {
                 _log.Error($"Map switched to {mapName}, but its preset environment could not be applied.");
-                SetRestoringSelection(_typesConfig.CurrentMap);
+                SetRestoringSelection(ActiveMap);
                 return;
             }
 
             if (!CommitAppliedMap(mapName, environment.PresetName, environment))
             {
-                SetRestoringSelection(_typesConfig.CurrentMap);
+                SetRestoringSelection(ActiveMap);
                 return;
             }
 
@@ -248,7 +248,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             string? next = _pendingMap;
             _pendingMap = null;
 
-            if (next is not null && !string.Equals(next, _typesConfig.CurrentMap, StringComparison.Ordinal))
+            if (next is not null && !string.Equals(next, ActiveMap, StringComparison.Ordinal))
             {
                 _ = SwitchMapAsync(next);
             }
@@ -290,7 +290,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
 
         string? next = _pendingMap;
         _pendingMap = null;
-        if (next is not null && !string.Equals(next, _typesConfig.CurrentMap, StringComparison.Ordinal))
+        if (next is not null && !string.Equals(next, ActiveMap, StringComparison.Ordinal))
         {
             _ = SwitchMapAsync(next);
         }
@@ -416,25 +416,21 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             _log.Info(message);
         }
 
+        // type_files.json is tied to the preset, not the map: reload the
+        // assignments only when the active preset changes (or on initial setup).
+        // A map-only switch after setup keeps the current assignments.
+        string? previousMap = ActiveMap;
+        bool presetChanged = !string.Equals(_activePresetName, presetName, StringComparison.Ordinal);
+        bool initialSetup = string.IsNullOrWhiteSpace(previousMap);
         _activePresetName = presetName;
-
-        // Load the target preset's own (single-map) types configuration so a map
-        // switch shows that preset's settings rather than carrying the previous
-        // map's config over.
-        bool typesUsable = MergePresetTypesConfig(mapName, presetName);
-        _typesConfig.CurrentMap = mapName;
-        if (typesUsable)
+        ActiveMap = mapName;
+        if (presetChanged || initialSetup)
         {
-            try
-            {
-                _typesConfigStore.Save(PresetFolder(mapName), _typesConfig);
-            }
-            catch (Exception ex)
-            {
-                // The environment is already applied; a failed types save is reported
-                // but does not tear it down.
-                _log.Error($"Failed to persist the applied map's types configuration: {ex.Message}");
-            }
+            ReloadTypeFilesConfig();
+        }
+        else
+        {
+            RebuildRows();
         }
 
         // Pre-create the preset profiles folder the batch serverProfile points at.
@@ -450,8 +446,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
 
         NotifyCommandStates();
-        RebuildRows();
-        if (typesUsable)
+        if (!TypeFilesConfigCorrupt)
         {
             if (!SyncEconomyCore())
             {
@@ -462,7 +457,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         }
         else
         {
-            _log.Warning("cfgeconomycore.xml was not updated because types_config.json is corrupt.");
+            _log.Warning("cfgeconomycore.xml was not updated because type_files.json is corrupt.");
         }
 
         RefreshPresets();
@@ -470,56 +465,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
         _log.Success($"Map switched to: {mapName}");
 
         // Let the shell persist the now-active map/preset so the next startup can
-        // locate this preset's mod order and types configuration.
+        // locate this preset's mod order and type files.
         PersistActiveSelection?.Invoke(mapName, presetName);
         return true;
-    }
-
-    /// <summary>
-    /// Loads the target preset's types configuration into the shared config.
-    /// Returns false when the file is corrupt: the in-memory mods are cleared but
-    /// the file is preserved (and backed up) so an automatic save cannot replace
-    /// it with an empty config.
-    /// </summary>
-    private bool MergePresetTypesConfig(string mapName, string presetName)
-    {
-        string presetFolder = PresetPaths.PresetFolder(_dataDirectoryProvider.Current, mapName, presetName);
-        ConfigLoadResult<TypesConfig> loaded = _typesConfigStore.Load(presetFolder);
-        if (loaded.Status == ConfigLoadStatus.Success && loaded.Value is not null)
-        {
-            _typesConfig.Mods = loaded.Value.Mods.ToList();
-            _typesConfig.IsCorrupt = false;
-            return true;
-        }
-
-        // No usable config for this preset: this map starts with an empty one.
-        _typesConfig.Mods.Clear();
-        _typesConfig.CurrentMap = mapName;
-        _typesConfig.IsCorrupt = loaded.Status == ConfigLoadStatus.Corrupt;
-        if (!_typesConfig.IsCorrupt)
-        {
-            return true;
-        }
-
-        string path = PresetPaths.TypesConfigPath(_dataDirectoryProvider.Current, mapName, presetName);
-        bool backedUp = _typesConfigStore.BackupCorrupt(presetFolder);
-        _log.Error(
-            $"types_config.json is corrupt ({path}). " +
-            (backedUp ? $"A backup was saved as \"{path}.corrupt\". " : string.Empty) +
-            "The file was not overwritten and cfgeconomycore.xml was not updated. " +
-            "Fix or delete the corrupt file, then re-select the map.");
-
-        if (_reportedCorruptTypes.Add(path))
-        {
-            _dialogs.ShowWarning(
-                "The preset's types configuration could not be read and was left untouched.",
-                "Types configuration corrupt",
-                "The file was not overwritten and cfgeconomycore.xml was not updated. " +
-                "Fix or delete the corrupt types_config.json, then re-select the map.",
-                path);
-        }
-
-        return false;
     }
 }
 

@@ -59,6 +59,9 @@ public sealed class PhysicalFileSystem : IFileSystem
         }
     }
 
+    public void MoveFile(string sourcePath, string destinationPath)
+        => File.Move(sourcePath, destinationPath);
+
     public string ReadAllText(string path)
         => File.ReadAllText(path);
 

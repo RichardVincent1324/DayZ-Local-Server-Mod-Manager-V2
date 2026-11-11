@@ -47,20 +47,18 @@ public interface IDialogService
     string? PickFile(string title, string filter, string initialDirectory);
 
     /// <summary>
-    /// Opens the types-file picker for a mod. <paramref name="activeFiles"/> is the
-    /// subset of <paramref name="files"/> that are currently configured for the
-    /// mod; those are pre-selected. <paramref name="activeRoles"/> carries the
-    /// role of any pre-selected unrecognized file. <paramref name="modFolderPath"/>
-    /// is the mod's Workshop folder, offered as a shortcut to inspect unrecognized
-    /// files. Returns the selected files and their roles, or null if the user
-    /// cancelled.
+    /// Opens the type-file import picker for a mod. <paramref name="modFolderPath"/>
+    /// is offered as a shortcut to inspect the mod's files. <paramref name="targetDescription"/>
+    /// names the preset the files will be copied into; it is shown in the dialog so
+    /// the destination stays visible when the import is started from the Mod Manage
+    /// tab, where the Map/Preset selectors are not on screen. Returns the selected
+    /// full paths, or null if the user cancelled.
     /// </summary>
-    IReadOnlyList<TypeFileSelection>? PickTypeFiles(
+    IReadOnlyList<string>? PickTypeFiles(
         string modName,
         IReadOnlyList<string> files,
-        IReadOnlySet<string>? activeFiles = null,
-        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null,
-        string? modFolderPath = null);
+        string? modFolderPath = null,
+        string targetDescription = "");
 
     /// <summary>
     /// Prompts for a single line of text. Returns the entered text, or null when

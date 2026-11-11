@@ -25,8 +25,15 @@ public sealed class FakeFileSystem : IFileSystem
 
     public bool FileExists(string path) => _files.ContainsKey(path);
 
+    public bool ThrowOnGetFiles { get; set; }
+
     public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive)
     {
+        if (ThrowOnGetFiles)
+        {
+            throw new IOException("Simulated directory read failure.");
+        }
+
         string prefix = EnsureTrailingSeparator(path);
         return _files.Keys
             .Where(f => recursive
@@ -53,6 +60,28 @@ public sealed class FakeFileSystem : IFileSystem
     }
 
     public void DeleteFile(string path) => _files.Remove(path);
+
+    public void MoveFile(string sourcePath, string destinationPath)
+    {
+        if (!_files.TryGetValue(sourcePath, out string? contents))
+        {
+            throw new FileNotFoundException("File not found in fake filesystem.", sourcePath);
+        }
+
+        if (_files.ContainsKey(destinationPath))
+        {
+            throw new IOException($"Destination already exists: {destinationPath}");
+        }
+
+        string? parent = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            CreateDirectory(parent);
+        }
+
+        _files.Remove(sourcePath);
+        _files[destinationPath] = contents;
+    }
 
     public string ReadAllText(string path) =>
         _files.TryGetValue(path, out string? contents)

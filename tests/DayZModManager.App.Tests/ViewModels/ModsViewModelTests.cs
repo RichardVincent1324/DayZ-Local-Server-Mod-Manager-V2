@@ -320,6 +320,106 @@ public class ModsViewModelTests
         Assert.Same(remaining, vm.AvailableItems[0]);
     }
 
+    [Fact]
+    public void SearchResults_ShowLoadPositions_AndNullForAvailableMods()
+    {
+        ModsViewModel vm = Create(new[] { "@Alpha", "@Bravo" }, new[] { "@Bravo" });
+        Refresh(vm, @"D:\workshop");
+
+        vm.SearchText = "a";
+
+        Assert.Equal(1, vm.SearchResults.Single(r => r.Name == "@Bravo").Position);
+        Assert.Null(vm.SearchResults.Single(r => r.Name == "@Alpha").Position);
+    }
+
+    [Fact]
+    public void SearchResults_RefreshPositions_AfterReorder()
+    {
+        ModsViewModel vm = Create(new[] { "@A", "@B", "@C" }, new[] { "@A", "@B", "@C" });
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.ReorderCommand.Execute(new ReorderRequest("@C", 0));
+
+        Assert.Equal(1, vm.SearchResults.Single(r => r.Name == "@C").Position);
+        Assert.Equal(2, vm.SearchResults.Single(r => r.Name == "@A").Position);
+        Assert.Equal(3, vm.SearchResults.Single(r => r.Name == "@B").Position);
+    }
+
+    [Fact]
+    public void ConfigureTypesCommand_DisabledWithoutSelection()
+    {
+        ModsViewModel vm = Create(new[] { "@Alpha" }, new[] { "@Alpha" });
+        Refresh(vm, @"D:\workshop");
+        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
+
+        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void ConfigureTypesCommand_EnabledOnlyForLoadedMods()
+    {
+        ModsViewModel vm = Create(new[] { "@Alpha", "@Bravo" }, new[] { "@Bravo" });
+        Refresh(vm, @"D:\workshop");
+        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
+
+        vm.SearchText = "alpha";
+        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
+        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
+
+        vm.SearchText = "bravo";
+        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
+        Assert.True(vm.ConfigureTypesCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void ConfigureTypesCommand_DisabledWhenNoMapIsApplied()
+    {
+        ModsViewModel vm = Create(new[] { "@Bravo" }, new[] { "@Bravo" });
+        Refresh(vm, @"D:\workshop");
+        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
+        vm.CanConfigureTypes = () => false;
+
+        vm.SearchText = "bravo";
+        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
+
+        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void ConfigureTypesCommand_DisabledForMissingMod()
+    {
+        ModsViewModel vm = Create(new[] { "@Alpha" }, new[] { "@Alpha", "@Ghost" });
+        Refresh(vm, @"D:\workshop");
+        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
+
+        vm.SearchText = "ghost";
+        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
+
+        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task ConfigureTypesCommand_RequestsTheSelectedMod()
+    {
+        ModsViewModel vm = Create(new[] { "@Bravo" }, new[] { "@Bravo" });
+        Refresh(vm, @"D:\workshop");
+
+        var requested = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.ConfigureTypesRequested = name =>
+        {
+            requested.TrySetResult(name);
+            return Task.CompletedTask;
+        };
+
+        vm.SearchText = "bravo";
+        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
+
+        vm.ConfigureTypesCommand.Execute(null);
+
+        Assert.Equal("@Bravo", await requested.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
     private sealed class FakeDiscovery : IModDiscoveryService
     {
         private readonly IReadOnlyList<string> _mods;

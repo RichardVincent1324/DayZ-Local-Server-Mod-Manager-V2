@@ -1,5 +1,4 @@
 using DayZModManager.App.ViewModels;
-using DayZModManager.Core.Services;
 
 namespace DayZModManager.App.Tests.ViewModels;
 
@@ -9,130 +8,64 @@ public class TypeFilePickerViewModelTests
 
     private static string FileOf(string name) => $@"{Base}\{name}";
 
-    private static HashSet<string> Set(params string[] paths) => new(paths, StringComparer.OrdinalIgnoreCase);
-
-    private static TypeFilePickerViewModel Create(
-        IReadOnlyList<string> files,
-        IReadOnlySet<string>? activeFiles = null,
-        IReadOnlyDictionary<string, TypesFileRole>? activeRoles = null) =>
-        new("@InediaInfectedAI", files, Base, activeFiles, activeRoles);
+    private static TypeFilePickerViewModel Create(params string[] files) =>
+        new("@InediaInfectedAI", files, Base);
 
     [Fact]
-    public void RecognizedAndUnrecognized_AreSeparated()
+    public void Files_AreListedWithRelativeDisplayPaths()
     {
         string types = FileOf("types.xml");
-        string spawn = FileOf("casual_spawnabletypes.xml");
-        string weird = FileOf("weird_economy_config.xml");
+        string economy = FileOf("config\\economy.xml");
 
-        TypeFilePickerViewModel vm = Create(new[] { weird, types, spawn });
+        TypeFilePickerViewModel vm = Create(types, economy);
 
-        Assert.Equal(new[] { types, spawn }, vm.RecognizedOptions.Select(o => o.FullPath));
-        Assert.Equal(new[] { weird }, vm.UnrecognizedOptions.Select(o => o.FullPath));
-        Assert.True(vm.HasUnrecognizedOptions);
+        Assert.Equal(2, vm.Files.Count);
+        Assert.Equal("types.xml", vm.Files[0].DisplayPath);
+        Assert.Equal(@"config\economy.xml", vm.Files[1].DisplayPath);
     }
 
     [Fact]
-    public void HasUnrecognizedOptions_False_WhenAllRecognized()
+    public void RecognizedFiles_AreGroupedFirst_AndOthersSecond()
+    {
+        string types = FileOf("Types.xml");
+        string spawn = FileOf("casual_Spawnabletypes.xml");
+        string economy = FileOf("economy.xml");
+        string config = FileOf("config.xml");
+
+        TypeFilePickerViewModel vm = Create(economy, types, config, spawn);
+
+        Assert.Equal(new[] { types, spawn }, vm.RecognizedOptions.Select(option => option.FullPath));
+        Assert.Equal(new[] { economy, config }, vm.UnrecognizedOptions.Select(option => option.FullPath));
+        Assert.True(vm.ShowGroupSeparator);
+    }
+
+    [Fact]
+    public void ShowGroupSeparator_IsFalse_WhenEitherGroupIsEmpty()
+    {
+        TypeFilePickerViewModel onlyRecognized = Create(FileOf("types.xml"));
+        TypeFilePickerViewModel onlyOther = Create(FileOf("economy.xml"));
+
+        Assert.False(onlyRecognized.ShowGroupSeparator);
+        Assert.False(onlyOther.ShowGroupSeparator);
+    }
+
+    [Fact]
+    public void GetSelectedFiles_ReturnsOnlyCheckedFiles()
     {
         string types = FileOf("types.xml");
-        string spawn = FileOf("casual_spawnabletypes.xml");
+        string economy = FileOf("economy.xml");
 
-        TypeFilePickerViewModel vm = Create(new[] { types, spawn });
+        TypeFilePickerViewModel vm = Create(types, economy);
+        vm.Files.Single(option => option.FullPath == types).IsChecked = true;
 
-        Assert.False(vm.HasUnrecognizedOptions);
-        Assert.Empty(vm.UnrecognizedOptions);
+        Assert.Equal(new[] { types }, vm.GetSelectedFiles());
     }
 
     [Fact]
-    public void Defaults_CheckOnlyActiveFiles()
+    public void GetSelectedFiles_ReturnsEmpty_WhenNothingChecked()
     {
-        string types = FileOf("types.xml");
-        string spawn = FileOf("casual_spawnabletypes.xml");
-        string weird = FileOf("weird_economy_config.xml");
+        TypeFilePickerViewModel vm = Create(FileOf("types.xml"));
 
-        TypeFilePickerViewModel vm = Create(new[] { types, spawn, weird }, Set(types, weird));
-
-        Assert.True(vm.RecognizedOptions.Single(o => o.FullPath == types).IsChecked);
-        Assert.True(vm.UnrecognizedOptions.Single(o => o.FullPath == weird).IsChecked);
-        Assert.False(vm.RecognizedOptions.Single(o => o.FullPath == spawn).IsChecked);
-    }
-
-    [Fact]
-    public void Defaults_CheckNothing_WhenNothingActive()
-    {
-        string types = FileOf("types.xml");
-        string weird = FileOf("weird_economy_config.xml");
-
-        TypeFilePickerViewModel vm = Create(new[] { types, weird });
-
-        Assert.All(vm.RecognizedOptions.Concat(vm.UnrecognizedOptions), o => Assert.False(o.IsChecked));
-    }
-
-    [Fact]
-    public void RecognizedFiles_UseFilenameRole()
-    {
-        string types = FileOf("casual_types.xml");
-        string spawn = FileOf("casual_spawnabletypes.xml");
-
-        TypeFilePickerViewModel vm = Create(new[] { types, spawn });
-
-        Assert.Equal(TypesFileRole.Types, vm.RecognizedOptions.Single(o => o.FullPath == types).Role);
-        Assert.Equal(TypesFileRole.SpawnableTypes, vm.RecognizedOptions.Single(o => o.FullPath == spawn).Role);
-    }
-
-    [Fact]
-    public void UnrecognizedFile_DefaultsToTypesRole()
-    {
-        string weird = FileOf("weird_economy_config.xml");
-
-        TypeFilePickerViewModel vm = Create(new[] { weird });
-
-        Assert.Equal(TypesFileRole.Types, vm.UnrecognizedOptions.Single().Role);
-    }
-
-    [Fact]
-    public void GetSelections_ReturnsCheckedFilesWithRoles()
-    {
-        string types = FileOf("types.xml");
-        string weird = FileOf("weird_economy_config.xml");
-
-        TypeFilePickerViewModel vm = Create(new[] { types, weird });
-        vm.RecognizedOptions.Single(o => o.FullPath == types).IsChecked = true;
-        var weirdOption = vm.UnrecognizedOptions.Single(o => o.FullPath == weird);
-        weirdOption.IsChecked = true;
-        weirdOption.Role = TypesFileRole.SpawnableTypes;
-
-        IReadOnlyList<TypeFileSelection> selections = vm.GetSelections();
-
-        Assert.Equal(2, selections.Count);
-        Assert.Contains(selections, s => s.SourceFile == types && s.Role == TypesFileRole.Types);
-        Assert.Contains(selections, s => s.SourceFile == weird && s.Role == TypesFileRole.SpawnableTypes);
-    }
-
-    [Fact]
-    public void UncheckedFiles_AreNotReturned()
-    {
-        string types = FileOf("types.xml");
-        string weird = FileOf("weird_economy_config.xml");
-
-        TypeFilePickerViewModel vm = Create(new[] { types, weird });
-
-        Assert.Empty(vm.GetSelections());
-    }
-
-    [Fact]
-    public void ActiveUnrecognizedSpawnable_PreSelectsItsRole()
-    {
-        string weird = FileOf("weird_economy_config.xml");
-        var roles = new Dictionary<string, TypesFileRole>(StringComparer.OrdinalIgnoreCase)
-        {
-            [weird] = TypesFileRole.SpawnableTypes,
-        };
-
-        TypeFilePickerViewModel vm = Create(new[] { weird }, Set(weird), roles);
-
-        var option = vm.UnrecognizedOptions.Single();
-        Assert.True(option.IsChecked);
-        Assert.Equal(TypesFileRole.SpawnableTypes, option.Role);
+        Assert.Empty(vm.GetSelectedFiles());
     }
 }

@@ -298,8 +298,7 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
             _log.Info($"Found {files.Count} XML file(s) in {modName}.");
 
             string modFolderPath = Path.Combine(_workshopPath, modName);
-            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(
-                modName, files, modFolderPath, ImportTargetDescription(mapName));
+            IReadOnlyList<string>? selected = _dialogs.PickTypeFiles(modName, files, modFolderPath);
             if (selected is null || selected.Count == 0)
             {
                 return false;
@@ -365,23 +364,9 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Describes the preset an import writes into, for the picker dialog: the
-    /// Mod Manage tab has no visible Map/Preset selectors, so the dialog is the
-    /// only place the user can confirm the destination.
+    /// Describes the preset an import wrote into, for the success log line.
     /// </summary>
     private string ImportTargetDescription(string mapName) => $"{mapName} / {_activePresetName}";
-
-    /// <summary>
-    /// Shows <paramref name="modName"/> in the Types Config picker without running
-    /// the import. Used when the Mod Manage pencil already imported the files.
-    /// </summary>
-    public void ShowTarget(string? modName)
-    {
-        if (!string.IsNullOrWhiteSpace(modName))
-        {
-            SetRestoringModSelection(modName);
-        }
-    }
 
     /// <summary>
     /// Deletes the selected physical files from type_files, removes their role

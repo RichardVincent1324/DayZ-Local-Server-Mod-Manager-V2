@@ -579,18 +579,4 @@ public partial class PresetTypesViewModelTests
         Assert.False(await vm.ImportTypesAsync("@CF"));
         Assert.Equal(0, dialogs.PickTypeFilesCalls);
     }
-
-    [Fact]
-    public async Task ImportTypes_TellsThePickerWhichPresetIsTheTarget()
-    {
-        string[] files = { @"D:\workshop\@CF\cf_types.xml" };
-        var dialogs = new FakeDialogs { SelectedFiles = files };
-        var types = new FakeTypesService { DiscoveryFiles = files };
-        (PresetTypesViewModel vm, _, _) = CreateTypesVm(AppliedConfig(), types, dialogs);
-
-        await vm.ImportTypesAsync("@CF");
-
-        Assert.Contains(MapName, dialogs.LastTargetDescription);
-        Assert.Contains(PresetPaths.DefaultPresetName, dialogs.LastTargetDescription);
-    }
 }

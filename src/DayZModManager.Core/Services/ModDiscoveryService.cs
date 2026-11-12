@@ -15,17 +15,20 @@ public sealed class ModDiscoveryService : IModDiscoveryService
         _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
-    public IReadOnlyList<string> DiscoverWorkshopMods(string workshopPath)
+    public ModDiscoveryResult DiscoverWorkshopMods(string workshopPath)
     {
+        // A path that cannot be read is reported as unavailable rather than empty:
+        // callers must not infer that every loaded mod is missing.
         if (string.IsNullOrWhiteSpace(workshopPath) || !_fileSystem.DirectoryExists(workshopPath))
         {
-            return Array.Empty<string>();
+            return ModDiscoveryResult.Unavailable;
         }
 
-        return _fileSystem
-            .GetDirectories(workshopPath)
-            .Where(name => name.StartsWith("@", StringComparison.Ordinal))
+        IReadOnlyList<string> mods = WorkshopMods
+            .FindPresent(_fileSystem, workshopPath)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        return new ModDiscoveryResult(PathAvailable: true, mods);
     }
 }

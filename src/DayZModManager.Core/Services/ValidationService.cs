@@ -62,17 +62,15 @@ public sealed class ValidationService : IValidationService
         return errors;
     }
 
-    public IReadOnlyList<string> FindMissingMods(string workshopPath, IReadOnlyList<string> loadedMods)
-    {
-        if (string.IsNullOrWhiteSpace(workshopPath) || !_fileSystem.DirectoryExists(workshopPath))
-        {
-            return Array.Empty<string>();
-        }
-
-        return loadedMods
-            .Where(mod => !_fileSystem.DirectoryExists(Path.Combine(workshopPath, mod)))
-            .ToList();
-    }
+    /// <summary>
+    /// Returns the loaded mods that are absent from the Workshop directory. Apply
+    /// tolerates missing mods (their junctions are simply skipped), so this is used
+    /// only by the launch preflight to block a server launch. Returns an empty list
+    /// when the Workshop path is unset or does not exist (the Workshop error is
+    /// reported by <see cref="Validate"/> in that case).
+    /// </summary>
+    public IReadOnlyList<string> FindMissingMods(string workshopPath, IReadOnlyList<string> loadedMods) =>
+        WorkshopMods.FindMissing(_fileSystem, workshopPath, loadedMods);
 
     private void ValidateWorkshop(string workshopPath, List<string> errors)
     {

@@ -84,6 +84,29 @@ public sealed class ModState
     }
 
     /// <summary>
+    /// Removes several mods in one pass, recomputing the derived lists once instead
+    /// of once per mod. Returns the number of entries actually removed.
+    /// </summary>
+    public int UnloadMany(IEnumerable<string> modNames)
+    {
+        ArgumentNullException.ThrowIfNull(modNames);
+
+        var toRemove = new HashSet<string>(
+            modNames.Where(name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (toRemove.Count == 0) return 0;
+
+        int removed = _loadedMods.RemoveAll(mod => toRemove.Contains(mod));
+        if (removed > 0)
+        {
+            RecomputeDerived();
+        }
+
+        return removed;
+    }
+
+    /// <summary>
     /// Moves a loaded mod to the given zero-based final index (clamped to the
     /// valid range). Returns false if the mod is not loaded or its position is
     /// unchanged.

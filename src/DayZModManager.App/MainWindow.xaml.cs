@@ -9,7 +9,6 @@ using DayZModManager.App.ViewModels;
 
 namespace DayZModManager.App;
 
-
 /// <summary>
 /// Interaction logic for MainWindow.xaml
 /// </summary>
@@ -30,6 +29,20 @@ public partial class MainWindow : Window
 
         LoadedListBox.GotKeyboardFocus += (_, _) => _activeModList = LoadedListBox;
         AvailableListBox.GotKeyboardFocus += (_, _) => _activeModList = AvailableListBox;
+    }
+
+    // 【新增】这个方法必须放在 MainWindow 类的大括号内部！
+    private void FileTypeComboBox_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox comboBox)
+        {
+            // 使用 Dispatcher 延迟执行，确保 ComboBox 已经准备好接管焦点
+            comboBox.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                comboBox.Focus();
+                comboBox.IsDropDownOpen = true; // 强制展开下拉列表
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
     }
 
     private void AutoCleanServerLogsCheckBox_Loaded(object sender, RoutedEventArgs e)
@@ -88,7 +101,8 @@ public partial class MainWindow : Window
     }
 
     private void SelectAll_Click(object sender, RoutedEventArgs e)
-    {        if (_activeModList is not null)
+    {        
+        if (_activeModList is not null)
         {
             _activeModList.SelectAll();
         }

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using DayZModManager.App.Services;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
 
@@ -16,6 +17,7 @@ public sealed class ModsViewModel : ViewModelBase
     private readonly ModState _state;
     private readonly IModDiscoveryService _discovery;
     private readonly LogViewModel _log;
+    private readonly IDialogService _dialogs;
 
     private List<string> _savedLoaded = new();
     private string _workshopPath = string.Empty;
@@ -23,11 +25,16 @@ public sealed class ModsViewModel : ViewModelBase
     private SearchResultViewModel? _selectedSearchResult;
     private bool _isDirty;
 
-    public ModsViewModel(ModState state, IModDiscoveryService discovery, LogViewModel log)
+    public ModsViewModel(
+        ModState state,
+        IModDiscoveryService discovery,
+        LogViewModel log,
+        IDialogService dialogs)
     {
         _state = state;
         _discovery = discovery;
         _log = log;
+        _dialogs = dialogs;
 
         SelectedLoadedItems.CollectionChanged += OnSelectionChanged;
         SelectedAvailableItems.CollectionChanged += OnSelectionChanged;
@@ -72,7 +79,6 @@ public sealed class ModsViewModel : ViewModelBase
             if (SetField(ref _selectedSearchResult, value))
             {
                 ToggleSelectedCommand?.RaiseCanExecuteChanged();
-                ConfigureTypesCommand?.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(ToggleButtonText));
             }
         }
@@ -101,51 +107,33 @@ public sealed class ModsViewModel : ViewModelBase
     public RelayCommand RemoveMissingCommand { get; private set; } = null!;
     public RelayCommand<ReorderRequest> ReorderCommand { get; private set; } = null!;
     public RelayCommand ToggleSelectedCommand { get; private set; } = null!;
-    public AsyncRelayCommand ConfigureTypesCommand { get; private set; } = null!;
-
-    /// <summary>
-    /// Runs the XML import for a mod. Provided by the shell, which also owns the
-    /// decision to move to the Preset &amp; Types tab afterwards.
-    /// </summary>
-    public Func<string, Task>? ConfigureTypesRequested { get; set; }
-
-    /// <summary>
-    /// Whether a types import can run right now (the active preset must have an
-    /// applied map). Provided by the shell.
-    /// </summary>
-    public Func<bool>? CanConfigureTypes { get; set; }
 
     /// <summary>Wires up commands (called once after construction).</summary>
     public void Initialize()
     {
         LoadSelectedCommand = new RelayCommand(LoadSelected);
         UnloadSelectedCommand = new RelayCommand(UnloadSelected);
+
         RefreshCommand = new AsyncRelayCommand(() => RefreshAsync(_workshopPath));
-        RemoveMissingCommand = new RelayCommand(RemoveMissing);
+        RemoveMissingCommand = new RelayCommand(RemoveMissing, () => _state.MissingMods.Count > 0);
         ReorderCommand = new RelayCommand<ReorderRequest>(Reorder);
         ToggleSelectedCommand = new RelayCommand(ToggleSelected, () => SelectedSearchResult is not null);
-        ConfigureTypesCommand = new AsyncRelayCommand(
-            async () =>
-            {
-                if (SelectedSearchResult is { } result && ConfigureTypesRequested is not null)
-                {
-                    await ConfigureTypesRequested(result.Name);
-                }
-            },
-            () => ConfigureTypesRequested is not null
-                  && SelectedSearchResult is { IsLoaded: true, IsMissing: false }
-                  && CanConfigureTypes?.Invoke() != false);
     }
 
-    /// <summary>Re-discovers workshop mods on a background thread to keep the UI responsive.</summary>
+    /// <summary>
+    /// Re-discovers workshop mods on a background thread to keep the UI responsive.
+    /// An unusable workshop path leaves the current lists untouched: treating it as
+    /// an empty folder would mark every loaded mod as missing.
+    /// </summary>
+    /// <param name="workshopPath">The workshop folder to scan.</param>
     public async Task RefreshAsync(string workshopPath)
     {
         _workshopPath = workshopPath;
 
-        IReadOnlyList<string> workshopMods;
+        ModDiscoveryResult result;
         try
         {
-            workshopMods = await Task.Run(() => _discovery.DiscoverWorkshopMods(workshopPath));
+            result = await Task.Run(() => _discovery.DiscoverWorkshopMods(workshopPath));
         }
         catch (Exception ex)
         {
@@ -153,7 +141,24 @@ public sealed class ModsViewModel : ViewModelBase
             return;
         }
 
-        ApplyDiscovery(workshopMods);
+        if (!result.PathAvailable)
+        {
+            // Keep the previous lists. A blank path is the normal state before the
+            // app is configured, so it is a warning; a configured-but-unreadable
+            // folder is an error worth surfacing.
+            if (string.IsNullOrWhiteSpace(workshopPath))
+            {
+                _log.Warning("The workshop path is not set; set it in the Settings tab to manage mods.");
+            }
+            else
+            {
+                _log.Error($"The workshop folder could not be read, so the mod list was not refreshed: {workshopPath}");
+            }
+
+            return;
+        }
+
+        ApplyDiscovery(result.Mods);
     }
 
     /// <summary>Marks the current state as applied (clears the dirty flag).</summary>
@@ -183,6 +188,10 @@ public sealed class ModsViewModel : ViewModelBase
         UpdateDirtyFlag();
     }
 
+    /// <summary>
+    /// Applies a completed discovery: updates the workshop snapshot, reports missing
+    /// mods, then rebuilds the lists exactly once.
+    /// </summary>
     private void ApplyDiscovery(IReadOnlyList<string> workshopMods)
     {
         _state.SetWorkshopMods(workshopMods);
@@ -195,14 +204,15 @@ public sealed class ModsViewModel : ViewModelBase
                 "(e.g. ...\\steamapps\\common\\DayZ\\!Workshop).");
         }
 
-        int missing = _state.MissingMods.Count;
-        if (missing > 0)
+        IReadOnlyList<string> missing = _state.MissingMods;
+        if (missing.Count > 0)
         {
-            _log.Warning($"{missing} loaded mod(s) are missing from the workshop: {string.Join(", ", _state.MissingMods)}");
+            _log.Warning($"{missing.Count} loaded mod(s) are missing from the workshop: {string.Join(", ", missing)}");
         }
 
         Rebuild();
     }
+
     private void LoadSelected()
     {
         List<ModItemViewModel> items = SelectedAvailableItems.ToList();
@@ -237,6 +247,11 @@ public sealed class ModsViewModel : ViewModelBase
         Rebuild();
     }
 
+    /// <summary>
+    /// Drops every loaded mod that is no longer present in the workshop, in one pass.
+    /// The removal is in-memory until the next Apply, so the explicit button plus one
+    /// confirmation is what makes acting on the detected state safe.
+    /// </summary>
     private void RemoveMissing()
     {
         IReadOnlyList<string> missing = _state.MissingMods;
@@ -246,12 +261,19 @@ public sealed class ModsViewModel : ViewModelBase
             return;
         }
 
-        foreach (string name in missing)
+        string message =
+            $"Remove {missing.Count} missing mod(s) from the load order?\n\n{string.Join(", ", missing)}\n\n" +
+            "This takes effect the next time you click Apply.";
+
+        if (!_dialogs.Confirm(message, "Remove missing mods"))
         {
-            _state.Unload(name);
+            _log.Info("Removal cancelled.");
+            return;
         }
 
+        int removed = _state.UnloadMany(missing);
         Rebuild();
+        _log.Success($"Removed {removed} missing mod(s) from the load order.");
     }
 
     private void Reorder(ReorderRequest? request)
@@ -467,9 +489,6 @@ public sealed class ModsViewModel : ViewModelBase
     private void NotifyCommandStates()
     {
         OnPropertyChanged(nameof(CanSelectAll));
-
-        // The pencil's enabling depends on IsLoaded/IsMissing, which can change
-        // without the selection itself changing (e.g. after a toggle).
-        ConfigureTypesCommand?.RaiseCanExecuteChanged();
+        RemoveMissingCommand?.RaiseCanExecuteChanged();
     }
 }

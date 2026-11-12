@@ -404,8 +404,7 @@ public class SettingsViewModelTests
         public string? PickFile(string title, string filter, string initialDirectory) => File;
 
         public IReadOnlyList<string>? PickTypeFiles(
-            string modName, IReadOnlyList<string> files, string? modFolderPath = null,
-            string targetDescription = "") => null;
+            string modName, IReadOnlyList<string> files, string? modFolderPath = null) => null;
 
         public AddPresetRequest? AskAddPreset(string mapName) => null;
 

@@ -311,8 +311,7 @@
         </Border>
 
         <!-- Tabs -->
-        <TabControl SelectionChanged="Tabs_SelectionChanged"
-                    SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
+        <TabControl SelectionChanged="Tabs_SelectionChanged">
             <TabItem x:Name="ModsTab" Header="Mod Manage" DataContext="{Binding Mods}">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
@@ -321,7 +320,7 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <!-- Top bar: unified search + toggle / configure-types actions -->
+                    <!-- Top bar: unified search + toggle -->
                     <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,6">
                         <TextBlock Text="Search:" VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBox Width="240" 
@@ -330,33 +329,7 @@
 									 VerticalContentAlignment="Center" 
 									 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <!-- Dynamic toggle: 'X' unloads a loaded mod, check mark loads it. -->
-                        <Button Command="{Binding ToggleSelectedCommand}"
-                                ToolTip="{Binding ToggleButtonText}"
-                                ToolTipService.ShowOnDisabled="True"
-                                AutomationProperties.Name="{Binding ToggleButtonText}"
-                                Margin="8,0,0,0">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource FolderIconButtonStyle}">
-                                    <Setter Property="Content" Value="&#xE73E;" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SelectedSearchResult.IsLoaded}" Value="True">
-                                            <Setter Property="Content" Value="&#xE711;" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-
-                        <!-- Configure types: imports XML from the selected loaded mod,
-                             then moves to the Preset & Types tab. -->
-                        <Button Style="{StaticResource FolderIconButtonStyle}"
-                                Content="&#xE710;"
-                                Command="{Binding ConfigureTypesCommand}"
-                                ToolTip="Import this mod's XML types"
-                                ToolTipService.ShowOnDisabled="True"
-                                AutomationProperties.Name="Configure types"
-                                Margin="0,0,0,0" />
+                        <Button Content="{Binding ToggleButtonText}" Command="{Binding ToggleSelectedCommand}" Width="70" Margin="8,0,0,0" />
                     </StackPanel>
 
                     <!-- Two ordering lists -->
@@ -547,7 +520,7 @@
                                         <DataTemplate>
                                             <ComboBox ItemsSource="{Binding DataContext.FileTypeOptions, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                       SelectedItem="{Binding FileTypeSelection, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                      BorderThickness="0" />
+                                                      BorderThickness="0" Loaded="FileTypeComboBox_Loaded" />
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellEditingTemplate>
                                 </DataGridTemplateColumn>

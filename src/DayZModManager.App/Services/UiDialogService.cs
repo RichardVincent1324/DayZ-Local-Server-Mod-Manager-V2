@@ -95,8 +95,7 @@ public sealed class UiDialogService : IDialogService
     public IReadOnlyList<string>? PickTypeFiles(
         string modName,
         IReadOnlyList<string> files,
-        string? modFolderPath = null,
-        string targetDescription = "")
+        string? modFolderPath = null)
     {
         if (files.Count == 0)
         {
@@ -115,7 +114,7 @@ public sealed class UiDialogService : IDialogService
             };
 
         string basePath = GetCommonBasePath(files);
-        var viewModel = new TypeFilePickerViewModel(modName, files, basePath, targetDescription);
+        var viewModel = new TypeFilePickerViewModel(modName, files, basePath);
         var window = new TypeFilePickerWindow(viewModel, openModFolder);
         return window.ShowDialog() == true ? window.Selections : null;
     }

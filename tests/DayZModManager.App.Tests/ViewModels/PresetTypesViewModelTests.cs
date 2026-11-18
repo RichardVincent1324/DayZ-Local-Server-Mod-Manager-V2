@@ -726,8 +726,6 @@ public partial class PresetTypesViewModelTests
 
         public int PickTypeFilesCalls { get; private set; }
 
-        public string? LastTargetDescription { get; private set; }
-
         public int ShowMessageCalls { get; private set; }
 
         public string? LastMessage { get; private set; }
@@ -804,12 +802,10 @@ public partial class PresetTypesViewModelTests
         public string? PickFile(string title, string filter, string initialDirectory) => null;
 
         public IReadOnlyList<string>? PickTypeFiles(
-            string modName, IReadOnlyList<string> files, string? modFolderPath = null,
-            string targetDescription = "")
+            string modName, IReadOnlyList<string> files, string? modFolderPath = null)
         {
             PickTypeFilesCalls++;
             LastModFolderPath = modFolderPath;
-            LastTargetDescription = targetDescription;
             return SelectedFiles;
         }
 

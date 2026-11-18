@@ -129,6 +129,38 @@ public class ModStateTests
     }
 
     [Fact]
+    public void UnloadMany_RemovesAllMatches_PreservingTheRestOfTheOrder()
+    {
+        var state = CreateState(
+            workshop: new[] { "@A", "@B", "@D" },
+            loaded: new[] { "@A", "@GhostB", "@B", "@GhostA", "@D" });
+
+        int removed = state.UnloadMany(new[] { "@GhostB", "@GhostA" });
+
+        Assert.Equal(2, removed);
+        Assert.Equal(new[] { "@A", "@B", "@D" }, state.LoadedMods);
+        Assert.Empty(state.MissingMods);
+    }
+
+    [Fact]
+    public void UnloadMany_UnknownNamesAreIgnored()
+    {
+        var state = CreateState(workshop: new[] { "@A" }, loaded: new[] { "@A" });
+
+        Assert.Equal(0, state.UnloadMany(new[] { "@Nope" }));
+        Assert.Equal(new[] { "@A" }, state.LoadedMods);
+    }
+
+    [Fact]
+    public void UnloadMany_EmptyInput_IsNoOp()
+    {
+        var state = CreateState(loaded: new[] { "@A" });
+
+        Assert.Equal(0, state.UnloadMany(Array.Empty<string>()));
+        Assert.Equal(new[] { "@A" }, state.LoadedMods);
+    }
+
+    [Fact]
     public void Reconciliation_IsCaseInsensitive()
     {
         var state = CreateState(workshop: new[] { "@CF", "@Expansion" }, loaded: new[] { "@cf" });

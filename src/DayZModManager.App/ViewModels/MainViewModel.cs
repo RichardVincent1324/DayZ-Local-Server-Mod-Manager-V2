@@ -143,7 +143,7 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         // --- Build child view models ---
-        Mods = new ModsViewModel(ModState, discoveryService, Log);
+        Mods = new ModsViewModel(ModState, discoveryService, Log, dialogs);
         PresetTypes = new PresetTypesViewModel(
             mapService, typesService, saveGameService, typeFilesConfigStore, serverConfigService,
             fileSystem, dialogs, Log, _dataDirectoryProvider, serverProcessState, _launcher,
@@ -157,11 +157,6 @@ public sealed class MainViewModel : ViewModelBase
         PresetTypes.ActivatePreset = ActivatePresetAsync;
         PresetTypes.ResolvePresetForMap = map => ResolveActivePreset(_settings, map);
         PresetTypes.PersistActiveSelection = PersistActiveSelection;
-
-        // The Mod Manage pencil delegates the import to this shell: it owns the
-        // dialogs, the active preset and the tab selection.
-        Mods.ConfigureTypesRequested = ImportTypesFromModsTabAsync;
-        Mods.CanConfigureTypes = () => PresetTypes.CanConfigureTypes;
 
         Settings = new SettingsViewModel(dialogs, fileSystem);
         Settings.ApplyRequested += async () => await ApplyAsync();
@@ -280,24 +275,6 @@ public sealed class MainViewModel : ViewModelBase
         private set => SetField(ref _isDirty, value);
     }
 
-    /// <summary>Index of the "Mod Manage" tab.</summary>
-    public const int ModsTabIndex = 0;
-
-    /// <summary>Index of the "Preset &amp; Types" tab.</summary>
-    public const int PresetTypesTabIndex = 1;
-
-    private int _selectedTabIndex;
-
-    /// <summary>
-    /// The selected tab, bound two-way to the TabControl. Set by the shell to move
-    /// the user after an operation completes (e.g. a successful XML import).
-    /// </summary>
-    public int SelectedTabIndex
-    {
-        get => _selectedTabIndex;
-        set => SetField(ref _selectedTabIndex, value);
-    }
-
     public string StatusText
     {
         get => _statusText;
@@ -311,28 +288,6 @@ public sealed class MainViewModel : ViewModelBase
     public void OnPresetTypesTabActivated()
     {
         PresetTypes.Sync(ModState.WorkshopMods, ModState.LoadedMods);
-    }
-
-    /// <summary>
-    /// Runs an XML import requested from Mod Manage and, only when it completed,
-    /// moves the user to the Preset &amp; Types tab.
-    /// </summary>
-    /// <remarks>
-    /// The import runs first and the tab switch is the last statement, so the
-    /// switch can only refresh state that is already written: the Apply triggered
-    /// by leaving Mod Manage (when mods were dirty) and the Sync triggered by
-    /// entering Preset &amp; Types are both harmless. Switching first would instead
-    /// let Sync clear the selection the import depends on.
-    /// </remarks>
-    private async Task ImportTypesFromModsTabAsync(string modName)
-    {
-        if (!await PresetTypes.ImportTypesAsync(modName))
-        {
-            return;
-        }
-
-        SelectedTabIndex = PresetTypesTabIndex;
-        PresetTypes.ShowTarget(modName);
     }
 
     /// <summary>Resolves the preset active for a map, defaulting to the reserved default preset.</summary>

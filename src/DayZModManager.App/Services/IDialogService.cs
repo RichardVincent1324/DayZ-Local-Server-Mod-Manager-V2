@@ -48,17 +48,13 @@ public interface IDialogService
 
     /// <summary>
     /// Opens the type-file import picker for a mod. <paramref name="modFolderPath"/>
-    /// is offered as a shortcut to inspect the mod's files. <paramref name="targetDescription"/>
-    /// names the preset the files will be copied into; it is shown in the dialog so
-    /// the destination stays visible when the import is started from the Mod Manage
-    /// tab, where the Map/Preset selectors are not on screen. Returns the selected
+    /// is offered as a shortcut to inspect the mod's files. Returns the selected
     /// full paths, or null if the user cancelled.
     /// </summary>
     IReadOnlyList<string>? PickTypeFiles(
         string modName,
         IReadOnlyList<string> files,
-        string? modFolderPath = null,
-        string targetDescription = "");
+        string? modFolderPath = null);
 
     /// <summary>
     /// Prompts for a single line of text. Returns the entered text, or null when

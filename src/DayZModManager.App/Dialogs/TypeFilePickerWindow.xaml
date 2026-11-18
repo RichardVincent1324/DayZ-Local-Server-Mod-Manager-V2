@@ -10,20 +10,6 @@
     <DockPanel Margin="12">
         <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8"
                    Text="{Binding ModName, StringFormat=XML files found for {0} - check the ones to import:}" />
-        <!-- Import destination: the Mod Manage tab has no visible Map/Preset
-             selectors, so this is where the user confirms where the files go. -->
-        <TextBlock DockPanel.Dock="Top" Margin="0,-4,0,8" Foreground="Gray" FontSize="11"
-                   Text="{Binding TargetDescription, StringFormat=Copying into preset: {0}}">
-            <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding TargetDescription}" Value="">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </TextBlock.Style>
-        </TextBlock>
         <StackPanel DockPanel.Dock="Bottom" Orientation="Vertical" Margin="0,8,0,0">
             <TextBlock Margin="0,0,0,6" Foreground="Gray" FontSize="11"
                        TextWrapping="Wrap"

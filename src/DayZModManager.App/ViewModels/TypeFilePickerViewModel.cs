@@ -35,11 +35,9 @@ public sealed class TypeFilePickerViewModel : ViewModelBase
     public TypeFilePickerViewModel(
         string modName,
         IReadOnlyList<string> files,
-        string basePath,
-        string targetDescription = "")
+        string basePath)
     {
         ModName = modName;
-        TargetDescription = targetDescription ?? string.Empty;
         foreach (string file in files)
         {
             string display = file.StartsWith(basePath, StringComparison.OrdinalIgnoreCase)
@@ -60,12 +58,6 @@ public sealed class TypeFilePickerViewModel : ViewModelBase
     }
 
     public string ModName { get; }
-
-    /// <summary>
-    /// The preset the files will be copied into ("map / preset"). Empty when the
-    /// caller does not supply one; the dialog hides the line in that case.
-    /// </summary>
-    public string TargetDescription { get; }
 
     public ObservableCollection<TypeFileOptionViewModel> Files { get; } = new();
 

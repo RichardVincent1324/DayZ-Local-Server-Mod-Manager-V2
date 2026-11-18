@@ -423,12 +423,6 @@ public sealed partial class PresetTypesViewModel : ViewModelBase
     /// <summary>True when a map is applied (types operations require a map).</summary>
     private bool MapApplied => !string.IsNullOrWhiteSpace(ActiveMap);
 
-    /// <summary>
-    /// True when an XML import can run: the active preset must have an applied map
-    /// so its <c>type_files</c> folder can be resolved.
-    /// </summary>
-    public bool CanConfigureTypes => MapApplied;
-
     /// <summary>Tooltip for the type_files folder button.</summary>
     public string OpenTypeFilesFolderToolTip => "Open type_files folder in File Explorer";
 

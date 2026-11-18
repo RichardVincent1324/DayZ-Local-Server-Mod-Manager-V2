@@ -1,3 +1,4 @@
+using DayZModManager.App.Services;
 using DayZModManager.App.ViewModels;
 using DayZModManager.Core.Models;
 using DayZModManager.Core.Services;
@@ -6,7 +7,11 @@ namespace DayZModManager.App.Tests.ViewModels;
 
 public class ModsViewModelTests
 {
-    private static ModsViewModel Create(IReadOnlyList<string> workshopMods, IReadOnlyList<string> loadedMods)
+    private static ModsViewModel Create(
+        IReadOnlyList<string> workshopMods,
+        IReadOnlyList<string> loadedMods,
+        FakeDialogs? dialogs = null,
+        bool pathAvailable = true)
     {
         var state = new ModState();
         if (loadedMods.Count > 0)
@@ -14,7 +19,11 @@ public class ModsViewModelTests
             state.ReplaceLoadedMods(loadedMods);
         }
 
-        var viewModel = new ModsViewModel(state, new FakeDiscovery(workshopMods), new LogViewModel());
+        var viewModel = new ModsViewModel(
+            state,
+            new FakeDiscovery(workshopMods) { PathAvailable = pathAvailable },
+            new LogViewModel(),
+            dialogs ?? new FakeDialogs());
         viewModel.Initialize();
         return viewModel;
     }
@@ -42,7 +51,8 @@ public class ModsViewModelTests
     {
         var state = new ModState();
         var log = new LogViewModel();
-        var vm = new ModsViewModel(state, new FakeDiscovery(Array.Empty<string>()), log);
+        var vm = new ModsViewModel(
+            state, new FakeDiscovery(Array.Empty<string>()), log, new FakeDialogs());
         vm.Initialize();
 
         Refresh(vm, @"D:\SteamLibrary\steamapps\common\DayZ");
@@ -108,15 +118,84 @@ public class ModsViewModelTests
     }
 
     [Fact]
-    public void RemoveMissing_UnloadsModsNoLongerInWorkshop()
+    public void Refresh_NeverPrompts_AndMarksMissingMods()
     {
-        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" });
+        var dialogs = new FakeDialogs();
+        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" }, dialogs);
+
+        Refresh(vm, @"D:\workshop");
+
+        Assert.Equal(0, dialogs.ConfirmWithWarningCalls);
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        Assert.Contains(vm.LoadedItems, i => i.Name == "@Ghost" && i.IsMissing);
+    }
+
+    [Fact]
+    public void Refresh_UnavailableWorkshopPath_KeepsPreviousStateAndMarksNothingMissing()
+    {
+        var state = new ModState();
+        state.ReplaceLoadedMods(new[] { "@A" });
+        var discovery = new FakeDiscovery(new[] { "@A", "@B" });
+        var dialogs = new FakeDialogs();
+        var vm = new ModsViewModel(state, discovery, new LogViewModel(), dialogs);
+        vm.Initialize();
+        Refresh(vm, @"D:\workshop");
+
+        discovery.PathAvailable = false;
+        Refresh(vm, @"D:\workshop");
+
+        Assert.Equal(new[] { "@A" }, Names(vm.LoadedItems));
+        Assert.Equal(new[] { "@B" }, Names(vm.AvailableItems));
+        Assert.DoesNotContain(vm.LoadedItems, i => i.IsMissing);
+        Assert.Equal(0, dialogs.ConfirmCalls);
+    }
+
+    [Fact]
+    public void RemoveMissing_RemovesEveryMissingMod_WhenConfirmed()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = true };
+        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@GhostB", "@GhostA" }, dialogs);
         Refresh(vm, @"D:\workshop");
         vm.MarkApplied();
 
         vm.RemoveMissingCommand.Execute(null);
 
+        Assert.Equal(1, dialogs.ConfirmCalls);
         Assert.Equal(new[] { "@A" }, Names(vm.LoadedItems));
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public void RemoveMissing_KeepsMods_WhenDeclined()
+    {
+        var dialogs = new FakeDialogs { ConfirmResult = false };
+        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" }, dialogs);
+        Refresh(vm, @"D:\workshop");
+        vm.MarkApplied();
+
+        vm.RemoveMissingCommand.Execute(null);
+
+        Assert.Equal(1, dialogs.ConfirmCalls);
+        Assert.Equal(new[] { "@A", "@Ghost" }, Names(vm.LoadedItems));
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public void RemoveMissingCommand_DisabledWhenNothingIsMissing()
+    {
+        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A" });
+        Refresh(vm, @"D:\workshop");
+
+        Assert.False(vm.RemoveMissingCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void RemoveMissingCommand_EnabledWhenModsAreMissing()
+    {
+        ModsViewModel vm = Create(new[] { "@A" }, new[] { "@A", "@Ghost" });
+        Refresh(vm, @"D:\workshop");
+
+        Assert.True(vm.RemoveMissingCommand.CanExecute(null));
     }
 
     [Fact]
@@ -346,86 +425,73 @@ public class ModsViewModelTests
         Assert.Equal(3, vm.SearchResults.Single(r => r.Name == "@B").Position);
     }
 
-    [Fact]
-    public void ConfigureTypesCommand_DisabledWithoutSelection()
-    {
-        ModsViewModel vm = Create(new[] { "@Alpha" }, new[] { "@Alpha" });
-        Refresh(vm, @"D:\workshop");
-        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
-
-        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void ConfigureTypesCommand_EnabledOnlyForLoadedMods()
-    {
-        ModsViewModel vm = Create(new[] { "@Alpha", "@Bravo" }, new[] { "@Bravo" });
-        Refresh(vm, @"D:\workshop");
-        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
-
-        vm.SearchText = "alpha";
-        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
-        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
-
-        vm.SearchText = "bravo";
-        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
-        Assert.True(vm.ConfigureTypesCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void ConfigureTypesCommand_DisabledWhenNoMapIsApplied()
-    {
-        ModsViewModel vm = Create(new[] { "@Bravo" }, new[] { "@Bravo" });
-        Refresh(vm, @"D:\workshop");
-        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
-        vm.CanConfigureTypes = () => false;
-
-        vm.SearchText = "bravo";
-        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
-
-        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void ConfigureTypesCommand_DisabledForMissingMod()
-    {
-        ModsViewModel vm = Create(new[] { "@Alpha" }, new[] { "@Alpha", "@Ghost" });
-        Refresh(vm, @"D:\workshop");
-        vm.ConfigureTypesRequested = _ => Task.CompletedTask;
-
-        vm.SearchText = "ghost";
-        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
-
-        Assert.False(vm.ConfigureTypesCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public async Task ConfigureTypesCommand_RequestsTheSelectedMod()
-    {
-        ModsViewModel vm = Create(new[] { "@Bravo" }, new[] { "@Bravo" });
-        Refresh(vm, @"D:\workshop");
-
-        var requested = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        vm.ConfigureTypesRequested = name =>
-        {
-            requested.TrySetResult(name);
-            return Task.CompletedTask;
-        };
-
-        vm.SearchText = "bravo";
-        vm.SelectedSearchResult = Assert.Single(vm.SearchResults);
-
-        vm.ConfigureTypesCommand.Execute(null);
-
-        Assert.Equal("@Bravo", await requested.Task.WaitAsync(TimeSpan.FromSeconds(2)));
-    }
-
     private sealed class FakeDiscovery : IModDiscoveryService
     {
-        private readonly IReadOnlyList<string> _mods;
+        public FakeDiscovery(IReadOnlyList<string> mods) => Mods = mods;
 
-        public FakeDiscovery(IReadOnlyList<string> mods) => _mods = mods;
+        public IReadOnlyList<string> Mods { get; set; }
 
-        public IReadOnlyList<string> DiscoverWorkshopMods(string workshopPath) => _mods;
+        public bool PathAvailable { get; set; } = true;
+
+        public ModDiscoveryResult DiscoverWorkshopMods(string workshopPath) =>
+            PathAvailable
+                ? new ModDiscoveryResult(true, Mods)
+                : ModDiscoveryResult.Unavailable;
+    }
+
+    private sealed class FakeDialogs : IDialogService
+    {
+        public bool ConfirmResult { get; set; } = true;
+
+        public int ConfirmWithWarningCalls { get; private set; }
+
+        public string? LastMessage { get; private set; }
+
+        public string? LastWarning { get; private set; }
+
+        public int ConfirmCalls { get; private set; }
+
+        public string? LastConfirmMessage { get; private set; }
+
+        public bool ConfirmWithWarning(string message, string title, string warning, string note = "")
+        {
+            ConfirmWithWarningCalls++;
+            LastMessage = message;
+            LastWarning = warning;
+            return ConfirmResult;
+        }
+
+        public void ShowMessage(string message, string title, bool isError = false)
+        {
+        }
+
+        public bool Confirm(string message, string title)
+        {
+            ConfirmCalls++;
+            LastConfirmMessage = message;
+            return ConfirmResult;
+        }
+
+        public void ShowWarning(string message, string title, string warning, string note = "")
+        {
+        }
+
+        public void ShowAlert(string message, string title, string warning, string note = "")
+        {
+        }
+
+        public string? PickFolder(string title = "Select a folder") => null;
+
+        public string? PickFile(string title, string filter, string initialDirectory) => null;
+
+        public IReadOnlyList<string>? PickTypeFiles(
+            string modName, IReadOnlyList<string> files, string? modFolderPath = null) => null;
+
+        public string? AskText(string title, string prompt, string defaultValue = "") => null;
+
+        public AddPresetRequest? AskAddPreset(string mapName) => null;
+
+        public DuplicatePresetRequest? AskDuplicatePreset(
+            string sourcePresetName, IReadOnlyList<string> maps, string defaultMap) => null;
     }
 }
